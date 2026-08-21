@@ -17,6 +17,7 @@ import {
 import { formatDisplayDate, DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { Sha256Service } from '../services/Sha256Service';
 import { AccountResolutionService } from '../services/AccountResolutionService';
+import { TransactionSignService } from '../services/TransactionSignService';
 import { repository } from '../repositories';
 
 interface LedgerState {
@@ -194,6 +195,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       narration: 'MANUAL/' + title.toUpperCase(),
       account,
       accountId: AccountResolutionService.resolveId(account, get().accounts),
+      direction: 'CREDIT',
       type: 'Income',
       category,
       amount,
@@ -212,6 +214,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       narration: 'MANUAL/' + title.toUpperCase(),
       account,
       accountId: AccountResolutionService.resolveId(account, get().accounts),
+      direction: 'DEBIT',
       type: 'Expense',
       category,
       amount,
@@ -232,6 +235,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       narration: 'TRANSFER-DEBIT/' + transferId,
       account: source,
       accountId: AccountResolutionService.resolveId(source, get().accounts),
+      direction: 'DEBIT',
       type: 'Transfer',
       category: 'TRANSFER',
       amount,
@@ -247,6 +251,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       narration: 'TRANSFER-CREDIT/' + transferId,
       account: destination,
       accountId: AccountResolutionService.resolveId(destination, get().accounts),
+      direction: 'CREDIT',
       type: 'Transfer',
       category: 'TRANSFER',
       amount,

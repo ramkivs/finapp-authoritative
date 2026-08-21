@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { AccountResolutionService } from '../services/AccountResolutionService';
+import { TransactionSignService } from '../services/TransactionSignService';
 import { FinancialQueries } from '../application/queries';
 import { KpiCard } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
@@ -557,7 +558,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                             ? 'text-[#06B6D4]'
                             : 'text-rose-400'
                         }`}>
-                          {isInc ? '+' : isTr ? '' : '-'}<CurrencyValue value={t.amount} />
+                          {TransactionSignService.signedAmount(t) > 0 ? '+' : TransactionSignService.signedAmount(t) < 0 ? '-' : ''}<CurrencyValue value={t.amount} />
                         </span>
                       </div>
                     </div>
@@ -804,7 +805,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                                   : 'text-rose-400'
                               }`}
                             >
-                              {isInc ? '+' : isTr ? '' : '-'}<CurrencyValue value={row.amount} />
+                              {TransactionSignService.signedAmount(row) > 0 ? '+' : TransactionSignService.signedAmount(row) < 0 ? '-' : ''}<CurrencyValue value={row.amount} />
                             </td>
                           </tr>
                         );

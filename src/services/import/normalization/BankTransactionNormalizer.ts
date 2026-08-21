@@ -77,6 +77,7 @@ export class BankTransactionNormalizer {
       narration: sanitizedNarration,
       account: accountVal,
       type,
+      direction: type === 'Income' ? 'CREDIT' : 'DEBIT',
       category: 'GENERAL',
       amount,
       status: 'CLEARED',

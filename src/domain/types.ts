@@ -1,5 +1,8 @@
 export type TransactionType = 'Income' | 'Expense' | 'Transfer' | 'INCOME' | 'EXPENSE' | 'TRANSFER';
 
+/** Cash direction relative to the referenced account (WP-FB-DATA-04b). */
+export type TransactionDirection = 'DEBIT' | 'CREDIT';
+
 export type AccountType = 'SAVINGS' | 'CURRENT' | 'CREDIT_CARD' | 'CASH' | 'WALLET' | 'BROKERAGE' | 'OTHER';
 
 export type FilterType = 'All' | TransactionType;
@@ -41,6 +44,25 @@ export interface Transaction {
    * visible in the canonical Ledger and are flagged in the UI.
    */
   accountId?: string | null;
+  /**
+   * Explicit cash direction relative to `accountId` (WP-FB-DATA-04b).
+   *
+   *   DEBIT  -> money LEAVES the account  (signed contribution: -amount)
+   *   CREDIT -> money ENTERS the account  (signed contribution: +amount)
+   *
+   * `amount` is always a positive magnitude; direction carries the sign.
+   *
+   * Required to make TRANSFERS derivable: a transfer is two rows sharing a
+   * `transferId`, both `type: 'Transfer'` with the same positive `amount`.
+   * Before this field the only distinction between the legs was string
+   * convention (`-debit`/`-credit` id suffix, `TRANSFER-DEBIT/` narration),
+   * so no balance could be derived without parsing text.
+   *
+   * Optional for Income/Expense, whose sign is unambiguous from `type`;
+   * `TransactionSignService.signedAmount()` is the single authority and
+   * falls back to `type` when direction is absent.
+   */
+  direction?: TransactionDirection;
   type: TransactionType;
   category: string;
   amount: number;

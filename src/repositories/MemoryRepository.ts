@@ -22,6 +22,7 @@ import {
 } from '../domain/types';
 import { DateRangeService, formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { AccountResolutionService } from '../services/AccountResolutionService';
+import { TransactionSignService } from '../services/TransactionSignService';
 import { Sha256Service } from '../services/Sha256Service';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
@@ -686,6 +687,10 @@ export class MemoryRepository implements FinancialRepositoryPort {
       this.transactionsData,
       this.accountsData
     ).transactions;
+
+    // WP-FB-DATA-04b: backfill Transaction.direction. Transfer legs predating
+    // the field are recovered deterministically from their generated markers.
+    this.transactionsData = TransactionSignService.migrate(this.transactionsData).transactions;
 
     this.syncStore();
   }
