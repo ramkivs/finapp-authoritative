@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { FinancialMetricService } from '../services/FinancialMetricService';
 import { FinancialQueries } from '../application/queries';
+import { AccountBalanceService } from '../services/AccountBalanceService';
+import { getEffectiveAsOfDate } from '../services/DateRangeService';
 import { CurrencyValue } from '../components/CurrencyValue';
 import { KpiCard } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
@@ -92,7 +94,10 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
   };
 
   // Registered Bank Accounts from Canonical Repository (Strictly Zero Fabrication)
-  const registeredAccounts = accounts;
+  // WP-FB-DATA-05a: Top Accounts shows DERIVED current balances, ranked by
+  // value. Previously it displayed acc.openingBalance labelled as a balance.
+  const accountBalances = AccountBalanceService.balances(accounts, transactions, getEffectiveAsOfDate());
+  const registeredAccounts = [...accountBalances].sort((a, b) => b.balance - a.balance);
 
   // Render pure SVG Net Worth Trend Area Chart (Prototype Exact Composition & Scaling)
   const renderNetWorthTrend = () => {
@@ -488,7 +493,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
             ) : (
               <div className="space-y-2">
                 {registeredAccounts.map(acc => (
-                  <div key={acc.id} className="flex items-center justify-between py-1.5 px-2 rounded-xl bg-[#0D1117] border border-[#21262D]/60 text-xs">
+                  <div key={acc.accountId} className="flex items-center justify-between py-1.5 px-2 rounded-xl bg-[#0D1117] border border-[#21262D]/60 text-xs">
                     <div className="flex items-center gap-2 truncate">
                       <Landmark size={13} className="text-[#4F8CFF] flex-shrink-0" />
                       <div className="truncate">
@@ -497,7 +502,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
                       </div>
                     </div>
                     <div className="text-right font-black text-[#F0F6FC] ml-2 flex-shrink-0">
-                      <CurrencyValue value={acc.openingBalance} />
+                      <CurrencyValue value={acc.balance} />
                     </div>
                   </div>
                 ))}

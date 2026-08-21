@@ -196,14 +196,25 @@ export const AddAccountModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
             <div>
               <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
-                Balance As-Of Date
+                Balance As-Of Date <span className="text-rose-500">*</span>
               </label>
               <input
                 type="date"
+                required
                 value={asOfDate}
                 onChange={e => setAsOfDate(e.target.value)}
                 className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl px-3.5 py-2.5 text-xs text-gray-900 dark:text-white outline-none focus:border-green-600"
               />
+              {/* WP-FB-DATA-05a / Decision B4: the anchor is a financial input,
+                  not an incidental timestamp. State its meaning explicitly so it
+                  is never silently interpreted as "today". */}
+              <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                The date this opening balance was actually true. Transactions{' '}
+                <span className="font-semibold">on or before</span> it are treated as already
+                included in the opening balance; only later transactions change the current
+                balance. Set this to the statement date your opening figure came from — if you
+                plan to import older history, choose a date before it.
+              </p>
             </div>
 
             <div className="flex items-center justify-between pt-3 border-t border-gray-200 dark:border-gray-800 mt-6">

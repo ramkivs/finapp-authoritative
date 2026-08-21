@@ -3,7 +3,9 @@ import { Account } from '../../domain/types';
 import { CurrencyValue } from '../CurrencyValue';
 import { AddAccountModal } from './AddAccountModal';
 import { useCanonicalLedger } from '../../store/useCanonicalLedger';
-import { Landmark, CreditCard, Wallet, Building2, HelpCircle, Plus, Trash2 } from 'lucide-react';
+import { AccountBalanceService } from '../../services/AccountBalanceService';
+import { getEffectiveAsOfDate } from '../../services/DateRangeService';
+import { Landmark, CreditCard, Wallet, Building2, HelpCircle, Plus, Trash2, AlertTriangle } from 'lucide-react';
 
 interface Props {
   accounts: Account[];
@@ -13,17 +15,16 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const { removeAccount, transactions } = useCanonicalLedger();
 
-  const bankTotal = accounts
-    .filter(a => a.type === 'Bank' || a.type === 'Cash' || a.type === 'Wallet')
-    .reduce((s, a) => s + a.openingBalance, 0);
+  // WP-FB-DATA-05a: derived from the canonical transaction collection.
+  // AccountBalanceService is the sole authority - no balance arithmetic here.
+  const asOf = getEffectiveAsOfDate();
+  const derived = AccountBalanceService.balances(accounts, transactions, asOf);
+  const balanceOf = (id: string) => derived.find(b => b.accountId === id)?.balance ?? 0;
+  const reconciliation = AccountBalanceService.reconciliation(accounts, transactions, asOf);
 
-  const brokerTotal = accounts
-    .filter(a => a.type === 'Broker')
-    .reduce((s, a) => s + a.openingBalance, 0);
-
-  const creditTotal = accounts
-    .filter(a => a.type === 'Credit Card')
-    .reduce((s, a) => s + a.openingBalance, 0);
+  const bankTotal = AccountBalanceService.totalForTypes(['Bank', 'Cash', 'Wallet'], accounts, transactions, asOf);
+  const brokerTotal = AccountBalanceService.totalForTypes(['Broker'], accounts, transactions, asOf);
+  const creditTotal = AccountBalanceService.totalForTypes(['Credit Card'], accounts, transactions, asOf);
 
   const handleDelete = (id: string, name: string) => {
     // WP-FB-DATA-04: deletion never silently orphans financial records. State
@@ -74,6 +75,30 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
           <span>+ Add Account</span>
         </button>
       </div>
+
+      {/* WP-FB-DATA-05a: reconciliation notice (Decision B).
+          Unmapped activity is excluded from every registered account balance,
+          is NOT folded into a pseudo-account, and is NOT lost. */}
+      {reconciliation.unmappedCount > 0 && (
+        <div
+          id="balance-reconciliation-notice"
+          className="rounded-2xl border border-amber-300 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-950/30 px-5 py-3.5 flex items-start gap-3"
+        >
+          <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+          <div className="text-xs text-amber-900 dark:text-amber-200">
+            <span className="font-bold">
+              {reconciliation.unmappedCount} transaction{reconciliation.unmappedCount === 1 ? '' : 's'} require
+              {reconciliation.unmappedCount === 1 ? 's' : ''} reconciliation
+            </span>
+            <span className="opacity-90">
+              {' '}(<CurrencyValue value={reconciliation.unmappedGross} /> of activity).
+              These are not linked to a registered account, so they are excluded from the balances above.
+              They remain in the Canonical Ledger marked UNMAPPED — register or rename an account with a
+              matching name to include them.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* KPI Summary Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -173,15 +198,33 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
                     </button>
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-gray-100 dark:border-gray-800 flex justify-between items-baseline">
-                    <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Opening Balance:</span>
-                    <span className={`text-base font-black ${
-                      isCredit
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : 'text-green-700 dark:text-green-400'
-                    }`}>
-                      <CurrencyValue value={acc.openingBalance} />
-                    </span>
+                  <div className="mt-4 pt-3 border-t border-gray-100 dark:border-gray-800 space-y-1">
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400 font-medium">
+                        Opening Balance{acc.asOfDate ? ` (as of ${acc.asOfDate})` : ''}:
+                      </span>
+                      <span className="text-xs font-bold text-gray-600 dark:text-gray-400">
+                        <CurrencyValue value={acc.openingBalance} />
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-xs text-gray-700 dark:text-gray-300 font-bold">Current Balance:</span>
+                      <span
+                        id={`account-balance-${acc.id}`}
+                        className={`text-base font-black ${
+                          isCredit
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : 'text-green-700 dark:text-green-400'
+                        }`}
+                      >
+                        <CurrencyValue value={balanceOf(acc.id)} />
+                      </span>
+                    </div>
+                    {!acc.asOfDate && (
+                      <div className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold pt-0.5">
+                        No opening-balance date set — all transactions are being applied.
+                      </div>
+                    )}
                   </div>
                 </div>
 
