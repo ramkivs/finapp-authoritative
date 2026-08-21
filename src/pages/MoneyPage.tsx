@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
+import { AccountResolutionService } from '../services/AccountResolutionService';
 import { FinancialQueries } from '../application/queries';
 import { KpiCard } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
@@ -770,7 +771,17 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                             <td className="py-2.5 px-4">
                               <code className="text-[11px] text-[#8B949E] bg-[#0D1117] px-1.5 py-0.5 rounded border border-[#21262D]">{row.narration}</code>
                             </td>
-                            <td className="py-2.5 px-4 text-[#8B949E] text-xs">{row.account}</td>
+                            <td className="py-2.5 px-4 text-[#8B949E] text-xs">
+                              {AccountResolutionService.displayName(row, accounts)}
+                              {AccountResolutionService.isUnmapped(row, accounts) && (
+                                <span
+                                  className="ml-1.5 px-1.5 py-0.5 rounded bg-amber-950/40 text-amber-300 text-[9px] font-bold border border-amber-800/30 align-middle"
+                                  title="No registered account matches this transaction. Register or rename an account with this name to link it."
+                                >
+                                  UNMAPPED
+                                </span>
+                              )}
+                            </td>
                             <td className="py-2.5 px-4">
                               <span
                                 className={`px-2 py-0.5 rounded text-[10px] font-bold ${

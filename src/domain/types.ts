@@ -23,7 +23,24 @@ export interface Transaction {
   date: string;
   title: string;
   narration: string;
+  /**
+   * Presentation / legacy display text for the account.
+   *
+   * ⚠️ NOT the referential key. Use `accountId` for any account relationship.
+   * Retained because it is part of the deduplication fingerprint
+   * (`account|date|amount|narration`) and of the CSV export contract;
+   * rewriting it would invalidate every existing fingerprint.
+   */
   account: string;
+  /**
+   * Authoritative reference to `Account.id` (WP-FB-DATA-04).
+   *
+   * `null` / absent means the transaction is **explicitly unmapped** — it could
+   * not be deterministically resolved to exactly one registered account, or the
+   * account it referenced was deleted. Unmapped transactions remain fully
+   * visible in the canonical Ledger and are flagged in the UI.
+   */
+  accountId?: string | null;
   type: TransactionType;
   category: string;
   amount: number;

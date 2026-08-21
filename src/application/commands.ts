@@ -20,6 +20,7 @@ import {
   FinancialProfile
 } from '../domain/types';
 import { formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
+import { AccountResolutionService } from '../services/AccountResolutionService';
 
 const SAMPLE_DEFAULT_CSV = `Date,Title,Narration,Amount,Type,Account
 2026-08-06,ITC Limited,ACH/C-/ITC LTD DIVIDEND/NSE0098,2100,INCOME,HDFC Bank
@@ -36,6 +37,7 @@ export class FinancialCommands {
       title,
       narration: 'MANUAL/' + title.toUpperCase(),
       account,
+      accountId: AccountResolutionService.resolveId(account, repository.accounts.findAllSync()),
       type: 'Income',
       category,
       amount,
@@ -52,6 +54,7 @@ export class FinancialCommands {
       title,
       narration: 'MANUAL/' + title.toUpperCase(),
       account,
+      accountId: AccountResolutionService.resolveId(account, repository.accounts.findAllSync()),
       type: 'Expense',
       category,
       amount,
@@ -70,6 +73,7 @@ export class FinancialCommands {
       title: 'Transfer to ' + destination,
       narration: 'TRANSFER-DEBIT/' + trId,
       account: source,
+      accountId: AccountResolutionService.resolveId(source, repository.accounts.findAllSync()),
       type: 'Transfer',
       category: 'TRANSFER',
       amount,
@@ -84,6 +88,7 @@ export class FinancialCommands {
       title: 'Transfer from ' + source,
       narration: 'TRANSFER-CREDIT/' + trId,
       account: destination,
+      accountId: AccountResolutionService.resolveId(destination, repository.accounts.findAllSync()),
       type: 'Transfer',
       category: 'TRANSFER',
       amount,

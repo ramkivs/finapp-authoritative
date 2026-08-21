@@ -21,6 +21,7 @@ import {
   FinancialRepositoryPort,
 } from '../domain/types';
 import { DateRangeService, formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
+import { AccountResolutionService } from '../services/AccountResolutionService';
 import { Sha256Service } from '../services/Sha256Service';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
@@ -352,6 +353,9 @@ export class MemoryAccountRepository implements AccountRepository {
       next = [...previous, { ...account }];
     }
     this.parent.accountsData = next;
+    // WP-FB-DATA-04: a newly registered (or renamed) account may resolve rows
+    // that were previously unmapped. Already-valid references are untouched.
+    this.parent.remapAccounts();
     this.parent.syncStore();
     try {
       await IndexedDBStorageService.saveAll({
@@ -374,7 +378,15 @@ export class MemoryAccountRepository implements AccountRepository {
 
   async remove(id: string): Promise<void> {
     const previous = this.parent.accountsData;
+    const previousTransactions = this.parent.transactionsData;
     const next = previous.filter(a => a.id !== id);
+
+    // WP-FB-DATA-04: transactions are NEVER silently orphaned. Any row pointing
+    // at the removed account is explicitly transitioned to the unmapped state
+    // (accountId = null). The rows themselves - and every financial value on
+    // them - are preserved and remain visible in the canonical Ledger.
+    this.parent.unmapAccount(id);
+
     this.parent.accountsData = next;
     this.parent.syncStore();
     try {
@@ -391,6 +403,7 @@ export class MemoryAccountRepository implements AccountRepository {
       });
     } catch (e) {
       this.parent.accountsData = previous;
+      this.parent.transactionsData = previousTransactions;
       this.parent.syncStore();
       throw e;
     }
@@ -665,7 +678,51 @@ export class MemoryRepository implements FinancialRepositoryPort {
     this.policiesData = data.policies;
     this.goalsData = data.goals;
     this.profileData = data.profile;
+
+    // WP-FB-DATA-04: backfill Transaction.accountId from the legacy display
+    // name. Deterministic and non-destructive - no transaction is dropped and
+    // no field other than accountId is written.
+    this.transactionsData = AccountResolutionService.migrate(
+      this.transactionsData,
+      this.accountsData
+    ).transactions;
+
     this.syncStore();
+  }
+
+  /**
+   * Re-runs account resolution against the current account registry.
+   * Used after an account is added/renamed so previously unmapped transactions
+   * can become mapped. Never reassigns an already-valid reference.
+   */
+  remapAccounts(): void {
+    this.transactionsData = AccountResolutionService.migrate(
+      this.transactionsData,
+      this.accountsData
+    ).transactions;
+  }
+
+  /**
+   * Explicitly transitions every transaction referencing `accountId` to the
+   * unmapped state. Used when an account is deleted so rows are never silently
+   * orphaned. This is deliberately narrow - it touches ONLY accountId and is
+   * not a general transaction-update capability (that is DATA-06 scope).
+   */
+  unmapAccount(accountId: string): number {
+    let affected = 0;
+    this.transactionsData = this.transactionsData.map(tx => {
+      if (tx.accountId === accountId) {
+        affected++;
+        return { ...tx, accountId: null };
+      }
+      return tx;
+    });
+    return affected;
+  }
+
+  /** Count of transactions currently referencing an account. */
+  countTransactionsForAccount(accountId: string): number {
+    return this.transactionsData.filter(tx => tx.accountId === accountId).length;
   }
 
   async loadDemoData(): Promise<void> {

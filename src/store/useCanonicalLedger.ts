@@ -16,6 +16,7 @@ import {
 } from '../domain/types';
 import { formatDisplayDate, DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { Sha256Service } from '../services/Sha256Service';
+import { AccountResolutionService } from '../services/AccountResolutionService';
 import { repository } from '../repositories';
 
 interface LedgerState {
@@ -192,6 +193,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       title,
       narration: 'MANUAL/' + title.toUpperCase(),
       account,
+      accountId: AccountResolutionService.resolveId(account, get().accounts),
       type: 'Income',
       category,
       amount,
@@ -209,6 +211,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       title,
       narration: 'MANUAL/' + title.toUpperCase(),
       account,
+      accountId: AccountResolutionService.resolveId(account, get().accounts),
       type: 'Expense',
       category,
       amount,
@@ -228,6 +231,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       title: 'Transfer to ' + destination,
       narration: 'TRANSFER-DEBIT/' + transferId,
       account: source,
+      accountId: AccountResolutionService.resolveId(source, get().accounts),
       type: 'Transfer',
       category: 'TRANSFER',
       amount,
@@ -242,6 +246,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       title: 'Transfer from ' + source,
       narration: 'TRANSFER-CREDIT/' + transferId,
       account: destination,
+      accountId: AccountResolutionService.resolveId(destination, get().accounts),
       type: 'Transfer',
       category: 'TRANSFER',
       amount,
@@ -276,7 +281,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   commitImportedRows: (validRows) => {
-    const { transactions } = get();
+    const { transactions, accounts } = get();
     let appended = 0;
     let duplicates = 0;
 
@@ -288,13 +293,23 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
 
     if (validRows && validRows.length > 0) {
       for (const row of validRows) {
+        // Fingerprint is computed from the UNCHANGED legacy fields
+        // (account|date|amount|narration). Introducing accountId does not and
+        // must not alter any fingerprint (WP-FB-DATA-04 §14).
         const fp = row.fingerprint || generateFingerprint(row);
         if (existingFingerprints.has(fp)) {
           duplicates++;
           continue;
         }
         existingFingerprints.add(fp);
-        candidateRows.push(row);
+
+        // WP-FB-DATA-04: resolve the adapter's bank label to a registered
+        // account. No deterministic match => explicitly unmapped (null), never
+        // guessed and never auto-created.
+        candidateRows.push({
+          ...row,
+          accountId: row.accountId ?? AccountResolutionService.resolveId(row.account, accounts)
+        });
         appended++;
       }
       if (candidateRows.length > 0) {

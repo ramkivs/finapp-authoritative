@@ -11,7 +11,7 @@ interface Props {
 
 export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
   const [modalOpen, setModalOpen] = useState(false);
-  const { removeAccount } = useCanonicalLedger();
+  const { removeAccount, transactions } = useCanonicalLedger();
 
   const bankTotal = accounts
     .filter(a => a.type === 'Bank' || a.type === 'Cash' || a.type === 'Wallet')
@@ -26,7 +26,17 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
     .reduce((s, a) => s + a.openingBalance, 0);
 
   const handleDelete = (id: string, name: string) => {
-    if (window.confirm(`Are you sure you want to remove account "${name}"?`)) {
+    // WP-FB-DATA-04: deletion never silently orphans financial records. State
+    // the exact consequence before the user commits to it.
+    const linked = transactions.filter(t => t.accountId === id).length;
+    const message =
+      linked > 0
+        ? `Remove account "${name}"?\n\n${linked} transaction${linked === 1 ? '' : 's'} currently reference this account. ` +
+          `${linked === 1 ? 'It' : 'They'} will NOT be deleted — ${linked === 1 ? 'it' : 'they'} will remain in the ` +
+          `Canonical Ledger marked UNMAPPED, and can be re-linked by registering an account with a matching name.`
+        : `Are you sure you want to remove account "${name}"?`;
+
+    if (window.confirm(message)) {
       removeAccount(id);
     }
   };
