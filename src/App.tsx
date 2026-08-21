@@ -13,6 +13,26 @@ import { ShieldCheck } from 'lucide-react';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<string>('money');
+
+  /**
+   * Canonical cross-page navigation.
+   *
+   * FinBoom has no router: page selection is React state (`activeTab`) and each
+   * page owns its own sub-tab state. `navigateTo` is the single authoritative
+   * entry point for navigating between pages, optionally deep-linking to a
+   * sub-tab within the destination page.
+   *
+   * `navSeq` increments on every call so a destination page re-applies the
+   * requested sub-tab even when the same target is selected twice in a row.
+   */
+  const [pendingSubTab, setPendingSubTab] = useState<string | null>(null);
+  const [navSeq, setNavSeq] = useState<number>(0);
+
+  const navigateTo = React.useCallback((tabId: string, subTab?: string) => {
+    setActiveTab(tabId);
+    setPendingSubTab(subTab ?? null);
+    setNavSeq(prev => prev + 1);
+  }, []);
   const [isDark, setIsDark] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('finapp.theme');
@@ -47,7 +67,7 @@ export function App() {
       {/* Responsive Sidebar with Collapse & Mobile Off-Canvas Drawer */}
       <Sidebar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={(tab: string) => navigateTo(tab)}
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed(prev => !prev)}
         isMobileOpen={isMobileDrawerOpen}
@@ -63,12 +83,19 @@ export function App() {
         />
 
         <main className="p-4 md:p-6 lg:p-8 max-w-[1440px] w-full mx-auto flex-1">
-          {activeTab === 'overview' && <OverviewPage />}
+          {activeTab === 'overview' && <OverviewPage navigateTo={navigateTo} />}
           {activeTab === 'wealth' && <WealthPage />}
           {activeTab === 'money' && (
-            <MoneyPage openModal={(m) => setActiveModal(m)} openSidebarTab={setActiveTab} />
+            <MoneyPage
+              openModal={(m) => setActiveModal(m)}
+              openSidebarTab={setActiveTab}
+              initialSubTab={pendingSubTab}
+              navSeq={navSeq}
+            />
           )}
-          {activeTab === 'essentials' && <EssentialsPage />}
+          {activeTab === 'essentials' && (
+            <EssentialsPage initialSubTab={pendingSubTab} navSeq={navSeq} />
+          )}
           {activeTab === 'import' && <ImportPage />}
           {activeTab === 'calculators' && <CalculatorsPage />}
         </main>

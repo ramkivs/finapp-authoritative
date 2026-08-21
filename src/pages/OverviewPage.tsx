@@ -21,7 +21,16 @@ import {
   Activity
 } from 'lucide-react';
 
-export const OverviewPage: React.FC = () => {
+interface Props {
+  /**
+   * Canonical navigation callback supplied by App. Dashboard entry points must
+   * use this rather than anchor hrefs: FinBoom has no router, so `<a href="#x">`
+   * updates the URL fragment and nothing else.
+   */
+  navigateTo: (tabId: string, subTab?: string) => void;
+}
+
+export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
   const {
     assets,
     liabilities,
@@ -454,18 +463,27 @@ export const OverviewPage: React.FC = () => {
               <h3 className="font-bold text-xs text-[#F0F6FC] uppercase tracking-wider">
                 Top Accounts
               </h3>
-              <a href="#money" className="text-[11px] font-bold text-[#4F8CFF] hover:underline flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => navigateTo('money', 'accounts')}
+                aria-label="View all accounts"
+                className="text-[11px] font-bold text-[#4F8CFF] hover:underline flex items-center gap-0.5 cursor-pointer bg-transparent border-0 p-0"
+              >
                 <span>View</span>
                 <ArrowUpRight size={11} />
-              </a>
+              </button>
             </div>
 
             {registeredAccounts.length === 0 ? (
               <div className="py-6 text-center text-xs text-[#8B949E] space-y-2">
                 <p>No accounts registered.</p>
-                <a href="#money" className="inline-block px-3 py-1 bg-[#0D1117] border border-[#21262D] rounded-lg text-[11px] font-bold text-[#4F8CFF] hover:border-[#30363D] transition">
+                <button
+                  type="button"
+                  onClick={() => navigateTo('money', 'accounts')}
+                  className="inline-block px-3 py-1 bg-[#0D1117] border border-[#21262D] rounded-lg text-[11px] font-bold text-[#4F8CFF] hover:border-[#30363D] transition cursor-pointer"
+                >
                   + Link Account
-                </a>
+                </button>
               </div>
             ) : (
               <div className="space-y-2">
@@ -495,18 +513,27 @@ export const OverviewPage: React.FC = () => {
               <h3 className="font-bold text-xs text-[#F0F6FC] uppercase tracking-wider">
                 Goals Progress
               </h3>
-              <a href="#essentials" className="text-[11px] font-bold text-[#23C55E] hover:underline flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => navigateTo('essentials', 'goals')}
+                aria-label="View all financial goals"
+                className="text-[11px] font-bold text-[#23C55E] hover:underline flex items-center gap-0.5 cursor-pointer bg-transparent border-0 p-0"
+              >
                 <span>All</span>
                 <ArrowUpRight size={11} />
-              </a>
+              </button>
             </div>
 
             {goals.length === 0 ? (
               <div className="py-6 text-center text-xs text-[#8B949E] space-y-2">
                 <p>No financial goals configured.</p>
-                <a href="#essentials" className="inline-block px-3 py-1 bg-[#0D1117] border border-[#21262D] rounded-lg text-[11px] font-bold text-[#23C55E] hover:border-[#30363D] transition">
+                <button
+                  type="button"
+                  onClick={() => navigateTo('essentials', 'goals')}
+                  className="inline-block px-3 py-1 bg-[#0D1117] border border-[#21262D] rounded-lg text-[11px] font-bold text-[#23C55E] hover:border-[#30363D] transition cursor-pointer"
+                >
                   + Set Financial Goal
-                </a>
+                </button>
               </div>
             ) : (
               <div className="space-y-2.5">
@@ -534,18 +561,27 @@ export const OverviewPage: React.FC = () => {
               <h3 className="font-bold text-xs text-[#F0F6FC] uppercase tracking-wider">
                 Recent Transactions
               </h3>
-              <a href="#money" className="text-[11px] font-bold text-[#06B6D4] hover:underline flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => navigateTo('money', 'transactions')}
+                aria-label="Open transaction ledger"
+                className="text-[11px] font-bold text-[#06B6D4] hover:underline flex items-center gap-0.5 cursor-pointer bg-transparent border-0 p-0"
+              >
                 <span>Ledger</span>
                 <ArrowUpRight size={11} />
-              </a>
+              </button>
             </div>
 
             {transactions.length === 0 ? (
               <div className="py-6 text-center text-xs text-[#8B949E] space-y-2">
                 <p>No transactions recorded.</p>
-                <a href="#money" className="inline-block px-3 py-1 bg-[#0D1117] border border-[#21262D] rounded-lg text-[11px] font-bold text-[#06B6D4]">
+                <button
+                  type="button"
+                  onClick={() => navigateTo('money', 'transactions')}
+                  className="inline-block px-3 py-1 bg-[#0D1117] border border-[#21262D] rounded-lg text-[11px] font-bold text-[#06B6D4] cursor-pointer hover:border-[#30363D] transition"
+                >
                   + Record Transaction
-                </a>
+                </button>
               </div>
             ) : (
               <div className="space-y-2">

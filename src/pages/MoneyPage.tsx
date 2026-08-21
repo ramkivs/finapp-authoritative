@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { FinancialQueries } from '../application/queries';
 import { KpiCard } from '../components/ui/KpiCard';
@@ -20,10 +20,25 @@ import {
 interface Props {
   openModal: (modalName: 'modal-income' | 'modal-expense' | 'modal-transfer' | 'modal-custom-date') => void;
   openSidebarTab: (tabId: string) => void;
+  /** Optional deep-link target sub-tab, supplied by App.navigateTo. */
+  initialSubTab?: string | null;
+  /** Increments on each navigation so repeat targets re-apply. */
+  navSeq?: number;
 }
 
-export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab }) => {
-  const [subTab, setSubTab] = useState<'transactions' | 'budget' | 'accounts' | 'insights'>('transactions');
+type MoneySubTab = 'transactions' | 'budget' | 'accounts' | 'insights';
+const MONEY_SUB_TABS: MoneySubTab[] = ['transactions', 'budget', 'accounts', 'insights'];
+
+export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialSubTab, navSeq }) => {
+  const [subTab, setSubTab] = useState<MoneySubTab>('transactions');
+
+  // Apply an inbound deep-link request (e.g. Overview → "Accounts").
+  useEffect(() => {
+    if (initialSubTab && (MONEY_SUB_TABS as string[]).includes(initialSubTab)) {
+      setSubTab(initialSubTab as MoneySubTab);
+    }
+  }, [initialSubTab, navSeq]);
+
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [dateMenuOpen, setDateMenuOpen] = useState(false);
   const [searchInput, setSearchInput] = useState('');

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { queries } from '../application';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { KpiCard } from '../components/ui/KpiCard';
@@ -25,8 +25,26 @@ import {
   Percent
 } from 'lucide-react';
 
-export const EssentialsPage: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'emergency' | 'insurance' | 'goals' | 'profile'>('emergency');
+interface Props {
+  /** Optional deep-link target sub-tab, supplied by App.navigateTo. */
+  initialSubTab?: string | null;
+  /** Increments on each navigation so repeat targets re-apply. */
+  navSeq?: number;
+}
+
+type EssentialsSubTab = 'emergency' | 'insurance' | 'goals' | 'profile';
+const ESSENTIALS_SUB_TABS: EssentialsSubTab[] = ['emergency', 'insurance', 'goals', 'profile'];
+
+export const EssentialsPage: React.FC<Props> = ({ initialSubTab, navSeq }) => {
+  const [activeTab, setActiveTab] = useState<EssentialsSubTab>('emergency');
+
+  // Apply an inbound deep-link request (e.g. Overview → "Goals").
+  useEffect(() => {
+    if (initialSubTab && (ESSENTIALS_SUB_TABS as string[]).includes(initialSubTab)) {
+      setActiveTab(initialSubTab as EssentialsSubTab);
+    }
+  }, [initialSubTab, navSeq]);
+
 
   const {
     assets,
