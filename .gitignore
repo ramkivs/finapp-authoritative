@@ -12,3 +12,5 @@ __pycache__/
 .env
 .env.local
 .DS_Store
+.aider*
+.aider.tags.cache.v4/
