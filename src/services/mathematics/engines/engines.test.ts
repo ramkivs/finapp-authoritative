@@ -1,14 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { RetirementFireInput } from './RetirementFireEngine';
-import { SwpCalculationInput } from './SwpEngine';
-
-// Note: These tests assume the engines are exported functions or classes.
-// Adjust the imports based on your actual file exports.
+import { RetirementFireEngine } from './RetirementFireEngine';
+import { SwpEngine } from './SwpEngine';
 
 describe('Financial Engines', () => {
   
-  it('should validate RetirementFireInput structure', () => {
-    const input: RetirementFireInput = {
+  it('should calculate Retirement FIRE metrics correctly', () => {
+    const input = {
       currentAge: 30,
       targetRetirementAge: 55,
       annualLivingExpenses: 500000,
@@ -18,19 +15,32 @@ describe('Financial Engines', () => {
       postRetirementReturnRatePct: 8.0
     };
 
-    expect(input.currentAge).toBe(30);
-    expect(input.annualLivingExpenses).toBeGreaterThan(0);
+    const result = RetirementFireEngine.calculate(input);
+
+    expect(result.state).toBe('VALID');
+    expect(result.data).not.toBeNull();
+    if (result.data) {
+      expect(result.data.yearsToRetirement).toBe(25);
+      expect(result.data.targetRetirementCorpus).toBeGreaterThan(0);
+    }
   });
 
-  it('should validate SwpCalculationInput structure', () => {
-    const input: SwpCalculationInput = {
+  it('should calculate SWP schedule correctly', () => {
+    const input = {
       initialCorpus: 5000000,
       monthlyWithdrawal: 25000,
       annualReturnRatePct: 7.5,
       tenureYears: 20
     };
 
-    expect(input.initialCorpus).toBe(5000000);
-    expect(input.monthlyWithdrawal).toBe(25000);
+    const result = SwpEngine.calculate(input);
+
+    expect(result.state).toBe('VALID');
+    expect(result.data).not.toBeNull();
+    if (result.data) {
+      expect(result.data.initialCorpus).toBe(5000000);
+      expect(result.data.yearlySchedule.length).toBe(20);
+      expect(result.data.totalWithdrawn).toBeGreaterThan(0);
+    }
   });
 });
