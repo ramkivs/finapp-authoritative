@@ -1,52 +1,14 @@
-﻿# Dependencies
-node_modules/
-
-# Environment / secrets
-.env
-.env.*
-!.env.example
-
-# Production builds
+﻿node_modules/
+.venv/
+venv/
+.next/
 dist/
 build/
-
-# Test / coverage
+out/
 coverage/
-test-results/
-playwright-report/
-
-# Logs
+__pycache__/
+*.pyc
 *.log
-logs/
-
-# Local databases
-*.db
-*.sqlite
-*.sqlite3
-
-# Temporary files
-tmp/
-temp/
-
-# IDE
-.vscode/*
-!.vscode/extensions.json
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Prisma local/generated artifacts
-.prisma/
-
-# Local reports / runtime artifacts
-reports/
-
-# Certificates / private keys
-*.pem
-*.key
-*.p12
-*.pfx
-
 .env
+.env.local
+.DS_Store
