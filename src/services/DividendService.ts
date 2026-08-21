@@ -1,6 +1,7 @@
-import { APP_AS_OF_DATE, MonthBucket, Transaction } from '../domain/types';
+import { MonthBucket, Transaction } from '../domain/types';
+import { getEffectiveAsOfDate } from './DateRangeService';
 
-export function generateMonthlyBuckets(asOfDateStr: string = APP_AS_OF_DATE, numBuckets: number = 12): MonthBucket[] {
+export function generateMonthlyBuckets(asOfDateStr: string = getEffectiveAsOfDate(), numBuckets: number = 12): MonthBucket[] {
   const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const monthBuckets: MonthBucket[] = [];
   const asOf = new Date(asOfDateStr + 'T00:00:00');
@@ -24,7 +25,7 @@ export function generateMonthlyBuckets(asOfDateStr: string = APP_AS_OF_DATE, num
 }
 
 export class DividendService {
-  static getMonthlyTotals(transactions: Transaction[], asOfDateStr: string = APP_AS_OF_DATE) {
+  static getMonthlyTotals(transactions: Transaction[], asOfDateStr: string = getEffectiveAsOfDate()) {
     const monthBuckets = generateMonthlyBuckets(asOfDateStr, 12);
     return monthBuckets.map(b => {
       const matching = transactions.filter(t => 

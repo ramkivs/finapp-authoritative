@@ -140,6 +140,16 @@ export type FinancialMetricName =
 
 export type FinancialSeriesName = 'MONTHLY_DIVIDEND_HISTOGRAM';
 
+/**
+ * Deterministic reference date for demo fixtures, historical snapshots and
+ * tests that require a frozen point in time.
+ *
+ * ⚠️ This is NOT production "today". Use `getEffectiveAsOfDate()` from
+ * `services/DateRangeService` for any live/production date decision.
+ * Conflating the two caused WP-FB-DATA-01 (RC-L09): the Canonical Ledger
+ * bounded every date range by this constant, permanently hiding every
+ * transaction dated after 2026-08-09.
+ */
 export const APP_AS_OF_DATE = '2026-08-09';
 
 export interface TransactionQuery {

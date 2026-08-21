@@ -2,7 +2,7 @@ import { repository } from '../repositories';
 import { FinancialMetricService } from '../services/FinancialMetricService';
 import { WealthIntelligenceService } from '../services/WealthIntelligenceService';
 import { EssentialsService } from '../services/EssentialsService';
-import { DateRangeService } from '../services/DateRangeService';
+import { DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { Wp20Adapters } from '../services/mathematics/adapters/Wp20Adapters';
 import { XirrEngine, XirrFlowInput } from '../services/mathematics/solvers/XirrEngine';
 import { RecurringDepositEngine, RdCalculationInput } from '../services/mathematics/engines/RecurringDepositEngine';
@@ -30,7 +30,6 @@ import {
   FinancialProfile,
   EmergencyFundAnalysis,
   HealthScoreBreakdown,
-  APP_AS_OF_DATE,
   mapTransactionCategoryToBudget
 } from '../domain/types';
 
@@ -88,7 +87,7 @@ export class FinancialQueries {
   }
 
   static getMoneyInsights(dateRange: string = 'This Month', customStart?: string, customEnd?: string): MoneyInsightsData {
-    const bounds = DateRangeService.getBounds(dateRange, APP_AS_OF_DATE, customStart, customEnd);
+    const bounds = DateRangeService.getBounds(dateRange, getEffectiveAsOfDate(), customStart, customEnd);
     const allTxs = repository.transactions.findAllSync();
     const periodTxs = allTxs.filter(t => t.date >= bounds.startDate && t.date <= bounds.endDate);
 

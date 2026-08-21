@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { ControlledAccountType, APP_AS_OF_DATE } from '../../domain/types';
+import { ControlledAccountType } from '../../domain/types';
+import { getEffectiveAsOfDate } from '../../services/DateRangeService';
 import { useCanonicalLedger } from '../../store/useCanonicalLedger';
 import { X, Building2, CreditCard, Wallet, Landmark, HelpCircle, ArrowLeft } from 'lucide-react';
 
@@ -25,7 +26,7 @@ export const AddAccountModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [lastFourDigits, setLastFourDigits] = useState('');
   const [openingBalance, setOpeningBalance] = useState('');
   const [currency, setCurrency] = useState('');
-  const [asOfDate, setAsOfDate] = useState(APP_AS_OF_DATE);
+  const [asOfDate, setAsOfDate] = useState(getEffectiveAsOfDate());
   const [notes, setNotes] = useState('');
   const [error, setError] = useState('');
 
@@ -55,7 +56,7 @@ export const AddAccountModal: React.FC<Props> = ({ isOpen, onClose }) => {
         lastFourDigits: lastFourDigits.trim() || undefined,
         openingBalance: Number(openingBalance) || 0,
         currency: currency.trim() || undefined, // No default INR; preserves Not Specified
-        asOfDate: asOfDate || APP_AS_OF_DATE,
+        asOfDate: asOfDate || getEffectiveAsOfDate(),
         notes: notes.trim() || undefined
       });
 

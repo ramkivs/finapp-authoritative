@@ -705,7 +705,19 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
             {/* Canonical Ledger Table or Empty State */}
             {filtered.length === 0 ? (
               <div className="bg-[#161B22] border border-[#21262D] rounded-2xl p-12 text-center text-[#8B949E] shadow-sm">
-                <p className="mb-4 text-xs">No expenses recorded yet in this date range. Add your first entry above.</p>
+                {transactions.length > 0 ? (
+                  <p className="mb-4 text-xs">
+                    <span className="font-bold text-[#F0F6FC]">
+                      {transactions.length} transaction{transactions.length === 1 ? '' : 's'}
+                    </span>{' '}
+                    exist in the canonical ledger but are excluded by the current filters
+                    ({dateRange} · {filterType}
+                    {searchInput ? ` · "${searchInput}"` : ''}). Widen the date range or
+                    select “All” to view them.
+                  </p>
+                ) : (
+                  <p className="mb-4 text-xs">No transactions recorded yet. Add your first entry above.</p>
+                )}
                 <button
                   onClick={() => handleSelectRange('12M')}
                   className="px-4 py-2 rounded-xl bg-[#0D1117] border border-[#21262D] font-bold text-xs text-[#23C55E] hover:bg-emerald-950/40 transition cursor-pointer"
@@ -715,11 +727,22 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
               </div>
             ) : (
               <div className="bg-[#161B22] border border-[#21262D] rounded-2xl overflow-hidden shadow-sm">
-                <div className="p-4 border-b border-[#21262D] flex justify-between items-center">
+                <div className="p-4 border-b border-[#21262D] flex justify-between items-center gap-3 flex-wrap">
                   <span className="font-bold text-xs text-[#F0F6FC] uppercase tracking-wider">Canonical Financial Ledger (Source of Truth)</span>
-                  <span className="px-2.5 py-0.5 rounded-full bg-green-950/40 text-[#23C55E] text-[10px] font-bold border border-green-800/30">
-                    {dateRange} ({filterType})
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {transactions.length > filtered.length && (
+                      <span
+                        id="ledger-exclusion-notice"
+                        className="px-2.5 py-0.5 rounded-full bg-amber-950/40 text-amber-300 text-[10px] font-bold border border-amber-800/30"
+                        title="Persisted transactions hidden by the current date / type / search filters"
+                      >
+                        {transactions.length - filtered.length} outside current filters
+                      </span>
+                    )}
+                    <span className="px-2.5 py-0.5 rounded-full bg-green-950/40 text-[#23C55E] text-[10px] font-bold border border-green-800/30">
+                      {dateRange} ({filterType})
+                    </span>
+                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">

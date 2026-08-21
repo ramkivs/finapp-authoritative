@@ -19,9 +19,8 @@ import {
   FinancialProfile,
   ProfileRepository,
   FinancialRepositoryPort,
-  APP_AS_OF_DATE
 } from '../domain/types';
-import { DateRangeService, formatDisplayDate } from '../services/DateRangeService';
+import { DateRangeService, formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { Sha256Service } from '../services/Sha256Service';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
@@ -40,7 +39,7 @@ export class MemoryTransactionRepository implements TransactionRepository {
   }
 
   findManySync(query: TransactionQuery): Transaction[] {
-    const { type, dateRange, search, customStart, customEnd, asOfDateStr = APP_AS_OF_DATE } = query;
+    const { type, dateRange, search, customStart, customEnd, asOfDateStr = getEffectiveAsOfDate() } = query;
     const bounds = DateRangeService.getBounds(dateRange || 'This Month', asOfDateStr, customStart, customEnd);
 
     return this.parent.transactionsData.filter(tx => {
@@ -288,7 +287,7 @@ export class MemorySnapshotRepository implements SnapshotRepository {
 
       const newSnap: NetWorthSnapshot = {
         id: 'snap-' + Date.now(),
-        dateStr: formatDisplayDate(APP_AS_OF_DATE) + ' (Today)',
+        dateStr: formatDisplayDate(getEffectiveAsOfDate()) + ' (Today)',
         totalAssets: totAssets,
         totalLiabilities: totLiabs,
         netWorth,

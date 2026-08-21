@@ -3,7 +3,6 @@ import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { ImportPipelineService } from '../services/ImportPipelineService';
 import {
   Transaction,
-  APP_AS_OF_DATE,
   AssetType,
   LiabilityType,
   GeographyType,
@@ -20,7 +19,7 @@ import {
   GOAL_TEMPLATES,
   FinancialProfile
 } from '../domain/types';
-import { formatDisplayDate } from '../services/DateRangeService';
+import { formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
 
 const SAMPLE_DEFAULT_CSV = `Date,Title,Narration,Amount,Type,Account
 2026-08-06,ITC Limited,ACH/C-/ITC LTD DIVIDEND/NSE0098,2100,INCOME,HDFC Bank
@@ -32,8 +31,8 @@ export class FinancialCommands {
   static recordIncome(title: string, amount: number, account: string, category: string, notes?: string): void {
     repository.transactions.append({
       id: 'tx-inc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-      date: APP_AS_OF_DATE,
-      dateStr: formatDisplayDate(APP_AS_OF_DATE),
+      date: getEffectiveAsOfDate(),
+      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
       title,
       narration: 'MANUAL/' + title.toUpperCase(),
       account,
@@ -48,8 +47,8 @@ export class FinancialCommands {
   static recordExpense(title: string, amount: number, account: string, category: string, notes?: string): void {
     repository.transactions.append({
       id: 'tx-exp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-      date: APP_AS_OF_DATE,
-      dateStr: formatDisplayDate(APP_AS_OF_DATE),
+      date: getEffectiveAsOfDate(),
+      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
       title,
       narration: 'MANUAL/' + title.toUpperCase(),
       account,
@@ -66,8 +65,8 @@ export class FinancialCommands {
     const debitTx: Transaction = {
       id: trId + '-debit',
       transferId: trId,
-      date: APP_AS_OF_DATE,
-      dateStr: formatDisplayDate(APP_AS_OF_DATE),
+      date: getEffectiveAsOfDate(),
+      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
       title: 'Transfer to ' + destination,
       narration: 'TRANSFER-DEBIT/' + trId,
       account: source,
@@ -80,8 +79,8 @@ export class FinancialCommands {
     const creditTx: Transaction = {
       id: trId + '-credit',
       transferId: trId,
-      date: APP_AS_OF_DATE,
-      dateStr: formatDisplayDate(APP_AS_OF_DATE),
+      date: getEffectiveAsOfDate(),
+      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
       title: 'Transfer from ' + source,
       narration: 'TRANSFER-CREDIT/' + trId,
       account: destination,
@@ -112,14 +111,14 @@ export class FinancialCommands {
 
   static addPastSnapshot(params: { dateStr: string; totalAssets: number; totalLiabilities: number; label?: string }): void {
     const { dateStr, totalAssets, totalLiabilities, label } = params;
-    // Future date validation against APP_AS_OF_DATE
+    // Future date validation against the effective as-of date
     const parts = dateStr.split("-");
     let targetDate = new Date(dateStr);
     if (parts.length === 3 && parts[0].length === 2) {
       // DD-MM-YYYY
       targetDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
     }
-    const today = new Date(APP_AS_OF_DATE);
+    const today = new Date(getEffectiveAsOfDate());
     if (!isNaN(targetDate.getTime()) && targetDate > today) {
       throw new Error("Cannot record a net worth snapshot for a future date.");
     }
@@ -143,7 +142,7 @@ export class FinancialCommands {
       const netWorth = totalAssets - totalLiabilities;
       repository.snapshots.create({
         id: "snap-" + Date.now(),
-        dateStr: formatDisplayDate(APP_AS_OF_DATE) + " (Today)",
+        dateStr: formatDisplayDate(getEffectiveAsOfDate()) + " (Today)",
         totalAssets,
         totalLiabilities,
         netWorth,
@@ -222,7 +221,7 @@ export class FinancialCommands {
       lastFourDigits: params.lastFourDigits?.trim() || undefined,
       openingBalance: Number(params.openingBalance) || 0,
       currency: params.currency?.trim() || undefined,
-      asOfDate: params.asOfDate || APP_AS_OF_DATE,
+      asOfDate: params.asOfDate || getEffectiveAsOfDate(),
       notes: params.notes?.trim() || undefined
     };
 

@@ -1,5 +1,5 @@
-import { APP_AS_OF_DATE, FinancialMetric, FinancialSeries, Transaction, Asset, Liability, NetWorthSnapshot } from '../domain/types';
-import { DateRangeService } from './DateRangeService';
+import { FinancialMetric, FinancialSeries, Transaction, Asset, Liability, NetWorthSnapshot } from '../domain/types';
+import { DateRangeService, getEffectiveAsOfDate } from './DateRangeService';
 import { DividendService } from './DividendService';
 import { WealthIntelligenceService } from './WealthIntelligenceService';
 import { EssentialsService } from './EssentialsService';
@@ -12,7 +12,7 @@ export class FinancialMetricService {
     assets: Asset[] = [],
     liabilities: Liability[] = [],
     snapshots: NetWorthSnapshot[] = [],
-    asOfDateStr: string = APP_AS_OF_DATE
+    asOfDateStr: string = getEffectiveAsOfDate()
   ): FinancialMetric {
     if (metricName === 'TTM_REALIZED_DIVIDEND') {
       const bounds = DateRangeService.getBounds('12M', asOfDateStr);
@@ -197,7 +197,7 @@ export class FinancialMetricService {
     };
   }
 
-  static getSeries(seriesName: string, transactions: Transaction[], asOfDateStr: string = APP_AS_OF_DATE): FinancialSeries | null {
+  static getSeries(seriesName: string, transactions: Transaction[], asOfDateStr: string = getEffectiveAsOfDate()): FinancialSeries | null {
     if (seriesName === 'MONTHLY_DIVIDEND_HISTOGRAM') {
       return {
         series: 'MONTHLY_DIVIDEND_HISTOGRAM',

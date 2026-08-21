@@ -1,7 +1,6 @@
 import { FinancialCommands } from '../application/commands';
 import { create } from 'zustand';
 import {
-  APP_AS_OF_DATE,
   Transaction,
   Asset,
   Liability,
@@ -15,7 +14,7 @@ import {
   GoalTemplateType,
   FinancialProfile
 } from '../domain/types';
-import { formatDisplayDate, DateRangeService } from '../services/DateRangeService';
+import { formatDisplayDate, DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { Sha256Service } from '../services/Sha256Service';
 import { repository } from '../repositories';
 
@@ -138,11 +137,11 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   goals: [],
   profile: null,
   privacyMasked: typeof window !== 'undefined' ? localStorage.getItem('finapp.privacy.masked') === 'true' : false,
-  filterType: 'Expense',
+  filterType: 'All',
   dateRange: 'This Month',
   searchQuery: '',
   customStart: '2026-07-01',
-  customEnd: APP_AS_OF_DATE,
+  customEnd: getEffectiveAsOfDate(),
 
   setFilterType: (filterType) => set({ filterType }),
   setDateRange: (dateRange) => {
@@ -188,8 +187,8 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   addIncome: (title, amount, account, category, notes) => {
     const tx: Transaction = {
       id: 'tx-inc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-      date: APP_AS_OF_DATE,
-      dateStr: formatDisplayDate(APP_AS_OF_DATE),
+      date: getEffectiveAsOfDate(),
+      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
       title,
       narration: 'MANUAL/' + title.toUpperCase(),
       account,
@@ -205,8 +204,8 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   addExpense: (title, amount, account, category, notes) => {
     const tx: Transaction = {
       id: 'tx-exp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-      date: APP_AS_OF_DATE,
-      dateStr: formatDisplayDate(APP_AS_OF_DATE),
+      date: getEffectiveAsOfDate(),
+      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
       title,
       narration: 'MANUAL/' + title.toUpperCase(),
       account,
@@ -224,8 +223,8 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     const debitLeg: Transaction = {
       id: transferId + '-debit',
       transferId,
-      date: APP_AS_OF_DATE,
-      dateStr: formatDisplayDate(APP_AS_OF_DATE),
+      date: getEffectiveAsOfDate(),
+      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
       title: 'Transfer to ' + destination,
       narration: 'TRANSFER-DEBIT/' + transferId,
       account: source,
@@ -238,8 +237,8 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     const creditLeg: Transaction = {
       id: transferId + '-credit',
       transferId,
-      date: APP_AS_OF_DATE,
-      dateStr: formatDisplayDate(APP_AS_OF_DATE),
+      date: getEffectiveAsOfDate(),
+      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
       title: 'Transfer from ' + source,
       narration: 'TRANSFER-CREDIT/' + transferId,
       account: destination,
@@ -346,7 +345,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     const customStart = params?.customStart ?? state.customStart;
     const customEnd = params?.customEnd ?? state.customEnd;
 
-    const bounds = DateRangeService.getBounds(dateRange, APP_AS_OF_DATE, customStart, customEnd);
+    const bounds = DateRangeService.getBounds(dateRange, getEffectiveAsOfDate(), customStart, customEnd);
 
     return state.transactions.filter(item => {
       if (type !== 'All' && item.type !== type && item.type.toUpperCase() !== type) return false;

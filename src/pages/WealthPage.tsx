@@ -12,7 +12,7 @@ import { AllocationWorkspace } from '../components/wealth/AllocationWorkspace';
 import { WealthHealthCard } from '../components/wealth/WealthHealthCard';
 import { WealthInsightsCard } from '../components/wealth/WealthInsightsCard';
 import { AssetConcentrationCard } from '../components/wealth/AssetConcentrationCard';
-import { APP_AS_OF_DATE } from '../domain/types';
+import { getEffectiveAsOfDate } from '../services/DateRangeService';
 import {
   Landmark,
   CreditCard,
@@ -48,7 +48,7 @@ export const WealthPage: React.FC = () => {
   const totLiabs = liabilities.reduce((s, l) => s + l.amount, 0);
   const currentNetWorth = totAssets - totLiabs;
 
-  const asOfDate = new Date(APP_AS_OF_DATE);
+  const asOfDate = new Date(getEffectiveAsOfDate());
   const currentMonthLabel = asOfDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
   // Sparkline data

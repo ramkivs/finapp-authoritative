@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
-import { APP_AS_OF_DATE } from '../domain/types';
+import { getEffectiveAsOfDate } from '../services/DateRangeService';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -10,7 +10,7 @@ interface ModalProps {
 
 export const CustomDateModal: React.FC<ModalProps> = ({ isOpen, onClose }) => {
   const [start, setStart] = useState('2026-07-01');
-  const [end, setEnd] = useState(APP_AS_OF_DATE); // Initialized from canonical authority
+  const [end, setEnd] = useState(getEffectiveAsOfDate()); // Effective production/as-of date
 
   const setCustomRange = useCanonicalLedger(s => s.setCustomRange);
 

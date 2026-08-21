@@ -10,9 +10,9 @@ import {
   NetWorthTrendIntelligence,
   WealthInsight,
   WealthDataQuality,
-  FinancialMetric,
-  APP_AS_OF_DATE
+  FinancialMetric
 } from '../domain/types';
+import { getEffectiveAsOfDate } from './DateRangeService';
 
 /**
  * Single authoritative definition of the Reference Allocation Benchmark.
@@ -73,7 +73,7 @@ export class WealthIntelligenceService {
    */
   public static calculateNetWorthCAGR(
     snapshots: NetWorthSnapshot[],
-    asOfDateStr: string = APP_AS_OF_DATE
+    asOfDateStr: string = getEffectiveAsOfDate()
   ): FinancialMetric {
     if (!snapshots || snapshots.length === 0) {
       return {
