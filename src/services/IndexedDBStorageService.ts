@@ -9,9 +9,13 @@ import {
   FinancialGoal,
   FinancialProfile
 } from '../domain/types';
+import { AssetIdentityService } from './AssetIdentityService';
 
 const DB_NAME = 'finboom_db';
-const DB_VERSION = 3;
+// WP-FB-DATA-04c-1: bumped 3 -> 4. The `assets` object store moves from
+// keyPath 'name' to keyPath 'id' so that a mutable display name is no longer
+// the storage key. See migrateAssetsToIdKeyPath() below.
+const DB_VERSION = 4;
 
 export interface StoredLedgerState {
   transactions: Transaction[];
@@ -60,8 +64,17 @@ export class IndexedDBStorageService {
       req.onsuccess = () => resolve(req.result);
       req.onupgradeneeded = (e) => {
         const db = (e.target as IDBOpenDBRequest).result;
+        const upgradeTx = (e.target as IDBOpenDBRequest).transaction;
+
+        // WP-FB-DATA-04c-1: assets 'name' -> 'id'. Runs BEFORE the
+        // create-if-absent block so an existing legacy store is migrated
+        // rather than left alone.
+        if (e.oldVersion > 0 && e.oldVersion < 4 && db.objectStoreNames.contains('assets') && upgradeTx) {
+          this.migrateAssetsToIdKeyPath(db, upgradeTx);
+        }
+
         if (!db.objectStoreNames.contains('transactions')) db.createObjectStore('transactions', { keyPath: 'id' });
-        if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'name' });
+        if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('liabilities')) db.createObjectStore('liabilities', { keyPath: 'name' });
         if (!db.objectStoreNames.contains('snapshots')) db.createObjectStore('snapshots', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('accounts')) db.createObjectStore('accounts', { keyPath: 'id' });
@@ -72,6 +85,69 @@ export class IndexedDBStorageService {
         if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
       };
     });
+  }
+
+  /**
+   * WP-FB-DATA-04c-1 — assets object store: keyPath 'name' -> 'id'.
+   *
+   * Runs inside the versionchange transaction:
+   *   read all -> capture count + field fingerprint -> assign ids where absent
+   *   -> delete store -> recreate with keyPath 'id' -> restore -> verify.
+   *
+   * Verification (count, per-field equality, id uniqueness) runs via
+   * AssetIdentityService.verify(). If it fails the upgrade transaction is
+   * ABORTED, leaving the database untouched at version 3 - the migration is
+   * never partially applied and success is never claimed falsely.
+   */
+  private static lastAssetMigrationReport: {
+    countBefore: number; countAfter: number; assigned: number; preserved: number;
+    ambiguous: number; invalid: number; ok: boolean; failures: string[];
+  } | null = null;
+
+  static getLastAssetMigrationReport() {
+    return this.lastAssetMigrationReport;
+  }
+
+  private static migrateAssetsToIdKeyPath(db: IDBDatabase, upgradeTx: IDBTransaction): void {
+    const legacy = upgradeTx.objectStore('assets');
+    if (legacy.keyPath === 'id') return;                    // already migrated
+
+    const readAll = legacy.getAll();
+    readAll.onsuccess = () => {
+      const before: Asset[] = (readAll.result || []) as Asset[];
+      const snapshot = before.map(a => ({ ...a }));         // pre-change copy
+
+      const result = AssetIdentityService.migrate(before);
+      const verification = AssetIdentityService.verify(snapshot, result.assets);
+
+      this.lastAssetMigrationReport = {
+        countBefore: snapshot.length,
+        countAfter: result.assets.length,
+        assigned: result.assigned,
+        preserved: result.preserved,
+        ambiguous: result.ambiguous,
+        invalid: result.invalid,
+        ok: verification.ok,
+        failures: verification.failures
+      };
+
+      if (!verification.ok) {
+        // Do not recreate the store on a failed verification.
+        try { upgradeTx.abort(); } catch { /* transaction already settled */ }
+        return;
+      }
+
+      db.deleteObjectStore('assets');
+      const store = db.createObjectStore('assets', { keyPath: 'id' });
+      for (const asset of result.assets) store.put(asset);
+    };
+    readAll.onerror = () => {
+      this.lastAssetMigrationReport = {
+        countBefore: -1, countAfter: -1, assigned: 0, preserved: 0,
+        ambiguous: 0, invalid: 0, ok: false, failures: ['failed to read legacy assets store']
+      };
+      try { upgradeTx.abort(); } catch { /* already settled */ }
+    };
   }
 
   static async loadAll(): Promise<StoredLedgerState> {

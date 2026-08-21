@@ -103,6 +103,22 @@ export type LiabilityType =
 export type GeographyType = 'India' | 'International' | 'Other';
 
 export interface Asset {
+  /**
+   * Authoritative persisted identity (WP-FB-DATA-04c-1).
+   *
+   * Stable, unique and non-user-editable. Survives renames. This — not `name` —
+   * is the key for storage and for any future reference to an asset.
+   *
+   * Optional in the type purely for backward compatibility with existing
+   * construction sites such as `recordAsset({ name, amount })`; the repository
+   * assigns one on write and migration assigns one on load, so every persisted
+   * asset carries an id at rest.
+   *
+   * ⚠️ Must never appear in search text, user-facing display, financial
+   * calculations, or transaction fingerprints.
+   */
+  id?: string;
+  /** Display label. Mutable and user-editable — NOT an identity. */
   name: string;
   amount: number;
   type?: AssetType;
@@ -212,7 +228,12 @@ export interface TransactionRepository {
 export interface AssetRepository {
   findAll(): Promise<Asset[]>;
   findAllSync(): Asset[];
+  /** Upserts by `Asset.id`; assigns one when absent (WP-FB-DATA-04c-1). */
   add(asset: Asset): Promise<void>;
+  /** Finds by authoritative id. */
+  findByIdSync(id: string): Asset | null;
+  /** Removes by authoritative id. */
+  remove(id: string): Promise<void>;
 }
 
 export interface LiabilityRepository {

@@ -54,7 +54,12 @@ export class PrismaAssetRepository implements AssetRepository {
     // Production implementation: await prisma.asset.create({ data: ... });
   }
 
-  async remove(_name: string): Promise<void> {}
+  findByIdSync(_id: string): Asset | null {
+    // Production implementation: await prisma.asset.findUnique({ where: { id } });
+    return null;
+  }
+
+  async remove(_id: string): Promise<void> {}
 }
 
 export class PrismaLiabilityRepository implements LiabilityRepository {

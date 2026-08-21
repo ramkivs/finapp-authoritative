@@ -23,6 +23,7 @@ import {
 import { DateRangeService, formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransactionSignService } from '../services/TransactionSignService';
+import { AssetIdentityService } from '../services/AssetIdentityService';
 import { Sha256Service } from '../services/Sha256Service';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
@@ -136,16 +137,45 @@ export class MemoryAssetRepository implements AssetRepository {
     return [...this.parent.assetsData];
   }
 
+  findByIdSync(id: string): Asset | null {
+    return this.parent.assetsData.find(a => a.id === id) || null;
+  }
+
+  /**
+   * Upsert keyed on the authoritative `Asset.id` (WP-FB-DATA-04c-1).
+   *
+   * When the incoming asset carries no id the legacy create path applies: an
+   * existing record with the identical (exact) name is updated in place and
+   * keeps its id, exactly as before this package, so `recordAsset(name, amount)`
+   * behaves unchanged. Otherwise a new stable id is generated.
+   *
+   * Names are NEVER normalised for matching here - that would merge assets the
+   * user deliberately created as distinct.
+   */
   async add(asset: Asset): Promise<void> {
     const previous = this.parent.assetsData;
-    const idx = previous.findIndex(a => a.name === asset.name);
     let next: Asset[];
-    if (idx >= 0) {
+
+    const byId = AssetIdentityService.isValidId(asset.id)
+      ? previous.findIndex(a => a.id === asset.id)
+      : -1;
+
+    if (byId >= 0) {
       next = [...previous];
-      next[idx] = { ...asset };
+      next[byId] = { ...asset, id: previous[byId].id };
     } else {
-      next = [...previous, { ...asset }];
+      // Legacy create path: exact-name match preserves prior upsert behaviour.
+      const byName = AssetIdentityService.isValidId(asset.id)
+        ? -1
+        : previous.findIndex(a => a.name === asset.name);
+      if (byName >= 0) {
+        next = [...previous];
+        next[byName] = { ...asset, id: previous[byName].id || AssetIdentityService.generateId() };
+      } else {
+        next = [...previous, { ...asset, id: asset.id || AssetIdentityService.generateId() }];
+      }
     }
+
     this.parent.assetsData = next;
     this.parent.syncStore();
     try {
@@ -167,9 +197,10 @@ export class MemoryAssetRepository implements AssetRepository {
     }
   }
 
-  async remove(name: string): Promise<void> {
+  /** Removes by authoritative id (WP-FB-DATA-04c-1); never by display name. */
+  async remove(id: string): Promise<void> {
     const previous = this.parent.assetsData;
-    const next = previous.filter(a => a.name !== name);
+    const next = previous.filter(a => a.id !== id);
     this.parent.assetsData = next;
     this.parent.syncStore();
     try {
@@ -691,6 +722,10 @@ export class MemoryRepository implements FinancialRepositoryPort {
     // WP-FB-DATA-04b: backfill Transaction.direction. Transfer legs predating
     // the field are recovered deterministically from their generated markers.
     this.transactionsData = TransactionSignService.migrate(this.transactionsData).transactions;
+
+    // WP-FB-DATA-04c-1: backfill Asset.id. Deterministic, idempotent and
+    // lossless - only `id` is written and no asset is merged or dropped.
+    this.assetsData = AssetIdentityService.migrate(this.assetsData).assets;
 
     this.syncStore();
   }
