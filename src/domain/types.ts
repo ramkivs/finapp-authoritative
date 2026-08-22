@@ -22,21 +22,39 @@ export type TransactionStatus = 'CLEARED' | 'PENDING' | 'RECONCILED' | 'ESTIMATE
 
 /**
  * Why a transaction is excluded from DERIVED FINANCIAL SURFACES
- * (WP-FB-DATA-06c-1, Decision 13-b).
+ * (WP-FB-DATA-06c-1 / 06c-2; Decisions 13-b and D11 = B).
  *
- * ⚠️ EXACTLY ONE MEMBER, DELIBERATELY.
+ * ⚠️ ONE MEMBER PER RESOLVED DECISION, DELIBERATELY.
  *
- * Decision 13-b resolved the disposition of IMPORT ROLLBACK only: rolled-back
- * rows are retained, marked, excluded from balances and reports, and remain
- * visible in the Ledger with an explicit disclosure.
+ * Decision 13-b resolved the disposition of IMPORT ROLLBACK: rolled-back rows
+ * are retained, marked, excluded from balances and reports, and remain visible
+ * in the Ledger with an explicit disclosure. Decision D11 = B extended the
+ * vocabulary by exactly one member for AMENDMENT.
  *
- * Lifecycle Decisions 1-8, 10 and 12 are STILL UNRESOLVED. There is therefore
- * no `DELETED`, `SUPERSEDED`, `REVERSED` or `AMENDED` member here, and adding
- * one is not a refactor — it is the act of resolving the corresponding
- * decision. The exclusion MECHANISM is decision-free; this vocabulary is the
- * ledger of which decisions have actually been made.
+ * Adding a member is not a refactor — it is the act of resolving the
+ * corresponding lifecycle decision. The exclusion MECHANISM is decision-free;
+ * this vocabulary is the ledger of which decisions have actually been made.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * MEMBERSHIP LOG
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ *   IMPORT_ROLLBACK  Decision 13-b (WP-FB-DATA-06c-6). A whole import batch was
+ *                    rolled back; its rows are retained, marked and excluded.
+ *
+ *   SUPERSEDED       Decision D11 = B (WP-FB-DATA-06c-2). This row has been
+ *                    amended: a CORRECTION row now carries the right figures and
+ *                    points back here via `supersedes`. The original stays
+ *                    pristine and visible; only its contribution to derived
+ *                    money moves to the correction.
+ *
+ * ⚠️ STILL ABSENT, DELIBERATELY.
+ * D11 = B explicitly resolved that `DELETED` is NOT added. There is also no
+ * `REVERSED` or `AMENDED`: D6 (general undo) and D9 remain OPEN, and minting a
+ * member for them here would resolve them by implication. `SUPERSEDED` covers
+ * amendment and amendment only.
  */
-export type LedgerExclusionReason = 'IMPORT_ROLLBACK';
+export type LedgerExclusionReason = 'IMPORT_ROLLBACK' | 'SUPERSEDED';
 
 /**
  * How a transaction entered the ledger (WP-FB-DATA-06a).
@@ -115,6 +133,53 @@ export interface Transaction {
   excludedAt?: string;
   /** Why it is excluded. See `LedgerExclusionReason`. */
   excludedReason?: LedgerExclusionReason;
+  /**
+   * BACKWARD supersession pointer (WP-FB-DATA-06c-2, Decisions D3 = B, D5 = C,
+   * D10 = C).
+   *
+   * Present ONLY on a CORRECTION row, where it holds the `id` of the row this
+   * one corrects. Absent on originals and on every row written before 06c-2 —
+   * which is precisely why no migration is required.
+   *
+   * ⚠️ THE POINTER GOES BACKWARDS, DELIBERATELY (D10 = C).
+   * A forward `supersededBy` on the original would mean the amendment write has
+   * to mutate the original's linkage as well as its exclusion state, and every
+   * later correction in a chain would have to re-mutate an earlier row. A
+   * backward pointer is written once, by the row that is being created, and is
+   * never touched again. The chain v1 <- v2 <- v3 is then append-only: the
+   * original is left pristine apart from its exclusion stamp (D4 = D).
+   *
+   * ⚠️ NOT A GENERAL "RELATED TRANSACTION" FIELD. It means one thing: "this row
+   * replaces that row's contribution to derived money". Reversal, refund and
+   * linked-transaction semantics are NOT resolved (D6, D9 remain OPEN) and must
+   * not be expressed here.
+   */
+  supersedes?: string;
+  /**
+   * The row's content no longer matches the source document it claims
+   * (WP-FB-DATA-06c-2, Decision D4 = D).
+   *
+   * D4 = D resolved that a correction INHERITS the original's source provenance
+   * — `sourceProvider`, `sourceFile`, `sourceRowNumber`, `importBatchId`,
+   * `origin` — rather than being reborn as a manual row. That keeps the audit
+   * trail intact: the money still traces to the statement it came from.
+   *
+   * But inherited provenance without a marker would be a LIE. The row would
+   * claim "row 7 of SBI_Statement.xlsx says ₹4,000" when the statement says
+   * ₹1,000 and a human changed it. This flag is the explicit divergence marker
+   * D4 = D requires: provenance is inherited, and the row admits that its
+   * figures are no longer what that provenance produced.
+   *
+   * Set UNCONDITIONALLY on every correction, including corrections of manual
+   * rows. It reads: "the figures on this row were not produced by the process
+   * named in `origin` — they were entered by an amendment." That is true of
+   * every correction, so the flag never under-claims. A conditional marker
+   * ("only when the original had a source file") would let a consumer read a
+   * manual correction as pristine first-hand entry, which it is not.
+   *
+   * Absent (not `false`) on originals and on all legacy rows.
+   */
+  provenanceDiverged?: boolean;
   /**
    * How this row entered the ledger (WP-FB-DATA-06a).
    *
@@ -306,6 +371,46 @@ export interface TransactionRepository {
    * exclude only part of a transfer.
    */
   rollbackBatch(importBatchId: string): Promise<BatchRollbackResultShape>;
+  /**
+   * WP-FB-DATA-06c-2 / Decisions D3, D4, D5, D10, D11, D12 — the ONE atomic
+   * amendment primitive.
+   *
+   * Supersedes each targeted row with a newly created correction, in a SINGLE
+   * write. There is deliberately no separate "exclude the original" and "append
+   * the correction" pair of calls: the 06c-2 gate measured that shape and
+   * recorded a persisted intermediate state in which BOTH versions counted
+   * (₹20,500 for a ₹15,500 ledger).
+   *
+   * A transfer must be amended whole — pass both legs in one call or be
+   * refused (D8).
+   *
+   * ⚠️ NO RESTORE. Q2 = d deferred restore to WP-FB-DATA-06c-2b. There is no
+   * `restore`, `unsupersede` or `undo` on this port, and its absence is
+   * load-bearing: D6 (general undo) and D9 are OPEN.
+   *
+   * Rejects with `AmendmentRefusedError` (target missing, already excluded,
+   * immutable field, no effective change, partial transfer),
+   * `DuplicateTransactionIdError`, `TransferIntegrityError` or
+   * `PartialTransferLifecycleError`.
+   */
+  supersede(requests: AmendmentRequestShape[]): Promise<AmendmentResultShape>;
+}
+
+/** Structural mirror of `AmendmentRequest` (kept here to avoid a service import in the port). */
+export interface AmendmentRequestShape {
+  targetId: string;
+  changes: Partial<Pick<
+    Transaction,
+    'amount' | 'date' | 'title' | 'narration' | 'account' | 'accountId' |
+    'category' | 'notes' | 'status' | 'direction' | 'type'
+  >>;
+}
+
+/** Structural mirror of `AmendmentResult`. */
+export interface AmendmentResultShape {
+  outcomes: { supersededId: string; correctionId: string; transferId: string | null }[];
+  supersededCount: number;
+  correctionCount: number;
 }
 
 /** Structural mirror of `BatchRollbackResult` (kept here to avoid a service import in the port). */

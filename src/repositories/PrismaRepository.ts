@@ -4,11 +4,17 @@ import {
   LiabilityRepository, SnapshotRepository, FinancialRepositoryPort,
   Account, AccountRepository, MonthlyBudget, BudgetRepository,
   InsurancePolicy, PolicyRepository, FinancialGoal, GoalRepository,
-  FinancialProfile, ProfileRepository, BatchRollbackResultShape
+  FinancialProfile, ProfileRepository, BatchRollbackResultShape,
+  AmendmentRequestShape, AmendmentResultShape
 } from '../domain/types';
 import { TransferIntegrityService } from '../services/TransferIntegrityService';
 import { TransactionIdentityService } from '../services/TransactionIdentityService';
 import { ImportBatchRollbackService, BatchRollbackError } from '../services/ImportBatchRollbackService';
+import {
+  TransactionAmendmentService,
+  AmendmentRefusedError,
+  AmendmentRequest
+} from '../services/TransactionAmendmentService';
 
 /**
  * Gate 8 Prisma Repository Adapter (Hexagonal Persistence Port)
@@ -90,6 +96,47 @@ export class PrismaTransactionRepository implements TransactionRepository {
       excludedIds: plan.targetIds,
       alreadyExcludedCount: plan.alreadyExcludedIds.length
     };
+  }
+
+  /**
+   * WP-FB-DATA-06c-2: the amendment guards are mirrored here for the same
+   * reason the 06b, 06c-0, 06c-6 and 06c-1a guards were — a rule enforced in
+   * only one of two `TransactionRepository` implementations is not a rule, it
+   * is a coincidence of which adapter happens to be wired.
+   *
+   * ⚠️ A real Prisma implementation MUST apply the exclusion stamps and the
+   * correction inserts inside ONE `prisma.$transaction([...])`. Splitting them
+   * reintroduces the exact defect this package closes: the 06c-2 gate measured
+   * a persisted intermediate state in which both versions of the transaction
+   * counted (₹20,500 for a ₹15,500 ledger). Note the pre-existing per-row loop
+   * in `appendMany` above has the same unfixed flaw and is tracked separately.
+   *
+   * ⚠️ `findAllSync()` returns `[]` here, so these gates currently validate
+   * against an empty ledger — pre-existing and tracked; the guards are wired so
+   * that a real backend inherits them rather than having to remember them.
+   */
+  async supersede(requests: AmendmentRequestShape[]): Promise<AmendmentResultShape> {
+    const existing = this.findAllSync();
+
+    const plan = TransactionAmendmentService.plan(requests as AmendmentRequest[], existing);
+    if (plan.status !== 'ADMISSIBLE') throw new AmendmentRefusedError(plan);
+
+    const { next, corrections, result } = TransactionAmendmentService.apply(
+      plan,
+      existing,
+      new Date().toISOString()
+    );
+
+    TransactionIdentityService.assertUniqueIds(corrections, existing);
+    TransferIntegrityService.assertAdmissible(corrections, existing);
+    TransferIntegrityService.assertWholeTransferLifecycle(existing, next);
+
+    // Production implementation: await prisma.$transaction([
+    //   ...plan.targetIds.map(id => prisma.transaction.update({
+    //     where: { id }, data: { excludedAt: now, excludedReason: 'SUPERSEDED' } })),
+    //   ...corrections.map(c => prisma.transaction.create({ data: c }))
+    // ]);
+    return result;
   }
 }
 

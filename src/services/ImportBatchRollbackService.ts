@@ -1,6 +1,7 @@
 import { Transaction } from '../domain/types';
 import { LedgerExclusionService } from './LedgerExclusionService';
 import { TransferIntegrityService } from './TransferIntegrityService';
+import { TransactionAmendmentService } from './TransactionAmendmentService';
 
 /* =============================================================================
  * IMPORT BATCH ROLLBACK (WP-FB-DATA-06c-6, Decision 13-b)
@@ -84,6 +85,15 @@ export interface ImportBatchSummary {
   /** Sum of `amount`, for scale only — not a signed financial figure. */
   totalAmount: number;
   excludedCount: number;
+  /**
+   * Rows in this batch that are USER CORRECTIONS (WP-FB-DATA-06c-2, Q1b = c).
+   *
+   * They inherited this `importBatchId` as provenance under D4 = D but are not
+   * rollback targets. Surfaced so the Import History can disclose that rolling
+   * the batch back will not undo them, instead of leaving the user to infer it
+   * from a `PARTIALLY_EXCLUDED` badge.
+   */
+  correctionCount: number;
   status: 'LIVE' | 'ROLLED_BACK' | 'PARTIALLY_EXCLUDED';
   /** Whether `rollbackBatch` would currently succeed. */
   rollbackEligible: boolean;
@@ -145,23 +155,46 @@ export class ImportBatchRollbackService {
     }
 
     const alreadyExcludedIds = rows.filter(r => LedgerExclusionService.isExcluded(r)).map(r => r.id);
-    const targets = rows.filter(r => !LedgerExclusionService.isExcluded(r));
+
+    /* ── Q1b = c — CORRECTIONS ARE NOT ROLLBACK TARGETS ─────────────────────
+     *
+     * D4 = D makes a correction inherit the original's `importBatchId`, so a
+     * correction of an imported row is a MEMBER of that batch for provenance.
+     * Q1b = c resolved that it is nonetheless NOT a target of rolling that
+     * batch back: the figures on a correction were entered by the user, not by
+     * the statement, so undoing the import does not undo them.
+     *
+     * ⚠️ SURFACED CONSEQUENCE, NOT A SILENT ONE. Rolling back a batch that
+     * contains corrections therefore leaves those corrections counting. The
+     * batch reports `PARTIALLY_EXCLUDED` with a non-zero `correctionCount`
+     * rather than claiming to be fully rolled back, so the Import History
+     * surface can say so instead of implying the import was undone.
+     */
+    const corrections = rows.filter(r => TransactionAmendmentService.isCorrection(r));
+    const correctionIds = new Set(corrections.map(r => r.id));
+
+    const targets = rows.filter(r => !LedgerExclusionService.isExcluded(r) && !correctionIds.has(r.id));
 
     if (targets.length === 0) {
+      const retained = corrections.filter(r => !LedgerExclusionService.isExcluded(r)).length;
       return {
         ...base,
         alreadyExcludedIds,
         refusalCode: 'ALREADY_ROLLED_BACK',
         refusalReason:
           `import batch "${batchId}" has already been rolled back ` +
-          `(${alreadyExcludedIds.length} row(s) already excluded)`
+          `(${alreadyExcludedIds.length} row(s) already excluded)` +
+          (retained > 0
+            ? `; ${retained} user correction(s) inherited this batch id and are still counted, ` +
+              `because a correction records the user's own figures, not the statement's (Q1b)`
+            : '')
       };
     }
 
     // ── split-batch transfer guard ────────────────────────────────────────
-    // For every transfer touched by this batch, EVERY leg must end up excluded.
-    // A leg counts as ending up excluded if it is already excluded or is a
-    // target of this rollback.
+    // For every transfer this rollback actually EXCLUDES part of, EVERY leg
+    // must end up excluded. A leg counts as ending up excluded if it is already
+    // excluded or is a target of this rollback.
     const willBeExcluded = new Set([...alreadyExcludedIds, ...targets.map(t => t.id)]);
     const touchedTransferIds = new Set(
       rows.map(r => r.transferId).filter((id): id is string => !!id)
@@ -169,6 +202,19 @@ export class ImportBatchRollbackService {
 
     for (const transferId of touchedTransferIds) {
       const legs = txs.filter(t => t.transferId === transferId);
+
+      /* Groups this rollback excludes NOTHING from are not its business.
+       *
+       * Before Q1b = c this branch was unreachable: every batch row was either
+       * already excluded or a target, so every touched group had at least one
+       * leg in `willBeExcluded`. Corrections are now neither, so a corrected
+       * transfer pair — a wholly live, wholly valid transfer that merely
+       * inherited this batch id — would otherwise be read as "two stranded
+       * legs" and block the rollback of unrelated rows. Skipping it is a no-op
+       * for every pre-06c-2 batch and is asserted as such in the tests.
+       */
+      if (!legs.some(l => willBeExcluded.has(l.id))) continue;
+
       const stranded = legs.filter(l => !willBeExcluded.has(l.id) && !LedgerExclusionService.isExcluded(l));
       if (stranded.length > 0) {
         return {
@@ -256,6 +302,7 @@ export class ImportBatchRollbackService {
         rowCount: rows.length,
         totalAmount: rows.reduce((sum, r) => sum + r.amount, 0),
         excludedCount,
+        correctionCount: rows.filter(r => TransactionAmendmentService.isCorrection(r)).length,
         status,
         rollbackEligible: plan.status === 'ADMISSIBLE',
         rollbackBlockedCode: plan.status === 'ADMISSIBLE' ? undefined : plan.refusalCode,

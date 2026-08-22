@@ -44,16 +44,30 @@ import { Transaction, LedgerExclusionReason } from '../domain/types';
  * SCOPE — WP-FB-DATA-06c-1 IS GROUNDWORK ONLY
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Nothing in this package WRITES `excludedAt`. There is no rollback, delete,
- * amendment, supersession, reversal or undo capability, and none is implied.
- * This is the read-side semantics that WP-FB-DATA-06c-6 will later need.
+ * Nothing in THIS package (06c-1) writes `excludedAt`; it is the read-side
+ * semantics later packages need. WP-FB-DATA-06c-6 added the first writer
+ * (import rollback) and WP-FB-DATA-06c-2 added the second (supersession).
+ * There is still no restore, delete, reversal or undo capability, and none is
+ * implied — Q2 = d deferred restore, and D6/D9 remain OPEN.
  * ========================================================================== */
 
 /** Reported for an exclusion whose reason this build does not recognise. */
 export type ResolvedExclusionReason = LedgerExclusionReason | 'UNKNOWN';
 
-/** Every reason this build understands. Grows only as decisions are resolved. */
-export const KNOWN_EXCLUSION_REASONS: readonly LedgerExclusionReason[] = ['IMPORT_ROLLBACK'] as const;
+/**
+ * Every reason this build understands. Grows only as decisions are resolved.
+ *
+ *   IMPORT_ROLLBACK  Decision 13-b   (WP-FB-DATA-06c-6)
+ *   SUPERSEDED       Decision D11=B  (WP-FB-DATA-06c-2)
+ *
+ * ⚠️ A reason added to `LedgerExclusionReason` but NOT added here is WORSE than
+ * one that was never added: the row is still excluded (`isExcluded` keys on
+ * `excludedAt`), but `reasonOf` reports `'UNKNOWN'` and every disclosure surface
+ * tells the user their money vanished "for an unrecognised reason". The two
+ * lists must be extended together.
+ */
+export const KNOWN_EXCLUSION_REASONS: readonly LedgerExclusionReason[] =
+  ['IMPORT_ROLLBACK', 'SUPERSEDED'] as const;
 
 export interface ExclusionSummary {
   id: string;
@@ -125,7 +139,9 @@ export class LedgerExclusionService {
     const reason = this.reasonOf(tx);
     const label = reason === 'IMPORT_ROLLBACK'
       ? 'rolled back with its import batch'
-      : 'excluded for an unrecognised reason';
+      : reason === 'SUPERSEDED'
+        ? 'corrected — a newer version of this transaction is counted instead'
+        : 'excluded for an unrecognised reason';
     return `${tx.narration} (₹${tx.amount}) — ${label}; still recorded, not counted`;
   }
 }

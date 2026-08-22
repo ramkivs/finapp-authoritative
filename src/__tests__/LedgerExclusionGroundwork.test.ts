@@ -135,12 +135,18 @@ describe('WP-FB-DATA-06c-1 — ledger exclusion groundwork', () => {
       expect(x.message).toContain('still recorded, not counted');
     });
 
-    it('the reason vocabulary contains ONLY the resolved decision', () => {
-      expect([...KNOWN_EXCLUSION_REASONS]).toEqual(['IMPORT_ROLLBACK']);
-      // Decisions 1-8, 10, 12 unresolved => no lifecycle reasons yet.
+    /* The vocabulary is the LEDGER OF RESOLVED DECISIONS, so this assertion is
+     * expected to change — but only when a decision is actually made, and only
+     * by the package that makes it.
+     *   IMPORT_ROLLBACK  13-b    (06c-6)
+     *   SUPERSEDED       D11 = B (06c-2)
+     * D11 = B explicitly declined DELETED. D6 and D9 are OPEN, so REVERSED and
+     * an undo reason must still be absent. */
+    it('the reason vocabulary contains ONLY the resolved decisions', () => {
+      expect([...KNOWN_EXCLUSION_REASONS]).toEqual(['IMPORT_ROLLBACK', 'SUPERSEDED']);
       expect(KNOWN_EXCLUSION_REASONS).not.toContain('DELETED' as any);
-      expect(KNOWN_EXCLUSION_REASONS).not.toContain('SUPERSEDED' as any);
       expect(KNOWN_EXCLUSION_REASONS).not.toContain('REVERSED' as any);
+      expect(KNOWN_EXCLUSION_REASONS).not.toContain('AMENDED' as any);
     });
   });
 

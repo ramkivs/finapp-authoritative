@@ -420,10 +420,14 @@ describe('WP-FB-DATA-06c-1a — whole-transfer lifecycle guard', () => {
       await expect(repository.transactions.append({ ...tx, amount: 5 })).rejects.toThrow();
     });
 
-    it('DATA-06c-1 exclusion vocabulary is unchanged — still only IMPORT_ROLLBACK', () => {
+    /* SUPERSEDED became recognised in WP-FB-DATA-06c-2 (D11 = B). An
+     * unrecognised reason must still report UNKNOWN rather than being guessed. */
+    it('DATA-06c-1 exclusion vocabulary resolves only decided reasons', () => {
       const row: any = { id: 'x', amount: 1, narration: 'n', ...EXCL };
       expect(LedgerExclusionService.reasonOf(row)).toBe('IMPORT_ROLLBACK');
-      expect(LedgerExclusionService.reasonOf({ ...row, excludedReason: 'SUPERSEDED' } as any)).toBe('UNKNOWN');
+      expect(LedgerExclusionService.reasonOf({ ...row, excludedReason: 'SUPERSEDED' } as any)).toBe('SUPERSEDED');
+      expect(LedgerExclusionService.reasonOf({ ...row, excludedReason: 'DELETED' } as any)).toBe('UNKNOWN');
+      expect(LedgerExclusionService.reasonOf({ ...row, excludedReason: 'REVERSED' } as any)).toBe('UNKNOWN');
     });
 
     it('BROKEN from a deleted account is still reported independently', async () => {
@@ -452,10 +456,17 @@ describe('WP-FB-DATA-06c-1a — whole-transfer lifecycle guard', () => {
 
   /* ═══════════════════════════ §7 scope boundary ═══════════════════════════ */
   describe('§7 no decision resolved implicitly', () => {
-    it('still no UPDATE / REMOVE / amend / supersede / restore primitive', () => {
+    /* WP-FB-DATA-06c-2 NARROWED THIS TEST — deliberately, and by exactly one
+     * name. `supersede` was authorised by Decisions D3/D5/D10/D12, so it is now
+     * asserted PRESENT rather than absent. Every other name stays forbidden,
+     * and `restore` in particular stays forbidden because Q2 = d deferred it to
+     * WP-FB-DATA-06c-2b. Widening this list is how an unmade decision gets made
+     * by accident. */
+    it('the ONLY lifecycle primitive added is supersede (D12 = C)', () => {
       const t = repository.transactions as any;
+      expect(typeof t.supersede).toBe('function');
       for (const k of ['update', 'remove', 'replace', 'patch', 'amend', 'reverse',
-                       'supersede', 'tombstone', 'restore', 'restoreBatch', 'removeBatch']) {
+                       'tombstone', 'restore', 'unsupersede', 'restoreBatch', 'removeBatch']) {
         expect(typeof t[k]).toBe('undefined');
       }
     });
@@ -465,18 +476,22 @@ describe('WP-FB-DATA-06c-1a — whole-transfer lifecycle guard', () => {
       expect(typeof (S() as any).restoreImportBatch).toBe('undefined');
     });
 
-    it('no new exclusion reason was added (D11 unresolved)', () => {
+    it('DELETED is still not an exclusion reason (D11 = B added SUPERSEDED only)', () => {
       const row: any = { id: 'x', amount: 1, narration: 'n',
         excludedAt: '2026-08-22T10:00:00.000Z', excludedReason: 'DELETED' };
       expect(LedgerExclusionService.reasonOf(row)).toBe('UNKNOWN');
     });
 
-    it('no link / lifecycle field was added (D3, D5 unresolved)', async () => {
+    it('a newly recorded row carries no lifecycle or link state (D10 = C is backward-only)', async () => {
       const A = acct('A', 10000);
       const tx: any = TransactionFactory.createIncome({
         title: 'X', amount: 1, account: 'A', accountId: A.id, category: 'G'
       });
+      // D10 = C chose a BACKWARD pointer; a forward one must never appear.
       expect(tx.supersededById).toBeUndefined();
+      // and an ORIGINAL is never born a correction
+      expect(tx.supersedes).toBeUndefined();
+      expect(tx.provenanceDiverged).toBeUndefined();
       expect(tx.amendedAt).toBeUndefined();
       expect(tx.deletedAt).toBeUndefined();
       expect(tx.lifecycleState).toBeUndefined();

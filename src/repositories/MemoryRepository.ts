@@ -20,6 +20,8 @@ import {
   ProfileRepository,
   FinancialRepositoryPort,
   BatchRollbackResultShape,
+  AmendmentRequestShape,
+  AmendmentResultShape,
 } from '../domain/types';
 import { DateRangeService, formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { AccountResolutionService } from '../services/AccountResolutionService';
@@ -30,6 +32,11 @@ import { TransferIntegrityService, TransferValidation } from '../services/Transf
 import { TransactionIdentityService, DuplicateIdGroup } from '../services/TransactionIdentityService';
 import { LedgerExclusionService } from '../services/LedgerExclusionService';
 import { ImportBatchRollbackService, BatchRollbackError } from '../services/ImportBatchRollbackService';
+import {
+  TransactionAmendmentService,
+  AmendmentRefusedError,
+  AmendmentRequest
+} from '../services/TransactionAmendmentService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { demoTransactions, demoAssets, demoLiabilities, demoSnapshots } from '../domain/demoFixtures';
@@ -213,6 +220,91 @@ export class MemoryTransactionRepository implements TransactionRepository {
       excludedIds: plan.targetIds,
       alreadyExcludedCount: plan.alreadyExcludedIds.length
     };
+  }
+
+  /**
+   * WP-FB-DATA-06c-2 — AMENDMENT / SUPERSESSION. The one atomic primitive
+   * (Decision D12 = C).
+   *
+   * ─────────────────────────────────────────────────────────────────────────
+   * WHY ONE WRITE AND NOT TWO
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * The obvious implementation is two existing calls: `append` the correction,
+   * then exclude the original. The 06c-2 authorization gate MEASURED that shape
+   * and recorded `INTERMEDIATE_PERSISTED_DOUBLE_COUNT: true` — between the two
+   * writes both versions of the transaction are live and persisted, and a
+   * ₹15,500 ledger reads ₹20,500. A crash, a reload, or a failed second write
+   * leaves the user's money permanently double-counted with no marker saying so.
+   *
+   * So the stamped originals and the new corrections are produced as ONE array
+   * by `TransactionAmendmentService.apply` and handed to ONE `saveAll`, which
+   * is itself a single IndexedDB `readwrite` transaction. There is no instant,
+   * in memory or at rest, in which both versions count.
+   *
+   * ─────────────────────────────────────────────────────────────────────────
+   * EVERY GATE IS AN EXISTING AUTHORITY
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * This method adds no new rule of its own. It sequences the ones already in
+   * force, in the only order that is sound:
+   *
+   *   1. `TransactionAmendmentService.plan` — the 06c-2 decisions (Q1 = a and
+   *      D8's request-shape half among them).
+   *   2. `TransactionIdentityService.assertUniqueIds` — 06c-0 / P-1, FIRST of
+   *      the structural gates, because a duplicate id makes every later
+   *      pair judgement unsound.
+   *   3. `TransferIntegrityService.assertAdmissible` — 06b. The corrections are
+   *      genuinely new rows and must clear the same admission gate any other
+   *      new row does.
+   *   4. `TransferIntegrityService.assertWholeTransferLifecycle` — 06c-1a / D8,
+   *      the second door. `plan` reasons about which rows were REQUESTED; this
+   *      reasons about the resulting EXCLUSION STATE, so it holds however the
+   *      rows were selected.
+   *   5. `IndexedDBStorageService.saveAll` — 06c-0 / P-5 and READFAIL. It
+   *      rethrows on failure and refuses outright while `lastLoadFailed` is
+   *      set, so an amendment can never be written over unread data.
+   *
+   * Memory is rolled back if persistence fails, exactly as append/appendMany
+   * and rollbackBatch do.
+   */
+  async supersede(requests: AmendmentRequestShape[]): Promise<AmendmentResultShape> {
+    const previous = this.parent.transactionsData;
+
+    const plan = TransactionAmendmentService.plan(requests as AmendmentRequest[], previous);
+    if (plan.status !== 'ADMISSIBLE') throw new AmendmentRefusedError(plan);
+
+    const { next, corrections, result } = TransactionAmendmentService.apply(
+      plan,
+      previous,
+      new Date().toISOString()
+    );
+
+    TransactionIdentityService.assertUniqueIds(corrections, previous);
+    TransferIntegrityService.assertAdmissible(corrections, previous);
+    TransferIntegrityService.assertWholeTransferLifecycle(previous, next);
+
+    this.parent.transactionsData = next;
+    this.parent.syncStore();
+    try {
+      await IndexedDBStorageService.saveAll({
+        transactions: next,
+        assets: this.parent.assetsData,
+        liabilities: this.parent.liabilitiesData,
+        snapshots: this.parent.snapshotsData,
+        accounts: this.parent.accountsData,
+        budgets: this.parent.budgetsData,
+        policies: this.parent.policiesData,
+        goals: this.parent.goalsData,
+        profile: this.parent.profileData
+      });
+    } catch (e) {
+      this.parent.transactionsData = previous;
+      this.parent.syncStore();
+      throw e;
+    }
+
+    return result;
   }
 }
 

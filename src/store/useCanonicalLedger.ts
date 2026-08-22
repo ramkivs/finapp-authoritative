@@ -13,7 +13,9 @@ import {
   FinancialGoal,
   GoalTemplateType,
   FinancialProfile,
-  BatchRollbackResultShape
+  BatchRollbackResultShape,
+  AmendmentRequestShape,
+  AmendmentResultShape
 } from '../domain/types';
 import { formatDisplayDate, DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { TransactionIdentityService } from '../services/TransactionIdentityService';
@@ -97,6 +99,19 @@ interface LedgerState {
    * rejection (the F-06b-2 lesson).
    */
   rollbackImportBatch: (importBatchId: string) => Promise<BatchRollbackResultShape>;
+  /**
+   * WP-FB-DATA-06c-2 — amend recorded transactions by supersession.
+   *
+   * Returns the promise so the caller can await the outcome and surface a
+   * refusal in the UI. Fire-and-forget here would repeat defect F-06b-2, where
+   * a write refusal reached only the console.
+   *
+   * Amend a transfer by passing BOTH legs in one call (Decision D8).
+   *
+   * ⚠️ There is no matching `restoreTransaction`. Q2 = d deferred restore to
+   * WP-FB-DATA-06c-2b; D6 and D9 are OPEN.
+   */
+  supersedeTransactions: (requests: AmendmentRequestShape[]) => Promise<AmendmentResultShape>;
   addAccount: (params: {
     name: string;
     type: ControlledAccountType;
@@ -407,6 +422,10 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
 
   rollbackImportBatch: (importBatchId) => {
     return repository.transactions.rollbackBatch(importBatchId);
+  },
+
+  supersedeTransactions: (requests) => {
+    return repository.transactions.supersede(requests);
   },
 
   addAccount: (params) => {
