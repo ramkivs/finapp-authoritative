@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
+import { ImportBatchRollbackService, ImportBatchSummary } from '../services/ImportBatchRollbackService';
 import { ImportPipelineService, CSVImportResult } from '../services/ImportPipelineService';
 import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -24,7 +25,56 @@ export const ImportPage: React.FC = () => {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const { transactions, commitImportedRows } = useCanonicalLedger();
+  const { transactions, commitImportedRows, rollbackImportBatch } = useCanonicalLedger();
+
+  // WP-FB-DATA-06c-6a. Derived from the persisted rows on every render, so the
+  // list reconciles itself after a rollback with no manual refresh.
+  const importBatches = ImportBatchRollbackService.listBatches(transactions);
+  const [rollbackBusy, setRollbackBusy] = useState<string | null>(null);
+  const [rollbackNotice, setRollbackNotice] = useState<
+    { kind: 'success' | 'error'; text: string } | null
+  >(null);
+
+  /**
+   * WP-FB-DATA-06c-6a — roll back one import batch.
+   *
+   * Confirmation states the exact consequence before the user commits to it,
+   * following the AccountsWorkspace deletion precedent. The outcome — success or
+   * refusal — is rendered inline and is never swallowed: an integrity refusal
+   * the user cannot see is not a safeguard they can act on (the F-06b-2 lesson).
+   */
+  const handleRollback = async (batch: ImportBatchSummary) => {
+    setRollbackNotice(null);
+
+    const message =
+      `Roll back the import of "${batch.file}"?\n\n` +
+      `${batch.rowCount} transaction${batch.rowCount === 1 ? '' : 's'} will be EXCLUDED from all ` +
+      `balances and reports.\n\n` +
+      `Nothing is deleted. Every row stays in the Canonical Ledger, marked EXCLUDED, ` +
+      `so you can still see exactly what was imported.\n\n` +
+      `This cannot be undone from the app.`;
+
+    if (!window.confirm(message)) return;
+
+    setRollbackBusy(batch.batchId);
+    try {
+      const result = await rollbackImportBatch(batch.batchId);
+      setRollbackBusy(null);
+      setRollbackNotice({
+        kind: 'success',
+        text:
+          `Rolled back "${batch.file}". ${result.excludedCount} transaction` +
+          `${result.excludedCount === 1 ? '' : 's'} excluded from balances and reports. ` +
+          `They remain visible in the Canonical Ledger; nothing was deleted.`
+      });
+    } catch (e: any) {
+      setRollbackBusy(null);
+      setRollbackNotice({
+        kind: 'error',
+        text: e?.message || 'The import batch could not be rolled back.'
+      });
+    }
+  };
 
   const brokers = [
     'Zerodha', 'Groww', 'INDmoney', 'Upstox', 'ICICI Direct',
@@ -181,6 +231,82 @@ export const ImportPage: React.FC = () => {
             Simulate Upload
           </button>
         </div>
+
+        {/* WP-FB-DATA-06c-6a — Import history + rollback. Derived from persisted
+            rows, so it reconciles automatically after a rollback. */}
+        {importBatches.length > 0 && (
+          <div id="import-history" className="mt-6 border-t border-gray-200 dark:border-gray-800 pt-5">
+            <h4 className="font-bold text-gray-900 dark:text-white text-sm mb-1">Import History</h4>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+              Rolling back an import excludes its transactions from balances and reports.
+              Nothing is deleted &mdash; the rows stay in the Canonical Ledger, marked EXCLUDED.
+            </p>
+
+            {rollbackNotice && (
+              <div
+                id="rollback-notice"
+                data-rollback-kind={rollbackNotice.kind}
+                className={`mb-3 rounded-lg border p-3 text-xs ${
+                  rollbackNotice.kind === 'success'
+                    ? 'border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200'
+                    : 'border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200'
+                }`}
+              >
+                <strong>{rollbackNotice.kind === 'success' ? 'Import rolled back.' : 'Rollback refused.'}</strong>{' '}
+                {rollbackNotice.text}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              {importBatches.map(batch => (
+                <div
+                  key={batch.batchId}
+                  data-import-batch={batch.batchId}
+                  data-batch-status={batch.status}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/40 px-3 py-2.5"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-gray-900 dark:text-white truncate">{batch.file}</span>
+                      {batch.status === 'ROLLED_BACK' && (
+                        <span className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[9px] font-bold">
+                          ROLLED BACK
+                        </span>
+                      )}
+                      {batch.status === 'PARTIALLY_EXCLUDED' && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 text-[9px] font-bold">
+                          PARTIALLY EXCLUDED
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                      {batch.provider} &middot; {batch.rowCount} row{batch.rowCount === 1 ? '' : 's'}
+                      {batch.importedAt && <> &middot; imported {batch.importedAt.slice(0, 10)}</>}
+                      {batch.excludedCount > 0 && <> &middot; {batch.excludedCount} excluded</>}
+                    </div>
+                    {!batch.rollbackEligible && batch.rollbackBlockedReason && batch.status !== 'ROLLED_BACK' && (
+                      <div
+                        data-batch-blocked={batch.rollbackBlockedCode}
+                        className="mt-1 text-[11px] text-amber-700 dark:text-amber-300"
+                      >
+                        Cannot roll back: {batch.rollbackBlockedReason}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    data-rollback-batch={batch.batchId}
+                    onClick={() => handleRollback(batch)}
+                    disabled={!batch.rollbackEligible || rollbackBusy === batch.batchId}
+                    title={batch.rollbackEligible ? 'Exclude this import from balances and reports' : batch.rollbackBlockedReason}
+                    className="shrink-0 px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {rollbackBusy === batch.batchId ? 'Rolling back…' : 'Roll Back Import'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {showReview && importResult && (
           <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 space-y-4">

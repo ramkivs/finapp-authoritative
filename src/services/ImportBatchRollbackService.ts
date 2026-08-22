@@ -60,6 +60,38 @@ export interface RollbackPlan {
   refusalReason?: string;
 }
 
+/**
+ * A user-facing summary of one import batch (WP-FB-DATA-06c-6a).
+ *
+ * DERIVED from the persisted rows on every read — there is no batch registry and
+ * this package does not add one. Every field already persists: `importBatchId`,
+ * `sourceProvider`, `sourceFile` and `recordedAt` are written by the import
+ * normalizer (DATA-06a) and were verified to survive reload in DATA-06c-6.
+ *
+ * Deriving rather than storing means the summary cannot drift from the rows it
+ * describes, and a rolled-back batch reports itself as rolled back because its
+ * rows say so — the same reasoning that made `TransferStatus` and the exclusion
+ * state derived rather than persisted.
+ */
+export interface ImportBatchSummary {
+  batchId: string;
+  /** Single provider, or a marker when the batch is mixed/absent. */
+  provider: string;
+  file: string;
+  /** Earliest `recordedAt` in the batch; null when no row carries one. */
+  importedAt: string | null;
+  rowCount: number;
+  /** Sum of `amount`, for scale only — not a signed financial figure. */
+  totalAmount: number;
+  excludedCount: number;
+  status: 'LIVE' | 'ROLLED_BACK' | 'PARTIALLY_EXCLUDED';
+  /** Whether `rollbackBatch` would currently succeed. */
+  rollbackEligible: boolean;
+  /** Populated when `rollbackEligible` is false. */
+  rollbackBlockedCode?: RollbackRefusalCode;
+  rollbackBlockedReason?: string;
+}
+
 export interface BatchRollbackResult {
   batchId: string;
   excludedCount: number;
@@ -187,6 +219,59 @@ export class ImportBatchRollbackService {
    * to `apply()` that started removing rows would be caught here instead of in
    * a balance.
    */
+  /**
+   * Every import batch present in the ledger, newest first.
+   *
+   * Rows with no `importBatchId` are not imports and are omitted. Eligibility is
+   * computed with `plan()`, so the UI never re-implements the refusal rules — it
+   * asks the same authority the write path asks, and can therefore explain
+   * WOULD_SPLIT_TRANSFER before the user clicks rather than after.
+   */
+  static listBatches(txs: Transaction[]): ImportBatchSummary[] {
+    const ids: string[] = [];
+    for (const t of txs) {
+      if (t.importBatchId && !ids.includes(t.importBatchId)) ids.push(t.importBatchId);
+    }
+
+    const summaries = ids.map(batchId => {
+      const rows = this.rowsInBatch(batchId, txs);
+      const providers = [...new Set(rows.map(r => r.sourceProvider).filter(Boolean))] as string[];
+      const files = [...new Set(rows.map(r => r.sourceFile).filter(Boolean))] as string[];
+      const stamps = rows.map(r => r.recordedAt).filter(Boolean).sort() as string[];
+      const excludedCount = rows.filter(r => LedgerExclusionService.isExcluded(r)).length;
+
+      const plan = this.plan(batchId, txs);
+
+      const status: ImportBatchSummary['status'] =
+        excludedCount === 0 ? 'LIVE'
+          : excludedCount === rows.length ? 'ROLLED_BACK'
+            : 'PARTIALLY_EXCLUDED';
+
+      return {
+        batchId,
+        // Never invent a source. A batch with no provider says so.
+        provider: providers.length === 1 ? providers[0] : providers.length === 0 ? 'Unknown source' : 'Multiple sources',
+        file: files.length === 1 ? files[0] : files.length === 0 ? 'Unknown file' : `${files.length} files`,
+        importedAt: stamps.length > 0 ? stamps[0] : null,
+        rowCount: rows.length,
+        totalAmount: rows.reduce((sum, r) => sum + r.amount, 0),
+        excludedCount,
+        status,
+        rollbackEligible: plan.status === 'ADMISSIBLE',
+        rollbackBlockedCode: plan.status === 'ADMISSIBLE' ? undefined : plan.refusalCode,
+        rollbackBlockedReason: plan.status === 'ADMISSIBLE' ? undefined : plan.refusalReason
+      };
+    });
+
+    // newest first; batches with no timestamp sort last
+    return summaries.sort((a, b) => {
+      if (a.importedAt && b.importedAt) return a.importedAt < b.importedAt ? 1 : -1;
+      if (a.importedAt) return -1;
+      if (b.importedAt) return 1;
+      return 0;
+    });
+  }
+
   static structuralIntegrityUnchanged(before: Transaction[], after: Transaction[]): boolean {
     const key = (txs: Transaction[]) =>
       JSON.stringify(
