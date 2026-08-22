@@ -475,7 +475,7 @@ describe('WP-FB-DATA-06a — transaction integrity foundations', () => {
   });
 
   /* ════════════════════════════ §8 scope boundary ══════════════════════════ */
-  describe('§8 scope boundary — 06a does not close L-01', () => {
+  describe('§8 scope boundary — no lifecycle in 06a (L-01 later closed by 06b)', () => {
     it('transactions remain append-only: no update/remove API was introduced', () => {
       const txRepo = repository.transactions as any;
       expect(typeof txRepo.remove).toBe('undefined');
@@ -483,19 +483,28 @@ describe('WP-FB-DATA-06a — transaction integrity foundations', () => {
       expect(typeof txRepo.replace).toBe('undefined');
     });
 
-    it('transferId is still only a label — nothing yet enforces leg symmetry', () => {
+    /**
+     * UPDATED BY WP-FB-DATA-06b.
+     *
+     * This test previously asserted that `transferId` was "only a label" and
+     * that nothing enforced leg symmetry — a marker for the then-open L-01.
+     * DATA-06b closed L-01 at the repository admission boundary, so the marker
+     * is flipped rather than deleted: the write path now refuses an asymmetric
+     * pair, and the only way to produce one is to bypass the API entirely.
+     */
+    it('the write path now enforces leg symmetry (L-01 closed by DATA-06b)', async () => {
       addAccount('A', 0); addAccount('B', 0);
-      S().addTransfer('A', 'B', 2000);
+      await S().addTransfer('A', 'B', 2000);
       const legs = repo.transactionsData.filter(t => t.type === 'Transfer');
-      const trId = legs[0].transferId!;
+      expect(legs).toHaveLength(2);
 
-      // Simulate the L-01 hazard directly against the data (no API needed).
-      repo.transactionsData = repo.transactionsData.filter(t => t.direction !== 'CREDIT');
-      repo.syncStore();
-
-      const remaining = repo.transactionsData.filter(t => t.transferId === trId);
-      expect(remaining).toHaveLength(1);
-      // Documented, deliberately still-open: closing this is WP-FB-DATA-06b.
+      // Appending a lone extra leg is now refused.
+      let refused = false;
+      try {
+        await repository.transactions.append({ ...legs[0], id: 'extra-leg' });
+      } catch { refused = true; }
+      expect(refused).toBe(true);
+      expect(repo.transactionsData.filter(t => t.type === 'Transfer')).toHaveLength(2);
     });
   });
 });

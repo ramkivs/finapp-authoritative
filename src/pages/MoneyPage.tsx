@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { AccountResolutionService } from '../services/AccountResolutionService';
+import { TransferIntegrityService } from '../services/TransferIntegrityService';
 import { TransactionSignService } from '../services/TransactionSignService';
 import { FinancialQueries } from '../application/queries';
 import { KpiCard } from '../components/ui/KpiCard';
@@ -59,6 +60,11 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
 
   const filtered = getFilteredTransactions();
   const insights = FinancialQueries.getMoneyInsights(dateRange);
+
+  // WP-FB-DATA-06b / T1-b + T2-a: derived on every render from the current legs.
+  // Covers both transfers broken by an account deletion in this session and any
+  // pre-existing broken transfers detected at load. Reporting only.
+  const brokenTransfers = TransferIntegrityService.findBrokenTransfers(transactions);
 
   const handleSearchChange = (val: string) => {
     setSearchInput(val);
@@ -729,6 +735,29 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
               </div>
             ) : (
               <div className="bg-[#161B22] border border-[#21262D] rounded-2xl overflow-hidden shadow-sm">
+                {/* WP-FB-DATA-06b / Decision T1-b: transfers that no longer balance
+                    across accounts. Status is DERIVED from the legs on every render,
+                    so it cannot go stale and re-registering the account clears it. */}
+                {brokenTransfers.length > 0 && (
+                  <div id="transfer-reconciliation-notice" className="p-4 border-b border-amber-800/40 bg-amber-950/30">
+                    <p className="text-xs font-bold text-amber-200 uppercase tracking-wider">
+                      {brokenTransfers.length} transfer{brokenTransfers.length === 1 ? '' : 's'} need reconciliation
+                    </p>
+                    <p className="mt-1 text-[11px] text-amber-300/90">
+                      These transfers no longer balance across accounts &mdash; usually because an account they
+                      referenced was deleted. Both rows are still stored and nothing was changed or removed.
+                      Re-registering the missing account will restore the link.
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {brokenTransfers.map(v => (
+                        <li key={v.transferId} className="text-[11px] text-amber-300/80" data-broken-transfer={v.transferId}>
+                          <span className="font-semibold">{v.status}</span>{' '}
+                          {v.violations.map(x => x.message).join('; ')}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <div className="p-4 border-b border-[#21262D] flex justify-between items-center gap-3 flex-wrap">
                   <span className="font-bold text-xs text-[#F0F6FC] uppercase tracking-wider">Canonical Financial Ledger (Source of Truth)</span>
                   <div className="flex items-center gap-2">

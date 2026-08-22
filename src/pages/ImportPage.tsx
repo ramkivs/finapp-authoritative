@@ -77,14 +77,20 @@ export const ImportPage: React.FC = () => {
 
   const handleCommit = () => {
     if (!importResult) return;
-    const { appended, duplicates, divergentDuplicates } = commitImportedRows(importResult.validRows);
+    const { appended, duplicates, divergentDuplicates, rejectedTransferRows, rejectedTransferReasons } =
+      commitImportedRows(importResult.validRows);
     setShowReview(false);
     setImportResult(null);
     // WP-FB-DATA-06a: an excluded row may be reported, but never silently dropped.
     const divergentNote = divergentDuplicates > 0
       ? `\n\nNote: ${divergentDuplicates} of the excluded duplicates disagreed with the stored row on direction/type. Those differences were NOT applied.`
       : '';
-    alert(`Algorithmic Set<fingerprint>: Appended ${appended} new rows. Automatically excluded ${duplicates} exact duplicates.${divergentNote}`);
+    // WP-FB-DATA-06b / T3-b: a rejected transfer row is never silently discarded.
+    const transferNote = rejectedTransferRows > 0
+      ? `\n\nRejected: ${rejectedTransferRows} row(s) claimed to be transfers but did not form a valid balanced pair, so they were NOT imported.\n` +
+        rejectedTransferReasons.map(r => '  - ' + r).join('\n')
+      : '';
+    alert(`Algorithmic Set<fingerprint>: Appended ${appended} new rows. Automatically excluded ${duplicates} exact duplicates.${divergentNote}${transferNote}`);
   };
 
   const allIssues = [

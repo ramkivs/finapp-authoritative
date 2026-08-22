@@ -25,6 +25,7 @@ import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransactionSignService } from '../services/TransactionSignService';
 import { AssetIdentityService } from '../services/AssetIdentityService';
 import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
+import { TransferIntegrityService, TransferValidation } from '../services/TransferIntegrityService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { demoTransactions, demoAssets, demoLiabilities, demoSnapshots } from '../domain/demoFixtures';
@@ -71,6 +72,9 @@ export class MemoryTransactionRepository implements TransactionRepository {
 
   async append(tx: Transaction): Promise<void> {
     const previous = this.parent.transactionsData;
+    // WP-FB-DATA-06b admission gate. Throws before anything is mutated or
+    // persisted, so an invalid transfer never reaches memory OR storage.
+    TransferIntegrityService.assertAdmissible([tx], previous);
     const next = [tx, ...previous];
     this.parent.transactionsData = next;
     this.parent.syncStore();
@@ -95,6 +99,10 @@ export class MemoryTransactionRepository implements TransactionRepository {
 
   async appendMany(txs: Transaction[]): Promise<void> {
     const previous = this.parent.transactionsData;
+    // WP-FB-DATA-06b admission gate. Both legs of a transfer arrive here
+    // together, so the whole pair is validated as one economic operation
+    // before any of it is admitted.
+    TransferIntegrityService.assertAdmissible(txs, previous);
     const next = [...txs, ...previous];
     this.parent.transactionsData = next;
     this.parent.syncStore();
@@ -674,6 +682,11 @@ export class MemoryProfileRepository implements ProfileRepository {
 
 export class MemoryRepository implements FinancialRepositoryPort {
   public transactionsData: Transaction[] = [];
+  /**
+   * WP-FB-DATA-06b / Decision T2-a: transfers that failed the integrity check
+   * when this ledger was loaded. Report only — no row was modified.
+   */
+  public brokenTransfersAtLoad: TransferValidation[] = [];
   public assetsData: Asset[] = [];
   public liabilitiesData: Liability[] = [];
   public snapshotsData: NetWorthSnapshot[] = [];
@@ -739,6 +752,22 @@ export class MemoryRepository implements FinancialRepositoryPort {
     // "deliberately unlinked" state is explicit. NO link is ever inferred from
     // matching names - that assumption is the B5 defect itself.
     this.accountsData = AccountAssetLinkService.migrate(this.accountsData).accounts;
+
+    // WP-FB-DATA-06b / Decision T2-a: DETECT AND REPORT ONLY.
+    //
+    // Existing ledgers can already contain broken or invalid transfers — the
+    // account-deletion path produced them before this package existed. They are
+    // surfaced here and in the UI reconciliation notice. Nothing is repaired:
+    // synthesising a missing leg would invent financial data the user never
+    // entered, and silently dropping a leg would destroy data they did.
+    this.brokenTransfersAtLoad = TransferIntegrityService.findBrokenTransfers(this.transactionsData);
+    if (this.brokenTransfersAtLoad.length > 0 && typeof console !== 'undefined') {
+      console.warn(
+        `[WP-FB-DATA-06b] ${this.brokenTransfersAtLoad.length} transfer(s) failed the integrity check at load. ` +
+        `No data was modified.\n` +
+        this.brokenTransfersAtLoad.map(v => '  - ' + TransferIntegrityService.describe(v)).join('\n')
+      );
+    }
 
     this.syncStore();
   }

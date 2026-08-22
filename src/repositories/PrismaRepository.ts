@@ -6,6 +6,7 @@ import {
   InsurancePolicy, PolicyRepository, FinancialGoal, GoalRepository,
   FinancialProfile, ProfileRepository
 } from '../domain/types';
+import { TransferIntegrityService } from '../services/TransferIntegrityService';
 
 /**
  * Gate 8 Prisma Repository Adapter (Hexagonal Persistence Port)
@@ -30,13 +31,30 @@ export class PrismaTransactionRepository implements TransactionRepository {
     return [];
   }
 
-  async append(_transaction: Transaction): Promise<void> {
+  async append(transaction: Transaction): Promise<void> {
+    // WP-FB-DATA-06b: the invariant is mirrored here deliberately.
+    // Placing it only in MemoryRepository would mean the second implementation
+    // of TransactionRepository silently permits money-destroying writes.
+    TransferIntegrityService.assertAdmissible([transaction], this.findAllSync());
     // Production implementation: await prisma.transaction.create({ data: ... });
   }
 
+  /**
+   * WP-FB-DATA-06b: validates the batch as ONE economic operation before
+   * writing any of it.
+   *
+   * ⚠️ The per-row loop below is NOT atomic — it is N separate writes. A real
+   * Prisma implementation MUST wrap this in `prisma.$transaction([...])`, or a
+   * mid-loop failure will persist one leg of a transfer and lose the other,
+   * reintroducing exactly the defect this package closes. Validating up front
+   * prevents an INVALID pair from ever being attempted, but it cannot make a
+   * non-atomic writer atomic.
+   */
   async appendMany(transactions: Transaction[]): Promise<void> {
+    TransferIntegrityService.assertAdmissible(transactions, this.findAllSync());
     for (const tx of transactions) {
-      await this.append(tx);
+      // Production implementation: await prisma.transaction.create({ data: ... });
+      void tx;
     }
   }
 }

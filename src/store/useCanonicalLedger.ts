@@ -16,6 +16,7 @@ import {
 } from '../domain/types';
 import { formatDisplayDate, DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { TransactionIdentityService } from '../services/TransactionIdentityService';
+import { TransferIntegrityService } from '../services/TransferIntegrityService';
 import { TransactionFactory } from '../domain/TransactionFactory';
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { AccountAssetLinkService, LinkResult } from '../services/AccountAssetLinkService';
@@ -64,14 +65,26 @@ interface LedgerState {
 
   addIncome: (title: string, amount: number, account: string, category: string, notes?: string) => void;
   addExpense: (title: string, amount: number, account: string, category: string, notes?: string) => void;
-  addTransfer: (source: string, destination: string, amount: number) => void;
+  /**
+   * WP-FB-DATA-06b: returns the persistence promise so a transfer-integrity
+   * rejection is visible to the caller. Previously fire-and-forget, which meant
+   * any rejection became an invisible unhandled promise rejection.
+   */
+  addTransfer: (source: string, destination: string, amount: number) => Promise<void>;
   addAsset: (name: string, amount: number) => void;
   addLiability: (name: string, amount: number) => void;
   addAssetWithMetadata: (params: { name: string; amount: number; type?: any; tag?: string; currency?: string; geography?: any }) => void;
   addLiabilityWithMetadata: (params: { name: string; amount: number; type?: any; currency?: string }) => void;
   addPastSnapshot: (params: { dateStr: string; totalAssets: number; totalLiabilities: number; label?: string }) => void;
   captureSnapshot: (label?: string) => void;
-  commitImportedRows: (validRows?: Transaction[]) => { appended: number; duplicates: number; divergentDuplicates: number };
+  commitImportedRows: (validRows?: Transaction[]) => {
+    appended: number;
+    duplicates: number;
+    divergentDuplicates: number;
+    /** WP-FB-DATA-06b / T3-b: rows excluded because they were not a valid transfer pair. */
+    rejectedTransferRows: number;
+    rejectedTransferReasons: string[];
+  };
 
   // Account & Budget Actions (WP-18)
   addAccount: (params: {
@@ -213,10 +226,13 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
 
   addTransfer: (source, destination, amount) => {
     const accounts = get().accounts;
-    // Both legs come from one construction call. See TransactionFactory's scope
-    // note: this guarantees a transfer is CREATED balanced, not that it stays
-    // balanced — enforcing that is WP-FB-DATA-06b (finding L-01).
-    repository.transactions.appendMany(TransactionFactory.createTransferPair({
+    // Both legs are constructed together AND admitted together: appendMany
+    // validates the pair as one economic operation and writes it through a
+    // single IndexedDB transaction (WP-FB-DATA-06b).
+    //
+    // The promise is RETURNED, not discarded. A rejection here is a refusal to
+    // record the user's money, and the caller must be able to see it.
+    return repository.transactions.appendMany(TransactionFactory.createTransferPair({
       source,
       destination,
       amount,
@@ -254,6 +270,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     let appended = 0;
     let duplicates = 0;
     let divergentDuplicates = 0;
+    const rejectedTransferReasons: string[] = [];
 
     // WP-FB-DATA-06a: identity resolved through the single authority
     // (TransactionIdentityService), which is now also what the import pipeline
@@ -294,12 +311,52 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
         });
         appended++;
       }
-      if (candidateRows.length > 0) {
-        repository.transactions.appendMany(candidateRows);
+    }
+
+    // WP-FB-DATA-06b / Decision T3-b — IMPORT PATH GUARD.
+    //
+    // A one-sided bank row is not a transfer; it is a payment the user may later
+    // reclassify. Every current adapter already emits Income/Expense and none
+    // emits a transferId, so this changes nothing about importing a real
+    // statement — it closes the hole discovery scenario P3 walked through, where
+    // a lone transfer leg was pushed through this public API, persisted, and
+    // destroyed ₹2,000.
+    //
+    // Rows are DROPPED AND REPORTED, never silently reclassified: rewriting a
+    // Transfer into an Income would be inventing the user's intent.
+    const admissible: Transaction[] = [];
+    const rejectedIds = new Set<string>();
+    if (candidateRows.length > 0) {
+      const incomingGroups = TransferIntegrityService.groupByTransferId(candidateRows);
+      const combined = [...transactions, ...candidateRows];
+      const allGroups = TransferIntegrityService.groupByTransferId(combined);
+
+      for (const [transferId] of incomingGroups) {
+        const validation = TransferIntegrityService.validateGroup(transferId, allGroups.get(transferId) || []);
+        if (validation.status === 'INVALID') {
+          rejectedTransferReasons.push(TransferIntegrityService.describe(validation));
+          for (const r of incomingGroups.get(transferId) || []) rejectedIds.add(r.id);
+        }
+      }
+      for (const row of candidateRows) {
+        // A Transfer row with no transferId can never form a pair.
+        if (String(row.type).toUpperCase() === 'TRANSFER' && !row.transferId) {
+          rejectedTransferReasons.push(`${row.id}: transfer row carries no transferId, so it can never form a pair`);
+          rejectedIds.add(row.id);
+          continue;
+        }
+        if (!rejectedIds.has(row.id)) admissible.push(row);
+      }
+
+      if (admissible.length > 0) {
+        repository.transactions.appendMany(admissible);
       }
     }
 
-    return { appended, duplicates, divergentDuplicates };
+    const rejectedTransferRows = rejectedIds.size;
+    appended -= rejectedTransferRows;
+
+    return { appended, duplicates, divergentDuplicates, rejectedTransferRows, rejectedTransferReasons };
   },
 
   addAccount: (params) => {

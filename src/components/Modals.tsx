@@ -231,14 +231,33 @@ export const TransferModal: React.FC<ModalProps> = ({ isOpen, onClose }) => {
   const [source, setSource] = useState(defaultSrc);
   const [dest, setDest] = useState(defaultDest);
   const [amount, setAmount] = useState(50000);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const addTransfer = useCanonicalLedger(s => s.addTransfer);
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
-    addTransfer(source, dest, Number(amount));
-    onClose();
+  /**
+   * WP-FB-DATA-06b: awaits the write and keeps the modal OPEN on failure.
+   *
+   * This previously called addTransfer(...) and then onClose() unconditionally.
+   * With an integrity gate in place that pattern would close the dialog on a
+   * silently-swallowed unhandled rejection — the user would believe their money
+   * had been recorded when it had been refused. An invariant the user cannot
+   * see is not an invariant they can act on.
+   */
+  const handleSave = async () => {
+    setError(null);
+    setSaving(true);
+    try {
+      await addTransfer(source, dest, Number(amount));
+      setSaving(false);
+      onClose();
+    } catch (e: any) {
+      setSaving(false);
+      setError(e?.message || 'The transfer could not be recorded.');
+    }
   };
 
   return (
@@ -302,6 +321,17 @@ export const TransferModal: React.FC<ModalProps> = ({ isOpen, onClose }) => {
               className="w-full px-3.5 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-sm text-gray-900 dark:text-white"
             />
           </div>
+          {error && (
+            <div id="transfer-error" className="rounded-lg border border-red-300 bg-red-50 p-3 dark:border-red-700 dark:bg-red-950/40">
+              <p className="text-xs font-semibold text-red-800 dark:text-red-200">
+                This transfer was not recorded.
+              </p>
+              <p className="mt-0.5 text-xs text-red-700 dark:text-red-300">{error}</p>
+              <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">
+                Nothing was saved and no balance changed. A transfer must be a complete, balanced pair.
+              </p>
+            </div>
+          )}
         </div>
         <div className="p-4 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 flex justify-end gap-3">
           <button
@@ -312,9 +342,10 @@ export const TransferModal: React.FC<ModalProps> = ({ isOpen, onClose }) => {
           </button>
           <button
             onClick={handleSave}
-            className="px-5 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-bold shadow-sm"
+            disabled={saving}
+            className="px-5 py-2 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-sm font-bold shadow-sm"
           >
-            Record Transfer (₹0 Net Impact)
+            {saving ? 'Recording…' : 'Record Transfer (₹0 Net Impact)'}
           </button>
         </div>
       </div>

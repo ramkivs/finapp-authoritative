@@ -60,9 +60,10 @@ export class FinancialCommands {
     }));
   }
 
-  static recordTransfer(source: string, destination: string, amount: number): void {
+  /** WP-FB-DATA-06b: returns the promise so an integrity rejection is visible. */
+  static recordTransfer(source: string, destination: string, amount: number): Promise<void> {
     const accounts = repository.accounts.findAllSync();
-    repository.transactions.appendMany(TransactionFactory.createTransferPair({
+    return repository.transactions.appendMany(TransactionFactory.createTransferPair({
       source,
       destination,
       amount,
