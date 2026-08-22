@@ -24,6 +24,7 @@ import { DateRangeService, formatDisplayDate, getEffectiveAsOfDate } from '../se
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransactionSignService } from '../services/TransactionSignService';
 import { AssetIdentityService } from '../services/AssetIdentityService';
+import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
 import { Sha256Service } from '../services/Sha256Service';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
@@ -200,7 +201,14 @@ export class MemoryAssetRepository implements AssetRepository {
   /** Removes by authoritative id (WP-FB-DATA-04c-1); never by display name. */
   async remove(id: string): Promise<void> {
     const previous = this.parent.assetsData;
+    const previousAccounts = this.parent.accountsData;
     const next = previous.filter(a => a.id !== id);
+
+    // WP-FB-DATA-04c-2: no account may be left holding a dangling reference.
+    // The account, its transactions and its balance are untouched.
+    this.parent.accountsData =
+      AccountAssetLinkService.clearLinksToAsset(id, this.parent.accountsData).accounts;
+
     this.parent.assetsData = next;
     this.parent.syncStore();
     try {
@@ -217,6 +225,7 @@ export class MemoryAssetRepository implements AssetRepository {
       });
     } catch (e) {
       this.parent.assetsData = previous;
+      this.parent.accountsData = previousAccounts;
       this.parent.syncStore();
       throw e;
     }
@@ -727,6 +736,11 @@ export class MemoryRepository implements FinancialRepositoryPort {
     // lossless - only `id` is written and no asset is merged or dropped.
     this.assetsData = AssetIdentityService.migrate(this.assetsData).assets;
 
+    // WP-FB-DATA-04c-2: normalise Account.linkedAssetId absent -> null so the
+    // "deliberately unlinked" state is explicit. NO link is ever inferred from
+    // matching names - that assumption is the B5 defect itself.
+    this.accountsData = AccountAssetLinkService.migrate(this.accountsData).accounts;
+
     this.syncStore();
   }
 
@@ -735,6 +749,37 @@ export class MemoryRepository implements FinancialRepositoryPort {
    * Used after an account is added/renamed so previously unmapped transactions
    * can become mapped. Never reassigns an already-valid reference.
    */
+  /**
+   * WP-FB-DATA-04c-2 link persistence. The relationship decision itself lives
+   * in AccountAssetLinkService; this only writes the validated result.
+   *
+   * Mirrors every other repository mutation: update in memory, sync the store
+   * for immediate UI feedback, then persist. On a persistence failure the
+   * previous accounts are restored so the link never silently half-applies.
+   */
+  async applyAccountsUpdate(accounts: Account[]): Promise<void> {
+    const previous = this.accountsData;
+    this.accountsData = accounts;
+    this.syncStore();
+    try {
+      await IndexedDBStorageService.saveAll({
+        transactions: this.transactionsData,
+        assets: this.assetsData,
+        liabilities: this.liabilitiesData,
+        snapshots: this.snapshotsData,
+        accounts: this.accountsData,
+        budgets: this.budgetsData,
+        policies: this.policiesData,
+        goals: this.goalsData,
+        profile: this.profileData
+      });
+    } catch (e) {
+      this.accountsData = previous;
+      this.syncStore();
+      throw e;
+    }
+  }
+
   remapAccounts(): void {
     this.transactionsData = AccountResolutionService.migrate(
       this.transactionsData,

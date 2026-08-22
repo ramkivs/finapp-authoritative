@@ -322,6 +322,22 @@ export interface Account {
   currency?: string; // Descriptive metadata only; no 'INR' default
   asOfDate?: string;
   notes?: string;
+  /**
+   * Explicit link to the Asset that represents this account's cash
+   * (WP-FB-DATA-04c-2). References `Asset.id` — never a name, tag or type.
+   *
+   * Cardinality: 0..1 Account ↔ 0..1 Asset. An asset may be claimed by at most
+   * one account, and an account may claim at most one asset.
+   *
+   * `null`/absent means deliberately unlinked. The link is ALWAYS user-stated:
+   * it is never inferred from matching names, asset type, or fuzzy matching.
+   * Because both sides carry stable ids, the link survives renames on either
+   * side.
+   *
+   * ⚠️ Infrastructure only in this package. No financial calculation consumes
+   * it yet — B5 deduplication remains name-based until DATA-05b.
+   */
+  linkedAssetId?: string | null;
 }
 
 export interface MonthlyBudget {

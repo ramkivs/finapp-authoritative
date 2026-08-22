@@ -17,6 +17,7 @@ import {
 import { formatDisplayDate, DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { Sha256Service } from '../services/Sha256Service';
 import { AccountResolutionService } from '../services/AccountResolutionService';
+import { AccountAssetLinkService, LinkResult } from '../services/AccountAssetLinkService';
 import { TransactionSignService } from '../services/TransactionSignService';
 import { repository } from '../repositories';
 
@@ -83,6 +84,9 @@ interface LedgerState {
     notes?: string;
   }) => void;
   removeAccount: (id: string) => void;
+  /** WP-FB-DATA-04c-2: explicit Account<->Asset link (0..1 <-> 0..1). */
+  linkAccountToAsset: (accountId: string, assetId: string) => LinkResult;
+  unlinkAccountFromAsset: (accountId: string) => LinkResult;
   saveMonthlyBudget: (monthStr: string, allocations: Record<string, number>) => void;
 
   // Essentials Actions (WP-19)
@@ -331,6 +335,24 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
 
   removeAccount: (id) => {
     repository.accounts.remove(id);
+  },
+
+  linkAccountToAsset: (accountId, assetId) => {
+    const { accounts, assets } = get();
+    const result = AccountAssetLinkService.link(accountId, assetId, accounts, assets);
+    if (result.ok && !result.unchanged) {
+      (repository as any).applyAccountsUpdate(result.accounts);
+    }
+    return result;
+  },
+
+  unlinkAccountFromAsset: (accountId) => {
+    const { accounts } = get();
+    const result = AccountAssetLinkService.unlink(accountId, accounts);
+    if (result.ok && !result.unchanged) {
+      (repository as any).applyAccountsUpdate(result.accounts);
+    }
+    return result;
   },
 
   saveMonthlyBudget: (monthStr, allocations) => {

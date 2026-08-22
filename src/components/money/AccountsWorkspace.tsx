@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import { Account } from '../../domain/types';
 import { CurrencyValue } from '../CurrencyValue';
 import { AddAccountModal } from './AddAccountModal';
+import { LinkAssetModal } from './LinkAssetModal';
+import { AccountAssetLinkService } from '../../services/AccountAssetLinkService';
 import { useCanonicalLedger } from '../../store/useCanonicalLedger';
 import { AccountBalanceService } from '../../services/AccountBalanceService';
 import { getEffectiveAsOfDate } from '../../services/DateRangeService';
-import { Landmark, CreditCard, Wallet, Building2, HelpCircle, Plus, Trash2, AlertTriangle } from 'lucide-react';
+import { Landmark, CreditCard, Wallet, Building2, HelpCircle, Plus, Trash2, AlertTriangle, Link2 } from 'lucide-react';
 
 interface Props {
   accounts: Account[];
@@ -13,7 +15,8 @@ interface Props {
 
 export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
   const [modalOpen, setModalOpen] = useState(false);
-  const { removeAccount, transactions } = useCanonicalLedger();
+  const [linkTarget, setLinkTarget] = useState<Account | null>(null);
+  const { removeAccount, transactions, assets, linkAccountToAsset, unlinkAccountFromAsset } = useCanonicalLedger();
 
   // WP-FB-DATA-05a: derived from the canonical transaction collection.
   // AccountBalanceService is the sole authority - no balance arithmetic here.
@@ -189,13 +192,35 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
                       </div>
                     </div>
 
-                    <button
-                      onClick={() => handleDelete(acc.id, acc.name)}
-                      className="p-1 text-gray-400 hover:text-rose-600 transition"
-                      title="Delete account"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        data-link-account={acc.id}
+                        onClick={() => setLinkTarget(acc)}
+                        className={`p-1 transition ${
+                          AccountAssetLinkService.statusOf(acc, assets).state === 'LINKED'
+                            ? 'text-green-600 dark:text-green-400'
+                            : AccountAssetLinkService.statusOf(acc, assets).state === 'BROKEN'
+                            ? 'text-amber-500'
+                            : 'text-gray-400 hover:text-green-600'
+                        }`}
+                        title={
+                          AccountAssetLinkService.statusOf(acc, assets).state === 'LINKED'
+                            ? `Linked to asset: ${AccountAssetLinkService.statusOf(acc, assets).asset?.name}`
+                            : AccountAssetLinkService.statusOf(acc, assets).state === 'BROKEN'
+                            ? 'Linked asset no longer exists'
+                            : 'Link an asset'
+                        }
+                      >
+                        <Link2 size={14} />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(acc.id, acc.name)}
+                        className="p-1 text-gray-400 hover:text-rose-600 transition"
+                        title="Delete account"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="mt-4 pt-3 border-t border-gray-100 dark:border-gray-800 space-y-1">
@@ -220,6 +245,24 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
                         <CurrencyValue value={balanceOf(acc.id)} />
                       </span>
                     </div>
+                    {(() => {
+                      const st = AccountAssetLinkService.statusOf(acc, assets);
+                      if (st.state === 'LINKED') {
+                        return (
+                          <div data-linked-asset={acc.id} className="text-[10px] text-green-700 dark:text-green-400 font-semibold pt-0.5 truncate">
+                            Linked asset: {st.asset!.name}
+                          </div>
+                        );
+                      }
+                      if (st.state === 'BROKEN') {
+                        return (
+                          <div data-linked-asset-broken={acc.id} className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold pt-0.5">
+                            Linked asset missing — re-link or unlink.
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                     {!acc.asOfDate && (
                       <div className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold pt-0.5">
                         No opening-balance date set — all transactions are being applied.
@@ -241,6 +284,15 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
       )}
 
       <AddAccountModal isOpen={modalOpen} onClose={() => setModalOpen(false)} />
+      <LinkAssetModal
+        isOpen={!!linkTarget}
+        account={linkTarget}
+        accounts={accounts}
+        assets={assets}
+        onClose={() => setLinkTarget(null)}
+        onLink={linkAccountToAsset}
+        onUnlink={unlinkAccountFromAsset}
+      />
     </div>
   );
 };
