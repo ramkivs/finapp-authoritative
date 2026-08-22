@@ -77,8 +77,11 @@ export const ImportPage: React.FC = () => {
 
   const handleCommit = () => {
     if (!importResult) return;
-    const { appended, duplicates, divergentDuplicates, rejectedTransferRows, rejectedTransferReasons } =
-      commitImportedRows(importResult.validRows);
+    const {
+      appended, duplicates, divergentDuplicates,
+      rejectedTransferRows, rejectedTransferReasons,
+      rejectedDuplicateIdRows, rejectedDuplicateIdReasons
+    } = commitImportedRows(importResult.validRows);
     setShowReview(false);
     setImportResult(null);
     // WP-FB-DATA-06a: an excluded row may be reported, but never silently dropped.
@@ -90,7 +93,12 @@ export const ImportPage: React.FC = () => {
       ? `\n\nRejected: ${rejectedTransferRows} row(s) claimed to be transfers but did not form a valid balanced pair, so they were NOT imported.\n` +
         rejectedTransferReasons.map(r => '  - ' + r).join('\n')
       : '';
-    alert(`Algorithmic Set<fingerprint>: Appended ${appended} new rows. Automatically excluded ${duplicates} exact duplicates.${divergentNote}${transferNote}`);
+    // WP-FB-DATA-06c-0 / P-1: a row refused for a colliding id is reported, never silent.
+    const duplicateIdNote = rejectedDuplicateIdRows > 0
+      ? `\n\nRejected: ${rejectedDuplicateIdRows} row(s) were NOT imported because their transaction id is already in use. No existing row was overwritten.\n` +
+        rejectedDuplicateIdReasons.map(r => '  - ' + r).join('\n')
+      : '';
+    alert(`Algorithmic Set<fingerprint>: Appended ${appended} new rows. Automatically excluded ${duplicates} exact duplicates.${divergentNote}${transferNote}${duplicateIdNote}`);
   };
 
   const allIssues = [

@@ -274,15 +274,16 @@ export class IndexedDBStorageService {
         return;
       }
 
+      let db: IDBDatabase | undefined;
       try {
-        const db = await this.getDB();
+        db = await this.getDB();
         const storeNames = ['transactions', 'assets', 'liabilities', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
-          .filter(name => db.objectStoreNames.contains(name));
+          .filter(name => db!.objectStoreNames.contains(name));
 
         const tx = db.transaction(storeNames, 'readwrite');
 
         const clearAndPut = (name: string, items: any[]) => {
-          if (db.objectStoreNames.contains(name)) {
+          if (db!.objectStoreNames.contains(name)) {
             const store = tx.objectStore(name);
             store.clear();
             items.forEach(item => store.put(item));
@@ -306,27 +307,37 @@ export class IndexedDBStorageService {
 
         await new Promise<void>((resolve, reject) => {
           tx.oncomplete = () => {
-            db.close();
+            db!.close();
             resolve();
           };
           tx.onerror = () => {
-            db.close();
+            db!.close();
             reject(tx.error);
           };
         });
       } catch (e) {
-        this.nodeFallbackStore = {
-          transactions: [...state.transactions],
-          assets: [...state.assets],
-          liabilities: [...state.liabilities],
-          snapshots: [...state.snapshots],
-          accounts: [...accounts],
-          budgets: [...budgets],
-          policies: [...policies],
-          goals: [...goals],
-          profile: state.profile ? { ...state.profile } : null,
-          hasLoadedOnce: true
-        };
+        /* WP-FB-DATA-06c-0 (P-5) — PERSISTENCE FAILURE NOW PROPAGATES.
+         *
+         * This block previously copied the state into `nodeFallbackStore` and
+         * RESOLVED SUCCESSFULLY. A genuine IndexedDB failure in a real browser
+         * therefore looked identical to a successful save: `MemoryRepository`
+         * skipped its rollback, the UI reported the write had landed, and the
+         * data was gone on the next reload with no error anywhere.
+         *
+         * That silent-success path is the reason a caller could not trust
+         * persistence at all, and it becomes far more dangerous once lifecycle
+         * operations exist — "your correction was saved" would be a lie.
+         *
+         * The environment fallback ABOVE (`typeof window === 'undefined' ||
+         * !window.indexedDB`) is untouched: an environment that has no
+         * IndexedDB at all is not a failure, it is Node/jsdom, and it still
+         * uses the in-memory store. What is rethrown here is the other case —
+         * IndexedDB EXISTS, was used, and did not work.
+         */
+        db?.close?.();
+        throw e instanceof Error
+          ? e
+          : new Error(`IndexedDB persistence failed: ${String(e)}`);
       }
     });
   }
@@ -354,10 +365,11 @@ export class IndexedDBStorageService {
         return;
       }
 
+      let db: IDBDatabase | undefined;
       try {
-        const db = await this.getDB();
+        db = await this.getDB();
         const storeNames = ['transactions', 'assets', 'liabilities', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
-          .filter(name => db.objectStoreNames.contains(name));
+          .filter(name => db!.objectStoreNames.contains(name));
 
         const tx = db.transaction(storeNames, 'readwrite');
         storeNames.forEach(name => {
@@ -371,27 +383,24 @@ export class IndexedDBStorageService {
 
         await new Promise<void>((resolve, reject) => {
           tx.oncomplete = () => {
-            db.close();
+            db!.close();
             resolve();
           };
           tx.onerror = () => {
-            db.close();
+            db!.close();
             reject(tx.error);
           };
         });
       } catch (e) {
-        this.nodeFallbackStore = {
-          transactions: [],
-          assets: [],
-          liabilities: [],
-          snapshots: [],
-          accounts: [],
-          budgets: [],
-          policies: [],
-          goals: [],
-          profile: null,
-          hasLoadedOnce: true
-        };
+        /* WP-FB-DATA-06c-0 (P-5). `clearAll` carried the identical
+         * false-success swallow as `saveAll`, and it is a DESTRUCTIVE write:
+         * reporting "your data was cleared" when the clear failed leaves the
+         * user believing their ledger is empty while it is not. Same class of
+         * defect, same fix. The environment fallback above is untouched. */
+        db?.close?.();
+        throw e instanceof Error
+          ? e
+          : new Error(`IndexedDB clear failed: ${String(e)}`);
       }
     });
   }

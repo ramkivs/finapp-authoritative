@@ -84,6 +84,9 @@ interface LedgerState {
     /** WP-FB-DATA-06b / T3-b: rows excluded because they were not a valid transfer pair. */
     rejectedTransferRows: number;
     rejectedTransferReasons: string[];
+    /** WP-FB-DATA-06c-0 / P-1: rows excluded because their id was already in use. */
+    rejectedDuplicateIdRows: number;
+    rejectedDuplicateIdReasons: string[];
   };
 
   // Account & Budget Actions (WP-18)
@@ -271,6 +274,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     let duplicates = 0;
     let divergentDuplicates = 0;
     const rejectedTransferReasons: string[] = [];
+    const rejectedDuplicateIdReasons: string[] = [];
 
     // WP-FB-DATA-06a: identity resolved through the single authority
     // (TransactionIdentityService), which is now also what the import pipeline
@@ -326,6 +330,33 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     // Transfer into an Income would be inventing the user's intent.
     const admissible: Transaction[] = [];
     const rejectedIds = new Set<string>();
+    const duplicateIdRejected = new Set<string>();
+
+    // WP-FB-DATA-06c-0 / P-1 — ID UNIQUENESS, REPORTED ACCURATELY.
+    //
+    // The repository refuses a duplicate id outright, which is correct. But
+    // appendMany is not awaited here, so without this pre-pass the refusal
+    // would arrive as an unhandled rejection AFTER this function had already
+    // returned `appended: N` — telling the user N rows were imported when zero
+    // were. A result object that reports a success that did not happen is the
+    // same class of defect as P-5 itself, so the check is mirrored here to keep
+    // the reported outcome truthful.
+    if (candidateRows.length > 0) {
+      const existingIds = new Set(transactions.map(t => String(t.id)));
+      const seenInBatch = new Set<string>();
+      for (const rowItem of candidateRows) {
+        const id = String(rowItem.id);
+        if (existingIds.has(id)) {
+          rejectedDuplicateIdReasons.push(`${id}: already exists in the ledger`);
+          duplicateIdRejected.add(id);
+        } else if (seenInBatch.has(id)) {
+          rejectedDuplicateIdReasons.push(`${id}: appears more than once in this import`);
+          duplicateIdRejected.add(id);
+        }
+        seenInBatch.add(id);
+      }
+    }
+
     if (candidateRows.length > 0) {
       const incomingGroups = TransferIntegrityService.groupByTransferId(candidateRows);
       const combined = [...transactions, ...candidateRows];
@@ -339,6 +370,9 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
         }
       }
       for (const row of candidateRows) {
+        // P-1: every row carrying a colliding id is excluded, including the
+        // first occurrence — the application must not pick a winner.
+        if (duplicateIdRejected.has(String(row.id))) continue;
         // A Transfer row with no transferId can never form a pair.
         if (String(row.type).toUpperCase() === 'TRANSFER' && !row.transferId) {
           rejectedTransferReasons.push(`${row.id}: transfer row carries no transferId, so it can never form a pair`);
@@ -354,9 +388,14 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     }
 
     const rejectedTransferRows = rejectedIds.size;
-    appended -= rejectedTransferRows;
+    const rejectedDuplicateIdRows = candidateRows.filter(r => duplicateIdRejected.has(String(r.id))).length;
+    appended -= (rejectedTransferRows + rejectedDuplicateIdRows);
 
-    return { appended, duplicates, divergentDuplicates, rejectedTransferRows, rejectedTransferReasons };
+    return {
+      appended, duplicates, divergentDuplicates,
+      rejectedTransferRows, rejectedTransferReasons,
+      rejectedDuplicateIdRows, rejectedDuplicateIdReasons
+    };
   },
 
   addAccount: (params) => {

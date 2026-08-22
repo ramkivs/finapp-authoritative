@@ -26,6 +26,7 @@ import { TransactionSignService } from '../services/TransactionSignService';
 import { AssetIdentityService } from '../services/AssetIdentityService';
 import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
 import { TransferIntegrityService, TransferValidation } from '../services/TransferIntegrityService';
+import { TransactionIdentityService, DuplicateIdGroup } from '../services/TransactionIdentityService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { demoTransactions, demoAssets, demoLiabilities, demoSnapshots } from '../domain/demoFixtures';
@@ -72,6 +73,10 @@ export class MemoryTransactionRepository implements TransactionRepository {
 
   async append(tx: Transaction): Promise<void> {
     const previous = this.parent.transactionsData;
+    // WP-FB-DATA-06c-0 (P-1). Id uniqueness is checked FIRST: a duplicate id
+    // makes every later group/pair judgement unsound, because two different
+    // rows would answer to the same name.
+    TransactionIdentityService.assertUniqueIds([tx], previous);
     // WP-FB-DATA-06b admission gate. Throws before anything is mutated or
     // persisted, so an invalid transfer never reaches memory OR storage.
     TransferIntegrityService.assertAdmissible([tx], previous);
@@ -99,6 +104,10 @@ export class MemoryTransactionRepository implements TransactionRepository {
 
   async appendMany(txs: Transaction[]): Promise<void> {
     const previous = this.parent.transactionsData;
+    // WP-FB-DATA-06c-0 (P-1). Covers BOTH collision scopes: duplicates within
+    // this batch and duplicates against stored rows. Throws before any mutation,
+    // so a rejected batch persists nothing at all.
+    TransactionIdentityService.assertUniqueIds(txs, previous);
     // WP-FB-DATA-06b admission gate. Both legs of a transfer arrive here
     // together, so the whole pair is validated as one economic operation
     // before any of it is admitted.
@@ -687,6 +696,11 @@ export class MemoryRepository implements FinancialRepositoryPort {
    * when this ledger was loaded. Report only — no row was modified.
    */
   public brokenTransfersAtLoad: TransferValidation[] = [];
+  /**
+   * WP-FB-DATA-06c-0 (P-1): duplicate transaction ids present in the data when
+   * this ledger was loaded. Report only — no row was modified or removed.
+   */
+  public duplicateTransactionIdsAtLoad: DuplicateIdGroup[] = [];
   public assetsData: Asset[] = [];
   public liabilitiesData: Liability[] = [];
   public snapshotsData: NetWorthSnapshot[] = [];
@@ -760,6 +774,17 @@ export class MemoryRepository implements FinancialRepositoryPort {
     // surfaced here and in the UI reconciliation notice. Nothing is repaired:
     // synthesising a missing leg would invent financial data the user never
     // entered, and silently dropping a leg would destroy data they did.
+    // WP-FB-DATA-06c-0 (P-1) existing-data condition: DETECT AND REPORT ONLY.
+    // No row is modified, removed, re-identified or chosen as the winner.
+    this.duplicateTransactionIdsAtLoad = TransactionIdentityService.findDuplicateIds(this.transactionsData);
+    if (this.duplicateTransactionIdsAtLoad.length > 0 && typeof console !== 'undefined') {
+      console.warn(
+        `[WP-FB-DATA-06c-0] ${this.duplicateTransactionIdsAtLoad.length} duplicate transaction id(s) ` +
+        `detected in stored data. No data was modified.\n` +
+        this.duplicateTransactionIdsAtLoad.map(d => '  - ' + d.message).join('\n')
+      );
+    }
+
     this.brokenTransfersAtLoad = TransferIntegrityService.findBrokenTransfers(this.transactionsData);
     if (this.brokenTransfersAtLoad.length > 0 && typeof console !== 'undefined') {
       console.warn(

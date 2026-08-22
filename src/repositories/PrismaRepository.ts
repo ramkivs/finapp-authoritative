@@ -7,6 +7,7 @@ import {
   FinancialProfile, ProfileRepository
 } from '../domain/types';
 import { TransferIntegrityService } from '../services/TransferIntegrityService';
+import { TransactionIdentityService } from '../services/TransactionIdentityService';
 
 /**
  * Gate 8 Prisma Repository Adapter (Hexagonal Persistence Port)
@@ -35,6 +36,7 @@ export class PrismaTransactionRepository implements TransactionRepository {
     // WP-FB-DATA-06b: the invariant is mirrored here deliberately.
     // Placing it only in MemoryRepository would mean the second implementation
     // of TransactionRepository silently permits money-destroying writes.
+    TransactionIdentityService.assertUniqueIds([transaction], this.findAllSync());
     TransferIntegrityService.assertAdmissible([transaction], this.findAllSync());
     // Production implementation: await prisma.transaction.create({ data: ... });
   }
@@ -51,6 +53,7 @@ export class PrismaTransactionRepository implements TransactionRepository {
    * non-atomic writer atomic.
    */
   async appendMany(transactions: Transaction[]): Promise<void> {
+    TransactionIdentityService.assertUniqueIds(transactions, this.findAllSync());
     TransferIntegrityService.assertAdmissible(transactions, this.findAllSync());
     for (const tx of transactions) {
       // Production implementation: await prisma.transaction.create({ data: ... });
