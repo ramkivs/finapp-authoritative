@@ -338,6 +338,15 @@ export interface Account {
    * it yet — B5 deduplication remains name-based until DATA-05b.
    */
   linkedAssetId?: string | null;
+  /**
+   * Cash & Savings asset ids the user has explicitly declared NOT to be the
+   * same money as this account (WP-FB-DATA-05b, Decision G3).
+   *
+   * Dismissing a same-name candidate is a real user statement, so it is
+   * persisted: the pair is never re-prompted and both sides count toward
+   * liquidity from then on.
+   */
+  dismissedAssetCandidateIds?: string[];
 }
 
 export interface MonthlyBudget {
@@ -584,6 +593,19 @@ export interface EmergencyFundAnalysis {
   targetAmount: number;
   fundingGap: number;
   status: 'RECONCILED' | 'NOT_CONFIGURED';
+  /** WP-FB-DATA-05b: same-name pairs awaiting an explicit user decision (G3). */
+  linkCandidates?: Array<{
+    accountId: string;
+    accountName: string;
+    assetId: string;
+    assetName: string;
+    accountBalance: number;
+    assetAmount: number;
+  }>;
+  /** WP-FB-DATA-05b: accounts referencing a deleted asset (H(c)). */
+  brokenLinks?: Array<{ accountId: string; accountName: string; missingAssetId: string }>;
+  /** Value held back pending confirmation of a same-name candidate. */
+  heldPendingConfirmation?: number;
 }
 
 export interface HealthScoreBreakdown {

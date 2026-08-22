@@ -16,7 +16,7 @@ interface Props {
 export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [linkTarget, setLinkTarget] = useState<Account | null>(null);
-  const { removeAccount, transactions, assets, linkAccountToAsset, unlinkAccountFromAsset } = useCanonicalLedger();
+  const { removeAccount, transactions, assets, linkAccountToAsset, unlinkAccountFromAsset, dismissAssetCandidate } = useCanonicalLedger();
 
   // WP-FB-DATA-05a: derived from the canonical transaction collection.
   // AccountBalanceService is the sole authority - no balance arithmetic here.
@@ -292,6 +292,7 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
         onClose={() => setLinkTarget(null)}
         onLink={linkAccountToAsset}
         onUnlink={unlinkAccountFromAsset}
+        onDismissCandidate={dismissAssetCandidate}
       />
     </div>
   );

@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 import { Asset, Account, Transaction, MonthlyBudget, FinancialProfile } from '../../domain/types';
 import { EssentialsService } from '../../services/EssentialsService';
 import { CurrencyValue } from '../CurrencyValue';
-import { ShieldCheck, AlertCircle, TrendingUp, Info } from 'lucide-react';
+import { ShieldCheck, AlertCircle, TrendingUp, Info, Link2, AlertTriangle } from 'lucide-react';
+import { useCanonicalLedger } from '../../store/useCanonicalLedger';
 
 interface Props {
+  openSidebarTab?: (tabId: string) => void;
   assets: Asset[];
   accounts: Account[];
   transactions: Transaction[];
@@ -13,6 +15,7 @@ interface Props {
 }
 
 export const EmergencyFundWorkspace: React.FC<Props> = ({
+  openSidebarTab,
   assets,
   accounts,
   transactions,
@@ -75,6 +78,79 @@ export const EmergencyFundWorkspace: React.FC<Props> = ({
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* WP-FB-DATA-05b Decision G3 — detected here, resolved on the Accounts
+          surface. Until the user answers, the asset is held back so the
+          previously-deduplicated figure is preserved and no guidance changes
+          silently. Confirming writes a real link; dismissing records that they
+          are different money. A matching name is only a CANDIDATE - it never
+          establishes a relationship on its own. */}
+      {(analysis.linkCandidates || []).length > 0 && (
+        <div
+          id="liquid-link-candidates"
+          className="mb-6 rounded-2xl border border-blue-300 dark:border-blue-800/50 bg-blue-50 dark:bg-blue-950/30 px-5 py-4"
+        >
+          <div className="flex items-start gap-3">
+            <Link2 size={16} className="text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+            <div className="text-xs text-blue-900 dark:text-blue-200 space-y-2 w-full">
+              <p className="font-bold">
+                {(analysis.linkCandidates || []).length} possible duplicate
+                {(analysis.linkCandidates || []).length === 1 ? '' : 's'} in your liquid reserves
+              </p>
+              <p className="opacity-90 leading-relaxed">
+                These accounts and assets share a name, so they may be the same money. Until you
+                confirm, the asset is <span className="font-semibold">not</span> being added on top —
+                your reserves are unchanged. Resolve each pair on{' '}
+                <span className="font-semibold">Money → Accounts</span> using the link control.
+              </p>
+              <ul className="space-y-1.5 pt-1">
+                {(analysis.linkCandidates || []).map(c => (
+                  <li
+                    key={`${c.accountId}:${c.assetId}`}
+                    data-link-candidate={`${c.accountId}:${c.assetId}`}
+                    className="rounded-lg bg-white/70 dark:bg-blue-900/20 px-3 py-2 flex items-center justify-between gap-3"
+                  >
+                    <span className="truncate">
+                      Account <span className="font-semibold">{c.accountName}</span>{' '}
+                      (<CurrencyValue value={c.accountBalance} />) · Asset{' '}
+                      <span className="font-semibold">{c.assetName}</span>{' '}
+                      (<CurrencyValue value={c.assetAmount} />)
+                    </span>
+                    <button
+                      data-resolve-candidate={c.accountId}
+                      onClick={() => openSidebarTab && openSidebarTab('money')}
+                      className="px-2.5 py-1 rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-[10px] font-bold flex-shrink-0"
+                    >
+                      Resolve
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* H(c) — a link pointing at a deleted asset. The account keeps counting;
+          money is never silently removed from liquidity. */}
+      {(analysis.brokenLinks || []).length > 0 && (
+        <div
+          id="liquid-broken-links"
+          className="mb-6 rounded-2xl border border-amber-300 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-950/30 px-5 py-3.5 flex items-start gap-3"
+        >
+          <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+          <div className="text-xs text-amber-900 dark:text-amber-200">
+            <span className="font-bold">
+              {(analysis.brokenLinks || []).length} account
+              {(analysis.brokenLinks || []).length === 1 ? '' : 's'} reference a deleted asset
+            </span>{' '}
+            <span className="opacity-90">
+              ({(analysis.brokenLinks || []).map(b => b.accountName).join(', ')}). The account balance is
+              still counted — re-link or unlink it on Money → Accounts.
+            </span>
+          </div>
+        </div>
+      )}
+
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm">
           <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
             Liquid Reserves

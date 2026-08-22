@@ -10,16 +10,24 @@ import {
   HealthScoreBreakdown,
   mapTransactionCategoryToBudget
 } from '../domain/types';
+import { LiquidReservesService } from './LiquidReservesService';
 
 export class EssentialsService {
   /**
    * Calculate Emergency Fund Analysis.
    * Coverage Months = Liquid Reserves / Monthly Essential Expenses
    *
-   * Liquid Reserves Semantics:
-   * - Includes all Cash & Savings assets from Wealth registry.
-   * - Includes all Bank, Cash, and Wallet accounts from Money accounts registry.
-   * - Excludes accounts that share the identical canonical name with a Cash & Savings asset to prevent double counting.
+   * Liquid Reserves Semantics (WP-FB-DATA-05b — B5 closed):
+   * - Liquid accounts (Bank/Cash/Wallet) contribute their transaction-DERIVED
+   *   balance via AccountBalanceService, not their opening balance.
+   * - Cash & Savings assets contribute unless the money is already counted:
+   *   an explicit Account.linkedAssetId suppresses the asset (F1), and a
+   *   same-name unlinked pair is held pending user confirmation (G3).
+   * - Deduplication is link-based. The name comparison that remains is a
+   *   transitional display hold, never an inferred relationship.
+   *
+   * All of this lives in LiquidReservesService, the single definition shared
+   * with WealthIntelligenceService (Decision I).
    */
   static calculateEmergencyFundAnalysis(
     assets: Asset[] = [],
@@ -29,20 +37,9 @@ export class EssentialsService {
     targetMonths: number = 6,
     customProfile?: FinancialProfile | null
   ): EmergencyFundAnalysis {
-    // 1. Calculate Liquid Reserves from Cash & Savings assets and eligible liquid accounts
-    const assetsLiquid = assets
-      .filter(a => a.type === 'Cash & Savings')
-      .reduce((s, a) => s + a.amount, 0);
-
-    const assetNames = new Set(
-      assets.filter(a => a.type === 'Cash & Savings').map(a => a.name.trim().toLowerCase())
-    );
-
-    const accountsLiquid = accounts
-      .filter(acc => (acc.type === 'Bank' || acc.type === 'Cash' || acc.type === 'Wallet') && !assetNames.has(acc.name.trim().toLowerCase()))
-      .reduce((s, acc) => s + acc.openingBalance, 0);
-
-    const liquidReserves = assetsLiquid + accountsLiquid;
+    // 1. Liquid Reserves — single authority (WP-FB-DATA-05b)
+    const liquidity = LiquidReservesService.compute(assets, accounts, transactions);
+    const liquidReserves = liquidity.total;
 
     // 2. Calculate Monthly Essential Expenses
     let monthlyEssentialExpenses = 0;
@@ -93,7 +90,10 @@ export class EssentialsService {
         targetMonths,
         targetAmount: 0,
         fundingGap: 0,
-        status: 'NOT_CONFIGURED'
+        status: 'NOT_CONFIGURED',
+        linkCandidates: liquidity.candidates,
+        brokenLinks: liquidity.brokenLinks,
+        heldPendingConfirmation: liquidity.heldPendingConfirmation
       };
     }
 
@@ -111,7 +111,10 @@ export class EssentialsService {
       targetMonths,
       targetAmount,
       fundingGap,
-      status: 'RECONCILED'
+      status: 'RECONCILED',
+      linkCandidates: liquidity.candidates,
+      brokenLinks: liquidity.brokenLinks,
+      heldPendingConfirmation: liquidity.heldPendingConfirmation
     };
   }
 

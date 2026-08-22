@@ -178,6 +178,33 @@ export class AccountAssetLinkService {
   }
 
   /**
+   * Records the user's explicit statement that an account and a same-named
+   * asset are NOT the same money (WP-FB-DATA-05b, Decision G3).
+   *
+   * This is a real user decision, so it is persisted: the pair is never
+   * re-prompted and both sides count toward liquidity from then on. It writes
+   * no link - declining a candidate is not a relationship.
+   */
+  static dismissCandidate(accountId: string, assetId: string, accounts: Account[]): LinkResult {
+    const account = accounts.find(a => a.id === accountId);
+    if (!account) {
+      return { ok: false, reason: 'ACCOUNT_NOT_FOUND', message: 'Account not found.', accounts };
+    }
+    const existing = account.dismissedAssetCandidateIds || [];
+    if (existing.includes(assetId)) {
+      return { ok: true, unchanged: true, accounts };
+    }
+    return {
+      ok: true,
+      accounts: accounts.map(a =>
+        a.id === accountId
+          ? { ...a, dismissedAssetCandidateIds: [...existing, assetId] }
+          : a
+      )
+    };
+  }
+
+  /**
    * Legacy accounts predate the field. Normalises absent -> null so the
    * "deliberately unlinked" state is explicit.
    *

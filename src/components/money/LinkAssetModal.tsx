@@ -12,6 +12,8 @@ interface Props {
   onClose: () => void;
   onLink: (accountId: string, assetId: string) => { ok: boolean; message?: string };
   onUnlink: (accountId: string) => { ok: boolean; message?: string };
+  /** WP-FB-DATA-05b G3: record that a same-name pair is NOT the same money. */
+  onDismissCandidate?: (accountId: string, assetId: string) => { ok: boolean; message?: string };
 }
 
 /**
@@ -29,7 +31,7 @@ interface Props {
  * identifier shown.
  */
 export const LinkAssetModal: React.FC<Props> = ({
-  isOpen, account, accounts, assets, onClose, onLink, onUnlink
+  isOpen, account, accounts, assets, onClose, onLink, onUnlink, onDismissCandidate
 }) => {
   const [error, setError] = useState<string | null>(null);
 
@@ -54,6 +56,23 @@ export const LinkAssetModal: React.FC<Props> = ({
     setError(null);
     const res = onUnlink(account.id);
     if (!res.ok) setError(res.message || 'Unable to unlink.');
+    else onClose();
+  };
+
+  const normalize = (n?: string) => (n || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const dismissed = account.dismissedAssetCandidateIds || [];
+  const isHeldCandidate = (asset: Asset) =>
+    !!asset.id &&
+    status.state === 'UNLINKED' &&
+    !dismissed.includes(asset.id) &&
+    asset.type === 'Cash & Savings' &&
+    normalize(asset.name) === normalize(account.name);
+
+  const handleDismiss = (assetId: string) => {
+    setError(null);
+    if (!onDismissCandidate) return;
+    const res = onDismissCandidate(account.id, assetId);
+    if (!res.ok) setError(res.message || 'Unable to record that.');
     else onClose();
   };
 
@@ -155,7 +174,23 @@ export const LinkAssetModal: React.FC<Props> = ({
                       Already linked to “{claimer.name}”
                     </div>
                   )}
+                  {!claimer && isHeldCandidate(asset) && (
+                    <div className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold mt-0.5">
+                      Same name as this account — held out of liquid reserves until you decide.
+                    </div>
+                  )}
                 </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                {!claimer && isHeldCandidate(asset) && onDismissCandidate && (
+                  <button
+                    data-dismiss-candidate={asset.id}
+                    onClick={() => handleDismiss(asset.id!)}
+                    className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 text-[11px] font-bold text-gray-700 dark:text-gray-300 hover:border-gray-400 transition"
+                    title="These are different money — count both"
+                  >
+                    Not the same
+                  </button>
+                )}
                 <button
                   data-link-asset={asset.id}
                   disabled={!!claimer || status.state === 'LINKED'}
@@ -171,6 +206,7 @@ export const LinkAssetModal: React.FC<Props> = ({
                 >
                   Link
                 </button>
+                </div>
               </div>
             );
           })}

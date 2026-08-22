@@ -1,4 +1,6 @@
 import {
+  Account,
+  Transaction,
   Asset,
   AssetType,
   Liability,
@@ -13,6 +15,7 @@ import {
   FinancialMetric
 } from '../domain/types';
 import { getEffectiveAsOfDate } from './DateRangeService';
+import { LiquidReservesService } from './LiquidReservesService';
 
 /**
  * Single authoritative definition of the Reference Allocation Benchmark.
@@ -167,7 +170,12 @@ export class WealthIntelligenceService {
   public static getHealthSummary(
     assets: Asset[],
     liabilities: Liability[],
-    snapshots: NetWorthSnapshot[] = []
+    snapshots: NetWorthSnapshot[] = [],
+    // WP-FB-DATA-05b Decision I: liquidity now needs the account registry and
+    // the canonical transactions. Optional so existing callers keep compiling;
+    // omitting them yields asset-only liquidity, matching prior behaviour.
+    accounts: Account[] = [],
+    transactions: Transaction[] = []
   ): WealthHealthSummary {
     const totalAssets = assets.reduce((s, a) => s + a.amount, 0);
     const totalLiabilities = liabilities.reduce((s, l) => s + l.amount, 0);
@@ -188,10 +196,11 @@ export class WealthIntelligenceService {
 
     const debtToAssetRatio = totalAssets > 0 ? (totalLiabilities / totalAssets) * 100 : (totalLiabilities > 0 ? 100 : 0);
 
-    // Liquid reserve: strictly assets explicitly classified as 'Cash & Savings'
-    const liquidReserve = assets
-      .filter(a => a.type === 'Cash & Savings')
-      .reduce((s, a) => s + a.amount, 0);
+    // Liquid reserve: WP-FB-DATA-05b Decision I - one definition across the
+    // product, shared with EssentialsService. Previously this counted only
+    // Cash & Savings assets and ignored accounts entirely, so the app carried
+    // two different "liquid" numbers.
+    const liquidReserve = LiquidReservesService.total(assets, accounts, transactions);
 
     const liquidRatio = totalAssets > 0 ? (liquidReserve / totalAssets) * 100 : 0;
 

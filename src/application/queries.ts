@@ -163,7 +163,13 @@ export class FinancialQueries {
     const assets = repository.assets.findAllSync();
     const liabilities = repository.liabilities.findAllSync();
     const snapshots = repository.snapshots.findAllSync();
-    return WealthIntelligenceService.getHealthSummary(assets, liabilities, snapshots);
+    return WealthIntelligenceService.getHealthSummary(
+      assets,
+      liabilities,
+      snapshots,
+      repository.accounts.findAllSync(),
+      repository.transactions.findAllSync()
+    );
   }
 
   static getAssetConcentration(): AssetConcentrationAnalysis {

@@ -340,12 +340,17 @@ describe('WP-FB-DATA-04c-2 — Account↔Asset link', () => {
       expect(before).toBe(10000);
     });
 
-    it('the known different-name double-count is still present (DATA-05b scope)', () => {
+    it('the different-name pair is now deduplicated via the explicit link (closed by DATA-05b)', () => {
       account('acc-A', 'HDFC Bank', 10000); asset('ast-X', 'HDFC Savings', 10000);
-      const before = liquid();
-      S().linkAccountToAsset('acc-A', 'ast-X');       // link does NOT dedup yet
-      expect(liquid()).toBe(before);
-      expect(before).toBe(20000);
+      // Before DATA-05b this asserted the double-count was still present
+      // (liquid = 20000) because the link was infrastructure only. DATA-05b
+      // consumes the link under Decision F1: the account's derived balance is
+      // counted once and the linked asset is suppressed.
+      expect(liquid()).toBe(20000);                  // unlinked: both count
+
+      S().linkAccountToAsset('acc-A', 'ast-X');
+
+      expect(liquid()).toBe(10000);                  // linked: counted once
     });
 
     it('NET_WORTH and TOTAL_ASSETS are unaffected by linking', () => {

@@ -87,6 +87,8 @@ interface LedgerState {
   /** WP-FB-DATA-04c-2: explicit Account<->Asset link (0..1 <-> 0..1). */
   linkAccountToAsset: (accountId: string, assetId: string) => LinkResult;
   unlinkAccountFromAsset: (accountId: string) => LinkResult;
+  /** WP-FB-DATA-05b G3: record "not the same money" for a same-name candidate. */
+  dismissAssetCandidate: (accountId: string, assetId: string) => LinkResult;
   saveMonthlyBudget: (monthStr: string, allocations: Record<string, number>) => void;
 
   // Essentials Actions (WP-19)
@@ -349,6 +351,15 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   unlinkAccountFromAsset: (accountId) => {
     const { accounts } = get();
     const result = AccountAssetLinkService.unlink(accountId, accounts);
+    if (result.ok && !result.unchanged) {
+      (repository as any).applyAccountsUpdate(result.accounts);
+    }
+    return result;
+  },
+
+  dismissAssetCandidate: (accountId, assetId) => {
+    const { accounts } = get();
+    const result = AccountAssetLinkService.dismissCandidate(accountId, assetId, accounts);
     if (result.ok && !result.unchanged) {
       (repository as any).applyAccountsUpdate(result.accounts);
     }
