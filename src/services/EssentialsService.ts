@@ -10,6 +10,7 @@ import {
   HealthScoreBreakdown,
   mapTransactionCategoryToBudget
 } from '../domain/types';
+import { LedgerExclusionService } from './LedgerExclusionService';
 import { LiquidReservesService } from './LiquidReservesService';
 
 export class EssentialsService {
@@ -58,7 +59,9 @@ export class EssentialsService {
       ]);
 
       const monthlyTotals: Record<string, number> = {};
-      for (const t of transactions) {
+      // WP-FB-DATA-06c-1: excluded rows must not inflate the essential-expense
+      // average, which drives the emergency-fund target.
+      for (const t of LedgerExclusionService.forDerivation(transactions)) {
         if (t.type !== 'Expense') continue;
         const bCat = mapTransactionCategoryToBudget(t.category);
         if (essentialCategories.has(bCat)) {

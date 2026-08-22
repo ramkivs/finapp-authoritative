@@ -1,4 +1,5 @@
 import { MonthBucket, Transaction } from '../domain/types';
+import { LedgerExclusionService } from './LedgerExclusionService';
 import { getEffectiveAsOfDate } from './DateRangeService';
 
 export function generateMonthlyBuckets(asOfDateStr: string = getEffectiveAsOfDate(), numBuckets: number = 12): MonthBucket[] {
@@ -26,6 +27,8 @@ export function generateMonthlyBuckets(asOfDateStr: string = getEffectiveAsOfDat
 
 export class DividendService {
   static getMonthlyTotals(transactions: Transaction[], asOfDateStr: string = getEffectiveAsOfDate()) {
+    // WP-FB-DATA-06c-1: excluded rows do not appear in the 12-month series.
+    transactions = LedgerExclusionService.forDerivation(transactions);
     const monthBuckets = generateMonthlyBuckets(asOfDateStr, 12);
     return monthBuckets.map(b => {
       const matching = transactions.filter(t => 

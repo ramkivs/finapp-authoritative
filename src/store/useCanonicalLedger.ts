@@ -467,6 +467,12 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
 
     const bounds = DateRangeService.getBounds(dateRange, getEffectiveAsOfDate(), customStart, customEnd);
 
+    // WP-FB-DATA-06c-1 / Decision 13-b — THIS IS A DISPLAY SURFACE.
+    //
+    // It deliberately does NOT apply LedgerExclusionService.forDerivation().
+    // Excluded rows must remain visible in the Canonical Ledger; DATA-02 forbids
+    // silently hiding a financial record. Adding an exclusion filter here would
+    // be a defect, not a fix. Derivation surfaces filter; display surfaces label.
     return state.transactions.filter(item => {
       if (type !== 'All' && item.type !== type && item.type.toUpperCase() !== type) return false;
       if (item.date < bounds.startDate || item.date > bounds.endDate) return false;

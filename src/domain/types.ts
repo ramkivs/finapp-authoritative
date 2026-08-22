@@ -21,6 +21,24 @@ export type DateRangeFilter =
 export type TransactionStatus = 'CLEARED' | 'PENDING' | 'RECONCILED' | 'ESTIMATED';
 
 /**
+ * Why a transaction is excluded from DERIVED FINANCIAL SURFACES
+ * (WP-FB-DATA-06c-1, Decision 13-b).
+ *
+ * ⚠️ EXACTLY ONE MEMBER, DELIBERATELY.
+ *
+ * Decision 13-b resolved the disposition of IMPORT ROLLBACK only: rolled-back
+ * rows are retained, marked, excluded from balances and reports, and remain
+ * visible in the Ledger with an explicit disclosure.
+ *
+ * Lifecycle Decisions 1-8, 10 and 12 are STILL UNRESOLVED. There is therefore
+ * no `DELETED`, `SUPERSEDED`, `REVERSED` or `AMENDED` member here, and adding
+ * one is not a refactor — it is the act of resolving the corresponding
+ * decision. The exclusion MECHANISM is decision-free; this vocabulary is the
+ * ledger of which decisions have actually been made.
+ */
+export type LedgerExclusionReason = 'IMPORT_ROLLBACK';
+
+/**
  * How a transaction entered the ledger (WP-FB-DATA-06a).
  *
  * Recorded explicitly at construction time. Never inferred from the presence of
@@ -79,6 +97,24 @@ export interface Transaction {
   status: TransactionStatus;
   notes?: string;
   transferId?: string;
+  /**
+   * ISO-8601 timestamp at which this row was excluded from derived financial
+   * surfaces (WP-FB-DATA-06c-1). Absent = fully live.
+   *
+   * ⚠️ EXCLUDED IS NOT HIDDEN. Per DATA-02 ("records exist but are filtered —
+   * never silently hidden") and Decision 13-b, an excluded row is removed from
+   * balances and reports but REMAINS VISIBLE in the Ledger with a disclosure.
+   * `LedgerExclusionService` is the single authority on this distinction.
+   *
+   * ⚠️ NOT `status`. Overloading `TransactionStatus` was measured and rejected:
+   * five dividend consumers filter `status === 'CLEARED'` and would exclude the
+   * row by accident, while `AccountBalanceService` does not filter status at all
+   * and would keep counting the money — a ₹5,000 row simultaneously excluded
+   * from income and included in the balance.
+   */
+  excludedAt?: string;
+  /** Why it is excluded. See `LedgerExclusionReason`. */
+  excludedReason?: LedgerExclusionReason;
   /**
    * How this row entered the ledger (WP-FB-DATA-06a).
    *
@@ -245,6 +281,14 @@ export interface TransactionQuery {
   customStart?: string | null;
   customEnd?: string | null;
   asOfDateStr?: string;
+  /**
+   * WP-FB-DATA-06c-1: include rows excluded from derived financial surfaces.
+   *
+   * Defaults to FALSE — fail-safe. A caller that forgets this flag gets the
+   * financially conservative answer (excluded money stays out) rather than
+   * silently double-counting. Display surfaces opt IN explicitly.
+   */
+  includeExcluded?: boolean;
 }
 
 export interface TransactionRepository {

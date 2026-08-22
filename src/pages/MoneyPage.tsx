@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransferIntegrityService } from '../services/TransferIntegrityService';
+import { LedgerExclusionService } from '../services/LedgerExclusionService';
 import { TransactionSignService } from '../services/TransactionSignService';
 import { FinancialQueries } from '../application/queries';
 import { KpiCard } from '../components/ui/KpiCard';
@@ -65,6 +66,11 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
   // Covers both transfers broken by an account deletion in this session and any
   // pre-existing broken transfers detected at load. Reporting only.
   const brokenTransfers = TransferIntegrityService.findBrokenTransfers(transactions);
+
+  // WP-FB-DATA-06c-1 / Decision 13-b: rows excluded from derived financial
+  // figures REMAIN VISIBLE here. DATA-02 forbids silently hiding a record, so
+  // the Ledger deliberately does NOT filter them - it labels them instead.
+  const excludedRows = LedgerExclusionService.summarise(transactions);
 
   const handleSearchChange = (val: string) => {
     setSearchInput(val);
@@ -738,6 +744,24 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                 {/* WP-FB-DATA-06b / Decision T1-b: transfers that no longer balance
                     across accounts. Status is DERIVED from the legs on every render,
                     so it cannot go stale and re-registering the account clears it. */}
+                {excludedRows.length > 0 && (
+                  <div id="ledger-excluded-notice" className="p-4 border-b border-slate-700/60 bg-slate-800/40">
+                    <p className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                      {excludedRows.length} transaction{excludedRows.length === 1 ? '' : 's'} excluded from balances and reports
+                    </p>
+                    <p className="mt-1 text-[11px] text-slate-300/90">
+                      These records still exist and are shown below. They are not counted in any account balance,
+                      liquid reserve or report. Nothing was deleted.
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {excludedRows.map(x => (
+                        <li key={x.id} className="text-[11px] text-slate-300/80" data-excluded-row={x.id}>
+                          {x.message}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {brokenTransfers.length > 0 && (
                   <div id="transfer-reconciliation-notice" className="p-4 border-b border-amber-800/40 bg-amber-950/30">
                     <p className="text-xs font-bold text-amber-200 uppercase tracking-wider">
@@ -792,8 +816,24 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                         const isInc = row.type === 'Income';
                         const isTr = row.type === 'Transfer';
                         return (
-                          <tr key={row.id} className="hover:bg-[#1F2937]/40 transition">
-                            <td className="py-2.5 px-4 font-medium text-[#F0F6FC]">{row.dateStr}</td>
+                          <tr
+                            key={row.id}
+                            data-tx-excluded={LedgerExclusionService.isExcluded(row) ? 'true' : undefined}
+                            className={`hover:bg-[#1F2937]/40 transition ${
+                              LedgerExclusionService.isExcluded(row) ? 'opacity-60' : ''
+                            }`}
+                          >
+                            <td className="py-2.5 px-4 font-medium text-[#F0F6FC]">
+                              {row.dateStr}
+                              {LedgerExclusionService.isExcluded(row) && (
+                                <span
+                                  className="ml-1.5 px-1.5 py-0.5 rounded bg-slate-700/60 text-slate-300 text-[9px] font-bold border border-slate-600/50 align-middle"
+                                  title="Still recorded, but excluded from every balance and report."
+                                >
+                                  EXCLUDED
+                                </span>
+                              )}
+                            </td>
                             <td className="py-2.5 px-4">
                               <div className="font-bold text-[#F0F6FC]">{row.title}</div>
                               {row.notes && <div className="text-[10px] text-[#6E7681]">{row.notes}</div>}

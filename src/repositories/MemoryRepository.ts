@@ -27,6 +27,7 @@ import { AssetIdentityService } from '../services/AssetIdentityService';
 import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
 import { TransferIntegrityService, TransferValidation } from '../services/TransferIntegrityService';
 import { TransactionIdentityService, DuplicateIdGroup } from '../services/TransactionIdentityService';
+import { LedgerExclusionService } from '../services/LedgerExclusionService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { demoTransactions, demoAssets, demoLiabilities, demoSnapshots } from '../domain/demoFixtures';
@@ -44,10 +45,14 @@ export class MemoryTransactionRepository implements TransactionRepository {
   }
 
   findManySync(query: TransactionQuery): Transaction[] {
-    const { type, dateRange, search, customStart, customEnd, asOfDateStr = getEffectiveAsOfDate() } = query;
+    const { type, dateRange, search, customStart, customEnd, includeExcluded = false, asOfDateStr = getEffectiveAsOfDate() } = query;
     const bounds = DateRangeService.getBounds(dateRange || 'This Month', asOfDateStr, customStart, customEnd);
 
     return this.parent.transactionsData.filter(tx => {
+      // WP-FB-DATA-06c-1: excluded rows are omitted unless a DISPLAY caller
+      // explicitly opts in. The default is the financially conservative one.
+      if (!includeExcluded && LedgerExclusionService.isExcluded(tx)) return false;
+
       // Type Filter
       if (type && type !== 'All') {
         if (tx.type !== type && tx.type.toUpperCase() !== type) return false;

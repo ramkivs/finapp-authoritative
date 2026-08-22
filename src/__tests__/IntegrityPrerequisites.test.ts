@@ -528,15 +528,27 @@ describe('WP-FB-DATA-06c-0 — integrity prerequisites', () => {
       expect(typeof (S() as any).rollbackImport).toBe('undefined');
     });
 
-    it('no soft-delete or lifecycle field was added to the model', () => {
+    /**
+     * NARROWED BY WP-FB-DATA-06c-1.
+     *
+     * Previously titled "no soft-delete or lifecycle field was added". That is
+     * no longer accurate: 06c-1 added `excludedAt`/`excludedReason` under the
+     * resolved Decision 13-b. The assertion itself never covered those names, so
+     * it did not fail — but a test whose title outruns what it checks is worse
+     * than no test. Narrowed to what it actually guards: the fields that would
+     * encode an UNRESOLVED decision still do not exist.
+     */
+    it('no UNRESOLVED-decision lifecycle field was added to the model', () => {
       const A = acct('A', 10000);
       const tx = TransactionFactory.createIncome({
         title: 'S', amount: 100, account: 'A', accountId: A.id, category: 'G'
       });
-      expect((tx as any).deletedAt).toBeUndefined();
-      expect((tx as any).supersededById).toBeUndefined();
-      expect((tx as any).amendedAt).toBeUndefined();
-      expect((tx as any).lifecycleState).toBeUndefined();
+      expect((tx as any).deletedAt).toBeUndefined();       // Decision 1
+      expect((tx as any).supersededById).toBeUndefined();  // Decision 5
+      expect((tx as any).amendedAt).toBeUndefined();       // Decision 2
+      expect((tx as any).lifecycleState).toBeUndefined();  // Decision 1
+      // and 06c-1 writes nothing, even for the reason it DOES know about
+      expect((tx as any).excludedAt).toBeUndefined();
     });
   });
 });

@@ -1,5 +1,6 @@
 import { FinancialMetric, FinancialSeries, Transaction, Asset, Liability, NetWorthSnapshot } from '../domain/types';
 import { DateRangeService, getEffectiveAsOfDate } from './DateRangeService';
+import { LedgerExclusionService } from './LedgerExclusionService';
 import { DividendService } from './DividendService';
 import { WealthIntelligenceService } from './WealthIntelligenceService';
 import { EssentialsService } from './EssentialsService';
@@ -14,6 +15,10 @@ export class FinancialMetricService {
     snapshots: NetWorthSnapshot[] = [],
     asOfDateStr: string = getEffectiveAsOfDate()
   ): FinancialMetric {
+    // WP-FB-DATA-06c-1: every metric below derives money from rows, so all of
+    // them read the exclusion-filtered set rather than the raw input.
+    transactions = LedgerExclusionService.forDerivation(transactions);
+
     if (metricName === 'TTM_REALIZED_DIVIDEND') {
       const bounds = DateRangeService.getBounds('12M', asOfDateStr);
       const ttmVal = transactions

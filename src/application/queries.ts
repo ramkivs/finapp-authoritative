@@ -1,4 +1,5 @@
 import { repository } from '../repositories';
+import { LedgerExclusionService } from '../services/LedgerExclusionService';
 import { FinancialMetricService } from '../services/FinancialMetricService';
 import { WealthIntelligenceService } from '../services/WealthIntelligenceService';
 import { EssentialsService } from '../services/EssentialsService';
@@ -88,7 +89,9 @@ export class FinancialQueries {
 
   static getMoneyInsights(dateRange: string = 'This Month', customStart?: string, customEnd?: string): MoneyInsightsData {
     const bounds = DateRangeService.getBounds(dateRange, getEffectiveAsOfDate(), customStart, customEnd);
-    const allTxs = repository.transactions.findAllSync();
+    // WP-FB-DATA-06c-1: income/expense/investment aggregation is a derived
+    // financial surface, so excluded rows are filtered out first.
+    const allTxs = LedgerExclusionService.forDerivation(repository.transactions.findAllSync());
     const periodTxs = allTxs.filter(t => t.date >= bounds.startDate && t.date <= bounds.endDate);
 
     let totalIncome = 0;

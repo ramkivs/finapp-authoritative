@@ -1,4 +1,5 @@
 import { Account, Transaction } from '../domain/types';
+import { LedgerExclusionService } from './LedgerExclusionService';
 import { TransactionSignService } from './TransactionSignService';
 import { getEffectiveAsOfDate } from './DateRangeService';
 
@@ -78,6 +79,10 @@ export class AccountBalanceService {
     const anchor = account.asOfDate || NO_ANCHOR;
     return transactions.filter(
       t =>
+        // WP-FB-DATA-06c-1: a row excluded from derived financial surfaces
+        // never contributes to a balance. This is the balance authority, so
+        // this is the single most important place the filter must appear.
+        !LedgerExclusionService.isExcluded(t) &&
         !!t.accountId &&
         t.accountId === account.id &&
         t.date > anchor &&   // on/before the anchor is already inside openingBalance
