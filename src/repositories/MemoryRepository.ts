@@ -799,7 +799,23 @@ export class MemoryRepository implements FinancialRepositoryPort {
   }
 
   async initialize(): Promise<void> {
-    const data = await IndexedDBStorageService.loadAll();
+    // WP-FB-DATA-06c-READFAIL: a genuine read failure now propagates instead of
+    // silently presenting an empty ledger. It is logged here so the cause is
+    // visible, then rethrown so the caller can act on it — the repository must
+    // not decide on the application's behalf that an unreadable ledger is empty.
+    let data;
+    try {
+      data = await IndexedDBStorageService.loadAll();
+    } catch (e) {
+      if (typeof console !== 'undefined') {
+        console.error(
+          '[WP-FB-DATA-06c-READFAIL] Could not load the stored ledger. ' +
+          'No data was modified, and writes are blocked until a load succeeds.',
+          e
+        );
+      }
+      throw e;
+    }
     this.transactionsData = data.transactions;
     this.assetsData = data.assets;
     this.liabilitiesData = data.liabilities;

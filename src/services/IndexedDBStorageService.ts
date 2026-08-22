@@ -46,6 +46,24 @@ export class IndexedDBStorageService {
 
   private static mutex: Promise<any> = Promise.resolve();
   public static simulateFailureOnce: boolean = false;
+  /** WP-FB-DATA-06c-READFAIL: injects a genuine read-path failure, for tests. */
+  public static simulateReadFailureOnce: boolean = false;
+
+  /**
+   * WP-FB-DATA-06c-READFAIL — set when a `loadAll` genuinely failed.
+   *
+   * While true, `saveAll` REFUSES. Propagating the read failure alone does not
+   * close the destructive sequence: the app would still start with an empty
+   * in-memory ledger, and the next write would `clear()` the store and persist
+   * that emptiness over real data. Refusing to write after a failed read is the
+   * part that actually prevents the loss.
+   *
+   * Cleared by any subsequent successful load, so recovery needs no new API.
+   */
+  private static lastLoadFailed = false;
+
+  /** True when the most recent load attempt failed. */
+  static get loadFailed(): boolean { return this.lastLoadFailed; }
 
   static enqueueSave<T>(task: () => Promise<T>): Promise<T> {
     const resultPromise = this.mutex.then(() => task());
@@ -152,7 +170,15 @@ export class IndexedDBStorageService {
 
   static async loadAll(): Promise<StoredLedgerState> {
     return this.enqueueSave(async () => {
+      if (this.simulateReadFailureOnce) {
+        this.simulateReadFailureOnce = false;
+        this.lastLoadFailed = true;
+        throw new Error('Simulated IndexedDB read failure');
+      }
+
       if (typeof window === 'undefined' || !window.indexedDB) {
+        // Not a failure: this environment has no IndexedDB by design.
+        this.lastLoadFailed = false;
         return {
           transactions: [...this.nodeFallbackStore.transactions],
           assets: [...this.nodeFallbackStore.assets],
@@ -173,11 +199,19 @@ export class IndexedDBStorageService {
           .filter(name => db.objectStoreNames.contains(name));
 
         const tx = db.transaction(storeNames, 'readonly');
-        const getStore = (name: string) => new Promise<any[]>((resolve) => {
+        const getStore = (name: string) => new Promise<any[]>((resolve, reject) => {
+          // A store that does not exist is legitimately empty.
           if (!db.objectStoreNames.contains(name)) return resolve([]);
           const req = tx.objectStore(name).getAll();
           req.onsuccess = () => resolve(req.result || []);
-          req.onerror = () => resolve([]);
+          // WP-FB-DATA-06c-READFAIL: a FAILED read is not an empty store.
+          // This previously resolved([]), making "could not read your
+          // transactions" indistinguishable from "you have no transactions" —
+          // and it never reached the catch below, so nothing else could tell
+          // the difference either.
+          req.onerror = () => reject(
+            req.error || new Error(`IndexedDB read failed for store "${name}"`)
+          );
         });
 
         const [
@@ -206,6 +240,10 @@ export class IndexedDBStorageService {
 
         const hasLoadedMeta = meta.find((m: any) => m.key === 'hasLoadedOnce');
 
+        // Reached only when every store read succeeded. An empty ledger is a
+        // legitimate successful result and must clear any earlier failure.
+        this.lastLoadFailed = false;
+
         return {
           transactions: transactions as Transaction[],
           assets: assets as Asset[],
@@ -218,19 +256,28 @@ export class IndexedDBStorageService {
           profile: (profiles.length > 0 ? profiles[0] : null) as FinancialProfile | null,
           hasLoadedOnce: !!hasLoadedMeta?.value
         };
+        // A genuinely empty store is a successful load, not a failure.
       } catch (e) {
-        return {
-          transactions: [...this.nodeFallbackStore.transactions],
-          assets: [...this.nodeFallbackStore.assets],
-          liabilities: [...this.nodeFallbackStore.liabilities],
-          snapshots: [...this.nodeFallbackStore.snapshots],
-          accounts: [...this.nodeFallbackStore.accounts],
-          budgets: [...this.nodeFallbackStore.budgets],
-          policies: [...this.nodeFallbackStore.policies],
-          goals: [...this.nodeFallbackStore.goals],
-          profile: this.nodeFallbackStore.profile ? { ...this.nodeFallbackStore.profile } : null,
-          hasLoadedOnce: this.nodeFallbackStore.hasLoadedOnce
-        };
+        /* WP-FB-DATA-06c-READFAIL — READ FAILURE NOW PROPAGATES.
+         *
+         * This previously returned the (normally empty) in-memory fallback and
+         * RESOLVED SUCCESSFULLY, which produced the destructive sequence:
+         *
+         *   1. a real ledger is persisted
+         *   2. the IndexedDB read fails
+         *   3. loadAll silently returns an empty ledger
+         *   4. the application believes there is nothing stored
+         *   5. the next successful saveAll clears the store and writes that
+         *      emptiness over the real data
+         *
+         * The environment fallback ABOVE is untouched: an environment with no
+         * IndexedDB at all is Node/jsdom, not a failure. What propagates here is
+         * the other case — IndexedDB exists, was read, and did not work.
+         */
+        this.lastLoadFailed = true;
+        throw e instanceof Error
+          ? e
+          : new Error(`IndexedDB load failed: ${String(e)}`);
       }
     });
   }
@@ -250,6 +297,26 @@ export class IndexedDBStorageService {
       if (this.simulateFailureOnce) {
         this.simulateFailureOnce = false;
         throw new Error('Simulated IndexedDB persistence failure');
+      }
+
+      /* WP-FB-DATA-06c-READFAIL — REFUSE TO WRITE OVER DATA WE FAILED TO READ.
+       *
+       * `saveAll` mirrors the WHOLE array with clear() + put(). After a failed
+       * load the in-memory ledger is empty, so a single write would clear the
+       * store and persist that emptiness over the user's real data.
+       *
+       * Propagating the read failure is necessary but NOT sufficient to prevent
+       * that; this refusal is the part that actually closes the sequence. It is
+       * deliberately narrow: it fires only when a load was ATTEMPTED AND FAILED,
+       * never merely because no load has happened yet. Any subsequent successful
+       * load clears it, so recovery needs no new API.
+       */
+      if (this.lastLoadFailed) {
+        throw new Error(
+          'Refusing to persist: the last IndexedDB load failed, so the in-memory ledger ' +
+          'may be incomplete. Writing now could overwrite stored data that was never read. ' +
+          'Reload the application to retry.'
+        );
       }
 
       const accounts = state.accounts || [];
