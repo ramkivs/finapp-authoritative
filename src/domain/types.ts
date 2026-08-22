@@ -298,6 +298,22 @@ export interface TransactionRepository {
   findAllSync(): Transaction[];
   append(transaction: Transaction): Promise<void>;
   appendMany(transactions: Transaction[]): Promise<void>;
+  /**
+   * WP-FB-DATA-06c-6 / Decision 13-b — rolls back an import batch by EXCLUDING
+   * its rows, not removing them. Nothing is deleted; see
+   * `ImportBatchRollbackService`. Rejects with `BatchRollbackError` when the
+   * batch is unknown, empty, already rolled back, or when rolling it back would
+   * exclude only part of a transfer.
+   */
+  rollbackBatch(importBatchId: string): Promise<BatchRollbackResultShape>;
+}
+
+/** Structural mirror of `BatchRollbackResult` (kept here to avoid a service import in the port). */
+export interface BatchRollbackResultShape {
+  batchId: string;
+  excludedCount: number;
+  excludedIds: string[];
+  alreadyExcludedCount: number;
 }
 
 export interface AssetRepository {

@@ -522,10 +522,21 @@ describe('WP-FB-DATA-06c-0 — integrity prerequisites', () => {
       expect(typeof t.restore).toBe('undefined');
     });
 
-    it('still no import-batch rollback API', () => {
+    /**
+     * FLIPPED BY WP-FB-DATA-06c-6.
+     *
+     * Import-batch rollback now exists under Decision 13-b. Note what did NOT
+     * change: `removeBatch` is still absent, deliberately. Under 13-b a rollback
+     * removes nothing, and a method by that name would mislead the next
+     * maintainer into assuming the rows are gone. The capability is
+     * `rollbackBatch`, and the "no hard-removal API" guard below stays true.
+     */
+    it('import-batch rollback EXISTS, and removes nothing', () => {
       const t = repository.transactions as any;
-      expect(typeof t.removeBatch).toBe('undefined');
-      expect(typeof (S() as any).rollbackImport).toBe('undefined');
+      expect(typeof t.rollbackBatch).toBe('function');          // 06c-6 capability
+      expect(typeof (S() as any).rollbackImportBatch).toBe('function');
+      expect(typeof t.removeBatch).toBe('undefined');           // still no hard removal
+      expect(typeof t.remove).toBe('undefined');
     });
 
     /**

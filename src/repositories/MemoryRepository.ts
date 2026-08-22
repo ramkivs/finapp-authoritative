@@ -19,6 +19,7 @@ import {
   FinancialProfile,
   ProfileRepository,
   FinancialRepositoryPort,
+  BatchRollbackResultShape,
 } from '../domain/types';
 import { DateRangeService, formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { AccountResolutionService } from '../services/AccountResolutionService';
@@ -28,6 +29,7 @@ import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
 import { TransferIntegrityService, TransferValidation } from '../services/TransferIntegrityService';
 import { TransactionIdentityService, DuplicateIdGroup } from '../services/TransactionIdentityService';
 import { LedgerExclusionService } from '../services/LedgerExclusionService';
+import { ImportBatchRollbackService, BatchRollbackError } from '../services/ImportBatchRollbackService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { demoTransactions, demoAssets, demoLiabilities, demoSnapshots } from '../domain/demoFixtures';
@@ -145,6 +147,63 @@ export class MemoryTransactionRepository implements TransactionRepository {
 
   findAllSync(): Transaction[] {
     return [...this.parent.transactionsData];
+  }
+
+  /**
+   * WP-FB-DATA-06c-6 / Decision 13-b — import batch rollback.
+   *
+   * Operates on `parent.transactionsData`, the REPOSITORY SOURCE OF TRUTH, not
+   * the Zustand projection. The 06c gate-2 discovery proved a store-layer
+   * change is silently reverted on the next save or reload, so a rollback
+   * written there would look correct in the UI and quietly undo itself.
+   *
+   * Follows the identical shape as append/appendMany: validate, mutate memory,
+   * sync the store, persist through the single-IDB-transaction `saveAll`
+   * mirror, and roll memory back if persistence fails.
+   */
+  async rollbackBatch(importBatchId: string): Promise<BatchRollbackResultShape> {
+    const previous = this.parent.transactionsData;
+
+    const plan = ImportBatchRollbackService.plan(importBatchId, previous);
+    if (plan.status !== 'ADMISSIBLE') throw new BatchRollbackError(plan);
+
+    const next = ImportBatchRollbackService.apply(plan, previous, new Date().toISOString());
+
+    // Exclusion adds no rows and removes none, so DATA-06b structural
+    // invariants cannot change. Asserted rather than assumed.
+    if (!ImportBatchRollbackService.structuralIntegrityUnchanged(previous, next)) {
+      throw new Error(
+        'Import batch rollback aborted: transfer structural integrity would change. ' +
+        'This should be impossible for an exclusion-only operation.'
+      );
+    }
+
+    this.parent.transactionsData = next;
+    this.parent.syncStore();
+    try {
+      await IndexedDBStorageService.saveAll({
+        transactions: next,
+        assets: this.parent.assetsData,
+        liabilities: this.parent.liabilitiesData,
+        snapshots: this.parent.snapshotsData,
+        accounts: this.parent.accountsData,
+        budgets: this.parent.budgetsData,
+        policies: this.parent.policiesData,
+        goals: this.parent.goalsData,
+        profile: this.parent.profileData
+      });
+    } catch (e) {
+      this.parent.transactionsData = previous;
+      this.parent.syncStore();
+      throw e;
+    }
+
+    return {
+      batchId: plan.batchId,
+      excludedCount: plan.targetIds.length,
+      excludedIds: plan.targetIds,
+      alreadyExcludedCount: plan.alreadyExcludedIds.length
+    };
   }
 }
 

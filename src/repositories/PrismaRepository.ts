@@ -4,10 +4,11 @@ import {
   LiabilityRepository, SnapshotRepository, FinancialRepositoryPort,
   Account, AccountRepository, MonthlyBudget, BudgetRepository,
   InsurancePolicy, PolicyRepository, FinancialGoal, GoalRepository,
-  FinancialProfile, ProfileRepository
+  FinancialProfile, ProfileRepository, BatchRollbackResultShape
 } from '../domain/types';
 import { TransferIntegrityService } from '../services/TransferIntegrityService';
 import { TransactionIdentityService } from '../services/TransactionIdentityService';
+import { ImportBatchRollbackService, BatchRollbackError } from '../services/ImportBatchRollbackService';
 
 /**
  * Gate 8 Prisma Repository Adapter (Hexagonal Persistence Port)
@@ -59,6 +60,30 @@ export class PrismaTransactionRepository implements TransactionRepository {
       // Production implementation: await prisma.transaction.create({ data: ... });
       void tx;
     }
+  }
+
+  /**
+   * WP-FB-DATA-06c-6: the rollback guard is mirrored here for the same reason
+   * the DATA-06b and DATA-06c-0 guards were — a rule enforced in only one of
+   * two TransactionRepository implementations is not a rule, it is a
+   * coincidence of which adapter happens to be wired.
+   *
+   * ⚠️ A real Prisma implementation must apply the exclusion stamps inside
+   * `prisma.$transaction([...])`. Excluding half a batch is the same defect
+   * class as excluding half a transfer.
+   */
+  async rollbackBatch(importBatchId: string): Promise<BatchRollbackResultShape> {
+    const existing = this.findAllSync();
+    const plan = ImportBatchRollbackService.plan(importBatchId, existing);
+    if (plan.status !== 'ADMISSIBLE') throw new BatchRollbackError(plan);
+    // Production implementation: await prisma.$transaction(
+    //   plan.targetIds.map(id => prisma.transaction.update({ where: { id }, data: { ... } })));
+    return {
+      batchId: plan.batchId,
+      excludedCount: plan.targetIds.length,
+      excludedIds: plan.targetIds,
+      alreadyExcludedCount: plan.alreadyExcludedIds.length
+    };
   }
 }
 

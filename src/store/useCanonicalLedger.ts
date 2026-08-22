@@ -12,7 +12,8 @@ import {
   PolicyType,
   FinancialGoal,
   GoalTemplateType,
-  FinancialProfile
+  FinancialProfile,
+  BatchRollbackResultShape
 } from '../domain/types';
 import { formatDisplayDate, DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { TransactionIdentityService } from '../services/TransactionIdentityService';
@@ -90,6 +91,12 @@ interface LedgerState {
   };
 
   // Account & Budget Actions (WP-18)
+  /**
+   * WP-FB-DATA-06c-6 / Decision 13-b. Returns the promise so a refusal is
+   * visible to the caller rather than becoming an invisible unhandled
+   * rejection (the F-06b-2 lesson).
+   */
+  rollbackImportBatch: (importBatchId: string) => Promise<BatchRollbackResultShape>;
   addAccount: (params: {
     name: string;
     type: ControlledAccountType;
@@ -396,6 +403,10 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       rejectedTransferRows, rejectedTransferReasons,
       rejectedDuplicateIdRows, rejectedDuplicateIdReasons
     };
+  },
+
+  rollbackImportBatch: (importBatchId) => {
+    return repository.transactions.rollbackBatch(importBatchId);
   },
 
   addAccount: (params) => {
