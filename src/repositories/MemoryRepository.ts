@@ -169,6 +169,15 @@ export class MemoryTransactionRepository implements TransactionRepository {
 
     const next = ImportBatchRollbackService.apply(plan, previous, new Date().toISOString());
 
+    // WP-FB-DATA-06c-1a / Decision D8 — WHOLE-TRANSFER GATE.
+    //
+    // The rollback planner already refuses a batch that would split a transfer,
+    // but that guard reasons about BATCH MEMBERSHIP. This one reasons about the
+    // resulting EXCLUSION STATE, so it holds no matter how the rows were
+    // selected. Defence in depth: every future lifecycle primitive routes
+    // through here, and structural validation cannot see partial exclusion.
+    TransferIntegrityService.assertWholeTransferLifecycle(previous, next);
+
     // Exclusion adds no rows and removes none, so DATA-06b structural
     // invariants cannot change. Asserted rather than assumed.
     if (!ImportBatchRollbackService.structuralIntegrityUnchanged(previous, next)) {
@@ -765,6 +774,11 @@ export class MemoryRepository implements FinancialRepositoryPort {
    * this ledger was loaded. Report only — no row was modified or removed.
    */
   public duplicateTransactionIdsAtLoad: DuplicateIdGroup[] = [];
+  /**
+   * WP-FB-DATA-06c-1a: transfers found only partly excluded when this ledger was
+   * loaded. Report only — no row was modified.
+   */
+  public partiallyExcludedTransfersAtLoad: TransferValidation[] = [];
   public assetsData: Asset[] = [];
   public liabilitiesData: Liability[] = [];
   public snapshotsData: NetWorthSnapshot[] = [];
@@ -862,6 +876,20 @@ export class MemoryRepository implements FinancialRepositoryPort {
         `[WP-FB-DATA-06c-0] ${this.duplicateTransactionIdsAtLoad.length} duplicate transaction id(s) ` +
         `detected in stored data. No data was modified.\n` +
         this.duplicateTransactionIdsAtLoad.map(d => '  - ' + d.message).join('\n')
+      );
+    }
+
+    // WP-FB-DATA-06c-1a / Decision D8: DETECT AND REPORT ONLY. A transfer that
+    // is already partly excluded is left exactly as it is — choosing whether to
+    // exclude the remaining leg or restore the excluded one is a lifecycle
+    // decision that has not been made.
+    this.partiallyExcludedTransfersAtLoad =
+      TransferIntegrityService.findPartiallyExcludedTransfers(this.transactionsData);
+    if (this.partiallyExcludedTransfersAtLoad.length > 0 && typeof console !== 'undefined') {
+      console.warn(
+        `[WP-FB-DATA-06c-1a] ${this.partiallyExcludedTransfersAtLoad.length} transfer(s) are only ` +
+        `partly excluded from balances and reports. No data was modified.\n` +
+        this.partiallyExcludedTransfersAtLoad.map(v => '  - ' + TransferIntegrityService.describe(v)).join('\n')
       );
     }
 

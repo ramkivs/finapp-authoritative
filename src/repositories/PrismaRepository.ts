@@ -76,6 +76,12 @@ export class PrismaTransactionRepository implements TransactionRepository {
     const existing = this.findAllSync();
     const plan = ImportBatchRollbackService.plan(importBatchId, existing);
     if (plan.status !== 'ADMISSIBLE') throw new BatchRollbackError(plan);
+    // WP-FB-DATA-06c-1a / D8: mirrored, for the same reason the 06b and 06c-0
+    // guards were — a rule enforced in one of two implementations is not a rule.
+    TransferIntegrityService.assertWholeTransferLifecycle(
+      existing,
+      ImportBatchRollbackService.apply(plan, existing, new Date().toISOString())
+    );
     // Production implementation: await prisma.$transaction(
     //   plan.targetIds.map(id => prisma.transaction.update({ where: { id }, data: { ... } })));
     return {

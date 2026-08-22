@@ -1,5 +1,6 @@
 import { Transaction, TransactionDirection } from '../domain/types';
 import { TransactionSignService } from './TransactionSignService';
+import { LedgerExclusionService } from './LedgerExclusionService';
 
 /* =============================================================================
  * TRANSFER INTEGRITY (WP-FB-DATA-06b)
@@ -74,7 +75,12 @@ export type TransferViolationCode =
   /** Signed amounts do not cancel. */
   | 'NET_NONZERO'
   /** BROKEN-class: exactly one leg lost its account reference. */
-  | 'ORPHANED_ACCOUNT_REFERENCE';
+  | 'ORPHANED_ACCOUNT_REFERENCE'
+  /**
+   * BROKEN-class: some but not all legs of this transfer are excluded from
+   * derived financial figures (WP-FB-DATA-06c-1a, Decision D8).
+   */
+  | 'PARTIALLY_EXCLUDED';
 
 export interface TransferViolation {
   code: TransferViolationCode;
@@ -101,6 +107,22 @@ export class TransferIntegrityError extends Error {
     super(`Transfer integrity violation — ${detail}`);
     this.name = 'TransferIntegrityError';
     this.validations = validations;
+  }
+}
+
+/**
+ * Thrown when a lifecycle operation would apply to only part of a transfer
+ * (WP-FB-DATA-06c-1a, Decision D8).
+ */
+export class PartialTransferLifecycleError extends Error {
+  readonly transferIds: string[];
+  constructor(details: { transferId: string; message: string }[]) {
+    super(
+      `Transfer lifecycle must apply to the whole transfer — ` +
+      details.map(d => `${d.transferId}: ${d.message}`).join('; ')
+    );
+    this.name = 'PartialTransferLifecycleError';
+    this.transferIds = details.map(d => d.transferId);
   }
 }
 
@@ -211,9 +233,32 @@ export class TransferIntegrityService {
       });
     }
 
-    // BROKEN class (Decision T1-b): a structurally sound pair that lost exactly
-    // one account reference, which is what deleting an account produces.
+    /* WP-FB-DATA-06c-1a / Decision D8 — PARTIAL EXCLUSION IS A TRANSFER DEFECT.
+     *
+     * Structural validation above cannot see this. Excluding a leg adds and
+     * removes no rows, changes no amount and no direction, so a half-excluded
+     * transfer is structurally perfect while ₹2,000 quietly leaves the system.
+     * The 06c decision gate measured exactly that: one leg excluded ->
+     * system total 15,000 -> 13,000, integrity clean.
+     *
+     * Detected here so it is REPORTED wherever broken transfers are already
+     * surfaced, and refused at admission by assertWholeTransferLifecycle().
+     */
     const structurallySound = !violations.some(v => v.severity === 'INVALID');
+    if (structurallySound && legs.length === 2) {
+      const excluded = legs.filter(l => LedgerExclusionService.isExcluded(l));
+      if (excluded.length === 1) {
+        violations.push({
+          code: 'PARTIALLY_EXCLUDED',
+          severity: 'BROKEN',
+          message:
+            `only the ${excluded[0].direction} leg is excluded from balances and reports; ` +
+            `a transfer must be excluded as a whole or not at all, otherwise the remaining ` +
+            `leg moves money with no counterparty`
+        });
+      }
+    }
+
     if (structurallySound && legs.length === 2) {
       const unmapped = legs.filter(l => l.accountId == null);
       if (unmapped.length === 1) {
@@ -306,6 +351,73 @@ export class TransferIntegrityService {
     }
 
     if (failures.length > 0) throw new TransferIntegrityError(failures);
+  }
+
+  /**
+   * Transfers whose legs are only PARTLY excluded (WP-FB-DATA-06c-1a).
+   *
+   * Report-only, for pre-existing data. Nothing is repaired: deciding whether
+   * to exclude the remaining leg or restore the excluded one is a lifecycle
+   * decision (D5/D6/D9/D11) that has not been made.
+   */
+  static findPartiallyExcludedTransfers(txs: Transaction[]): TransferValidation[] {
+    return this.validateAll(txs).filter(v =>
+      v.violations.some(x => x.code === 'PARTIALLY_EXCLUDED')
+    );
+  }
+
+  /**
+   * THE WHOLE-TRANSFER LIFECYCLE GATE (Decision D8).
+   *
+   *   "A transfer must never be amended, excluded, deleted, superseded,
+   *    restored, or otherwise lifecycle-mutated one leg at a time."
+   *
+   * Compares the prospective next state against the previous one and refuses
+   * any change that leaves a transfer partly excluded. Atomic, or nothing.
+   *
+   * ⚠️ WHY THIS CANNOT LIVE IN `assertAdmissible`.
+   * `assertAdmissible` answers "may these NEW rows be appended?". A lifecycle
+   * operation appends nothing — it changes rows that are already stored — so it
+   * never reaches that gate. This is the second door, and every future lifecycle
+   * primitive (UPDATE, REMOVE, restore) must call it explicitly. Structural
+   * validation cannot substitute: exclusion changes no structure.
+   *
+   * DELIBERATELY NOT A REPAIR. A transfer already partly excluded before this
+   * call stays exactly as it is; refusing to let an operation make things worse
+   * is not the same as deciding how to fix what is already wrong.
+   *
+   * @throws {PartialTransferLifecycleError}
+   */
+  static assertWholeTransferLifecycle(previous: Transaction[], next: Transaction[]): void {
+    const prevById = new Map(previous.map(t => [t.id, t]));
+    const nextGroups = this.groupByTransferId(next);
+    const failures: { transferId: string; message: string }[] = [];
+
+    for (const [transferId, legs] of nextGroups) {
+      if (legs.length !== 2) continue;                 // structure is assertAdmissible's job
+
+      const excluded = legs.filter(l => LedgerExclusionService.isExcluded(l));
+      if (excluded.length !== 1) continue;             // all-or-nothing: fine
+
+      // Was it ALREADY partly excluded before this operation? If so this
+      // operation did not cause it, and refusing here would permanently freeze
+      // a ledger that is already inconsistent.
+      const wasAlreadyPartial = legs.filter(l => {
+        const before = prevById.get(l.id);
+        return before ? LedgerExclusionService.isExcluded(before) : false;
+      }).length === 1 && legs.every(l => prevById.has(l.id));
+
+      if (wasAlreadyPartial) continue;
+
+      failures.push({
+        transferId,
+        message:
+          `this operation would exclude only the ${excluded[0].direction} leg. ` +
+          `A transfer must be excluded as a whole or not at all (Decision D8).`
+      });
+    }
+
+    if (failures.length > 0) throw new PartialTransferLifecycleError(failures);
   }
 
   /** Human-readable one-liner for a reconciliation surface. */
