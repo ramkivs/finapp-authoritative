@@ -105,11 +105,34 @@ export interface BankStatementAdapter {
   normalize(record: BankStatementRecord, context: { provider: string; fileName: string; batchId: string }): NormalizedBankTransaction;
 }
 
+/**
+ * A duplicate whose EXCLUDED-from-fingerprint fields disagree with the row it
+ * collided with — specifically `direction` or `type`, the sign-bearing fields
+ * (WP-FB-DATA-06a, finding L-02).
+ *
+ * The row is still excluded as a duplicate. This record exists so the exclusion
+ * can be reported instead of being silent.
+ */
+export interface DivergentDuplicate {
+  rowNumber: number;
+  fingerprint: string;
+  narration: string;
+  amount: number;
+  incomingType: string;
+  existingType: string;
+  incomingDirection: string | null;
+  existingDirection: string | null;
+  message: string;
+}
+
 export interface CSVImportResult {
   batchId: string;
   totalDetected: number;
   validRows: Transaction[];
   duplicateCount: number;
+  /** Subset of `duplicateCount` that disagreed on direction/type (WP-FB-DATA-06a). */
+  divergentDuplicateCount: number;
+  divergentDuplicateRows: DivergentDuplicate[];
   ambiguousCount: number;
   invalidCount: number;
   detectedFormatId: string;

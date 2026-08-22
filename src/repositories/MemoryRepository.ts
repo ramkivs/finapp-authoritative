@@ -25,15 +25,14 @@ import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransactionSignService } from '../services/TransactionSignService';
 import { AssetIdentityService } from '../services/AssetIdentityService';
 import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
-import { Sha256Service } from '../services/Sha256Service';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { demoTransactions, demoAssets, demoLiabilities, demoSnapshots } from '../domain/demoFixtures';
 
-function generateFingerprint(tx: { account: string; date: string; amount: number; narration: string }): string {
-  const canonicalString = `${tx.account}|${tx.date}|${tx.amount}|${tx.narration.toLowerCase().trim()}`;
-  return Sha256Service.hash(canonicalString);
-}
+// WP-FB-DATA-06a: the module-local `generateFingerprint` copy that lived here
+// was DEAD CODE — defined but never called anywhere in this file. It was one of
+// three independent implementations of the same financial identity function.
+// The single authority is now `TransactionIdentityService`.
 
 export class MemoryTransactionRepository implements TransactionRepository {
   constructor(private parent: MemoryRepository) {}

@@ -77,10 +77,14 @@ export const ImportPage: React.FC = () => {
 
   const handleCommit = () => {
     if (!importResult) return;
-    const { appended, duplicates } = commitImportedRows(importResult.validRows);
+    const { appended, duplicates, divergentDuplicates } = commitImportedRows(importResult.validRows);
     setShowReview(false);
     setImportResult(null);
-    alert(`Algorithmic Set<fingerprint>: Appended ${appended} new rows. Automatically excluded ${duplicates} exact duplicates.`);
+    // WP-FB-DATA-06a: an excluded row may be reported, but never silently dropped.
+    const divergentNote = divergentDuplicates > 0
+      ? `\n\nNote: ${divergentDuplicates} of the excluded duplicates disagreed with the stored row on direction/type. Those differences were NOT applied.`
+      : '';
+    alert(`Algorithmic Set<fingerprint>: Appended ${appended} new rows. Automatically excluded ${duplicates} exact duplicates.${divergentNote}`);
   };
 
   const allIssues = [
@@ -209,6 +213,31 @@ export const ImportPage: React.FC = () => {
                     <AlertTriangle size={16} className="text-amber-600" />
                     <span><strong>{importResult.duplicateCount} Duplicates Flagged</strong> (Matching existing fingerprint Set, automatically skipped)</span>
                   </div>
+                  {importResult.divergentDuplicateCount > 0 && (
+                    <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950/40">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+                        <div>
+                          <p className="text-xs font-semibold text-amber-900 dark:text-amber-200">
+                            {importResult.divergentDuplicateCount} of those duplicates disagree with the stored row on direction / type
+                          </p>
+                          <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300">
+                            These rows hash to the same fingerprint as a transaction you already have, so they were excluded &mdash;
+                            but they describe the money as moving the other way. If these are corrections, they have <strong>not</strong> been applied.
+                          </p>
+                          <ul className="mt-1.5 space-y-0.5">
+                            {importResult.divergentDuplicateRows.map(d => (
+                              <li key={`${d.rowNumber}-${d.fingerprint}`} className="text-[11px] text-amber-800 dark:text-amber-300">
+                                Row {d.rowNumber}: {d.narration} &mdash; incoming{' '}
+                                <strong>{d.incomingDirection || d.incomingType}</strong> vs stored{' '}
+                                <strong>{d.existingDirection || d.existingType}</strong>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {importResult.ambiguousCount > 0 && (
                     <div className="flex items-center gap-2">
                       <AlertTriangle size={16} className="text-orange-500" />

@@ -4,7 +4,7 @@ import { DateNormalizer } from '../normalization/DateNormalizer';
 import { AmountNormalizer } from '../normalization/AmountNormalizer';
 import { NarrationNormalizer } from '../normalization/NarrationNormalizer';
 import { Transaction } from '../../../domain/types';
-import { ImportPipelineService } from '../../ImportPipelineService';
+import { TransactionIdentityService } from '../../TransactionIdentityService';
 
 export class GenericCsvAdapter implements BankStatementAdapter {
   readonly id = 'generic_csv';
@@ -149,17 +149,26 @@ export class GenericCsvAdapter implements BankStatementAdapter {
       narration: sanitizedNarration,
       account: accountVal,
       type,
+      // WP-FB-DATA-06a: the generic-CSV path was the ONLY construction site that
+      // omitted `direction`, while the bank-statement normalizer set it. Sign was
+      // therefore recovered by TransactionSignService's type fallback rather than
+      // being stated. The value assigned here is exactly what that fallback already
+      // derived, so no sign, balance or total changes — the row simply now states
+      // its direction instead of leaving it to be re-derived.
+      direction: type === 'Income' ? 'CREDIT' : 'DEBIT',
       category: record.rawRecord?.['category'] || 'GENERAL',
       amount,
       status: 'CLEARED',
       notes: `Imported from ${context.fileName}`,
+      origin: 'IMPORT',
+      recordedAt: TransactionIdentityService.recordedAt(),
       importBatchId: context.batchId,
       sourceProvider: context.provider,
       sourceFile: context.fileName,
       sourceRowNumber: record.sourceRowNumber
     };
 
-    candidate.fingerprint = ImportPipelineService.generateFingerprint({
+    candidate.fingerprint = TransactionIdentityService.fingerprint({
       account: candidate.account,
       date: candidate.date,
       amount: candidate.amount,

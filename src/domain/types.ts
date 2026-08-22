@@ -20,6 +20,16 @@ export type DateRangeFilter =
 
 export type TransactionStatus = 'CLEARED' | 'PENDING' | 'RECONCILED' | 'ESTIMATED';
 
+/**
+ * How a transaction entered the ledger (WP-FB-DATA-06a).
+ *
+ * Recorded explicitly at construction time. Never inferred from the presence of
+ * `importBatchId` or any other adjacent field — see
+ * `TransactionIdentityService.originOf`, which reports `'UNKNOWN'` for rows
+ * persisted before this field existed rather than guessing.
+ */
+export type TransactionOrigin = 'MANUAL' | 'IMPORT';
+
 export interface Transaction {
   id: string;
   dateStr: string;
@@ -69,6 +79,27 @@ export interface Transaction {
   status: TransactionStatus;
   notes?: string;
   transferId?: string;
+  /**
+   * How this row entered the ledger (WP-FB-DATA-06a).
+   *
+   * Absent on rows persisted before 06a. Absent is reported as `'UNKNOWN'` and
+   * is never back-filled by inference.
+   */
+  origin?: TransactionOrigin;
+  /**
+   * ISO-8601 wall-clock timestamp of when this row entered the ledger
+   * (WP-FB-DATA-06a).
+   *
+   * ⚠️ NOT a financial date. `date` is the value date — when the money moved.
+   * `recordedAt` is when the application learned about it. An imported row can
+   * have `date` in the past and `recordedAt` today; that gap is precisely what
+   * an audit trail needs and what the pre-06a model could not express
+   * (WP-FB-DATA-06 discovery §11: "import timestamp: ABSENT").
+   *
+   * Excluded from the fingerprint — two identical statement rows imported on
+   * different days are still the same economic event.
+   */
+  recordedAt?: string;
   importBatchId?: string;
   sourceProvider?: string;
   sourceFile?: string;

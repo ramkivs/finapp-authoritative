@@ -15,7 +15,8 @@ import {
   FinancialProfile
 } from '../domain/types';
 import { formatDisplayDate, DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
-import { Sha256Service } from '../services/Sha256Service';
+import { TransactionIdentityService } from '../services/TransactionIdentityService';
+import { TransactionFactory } from '../domain/TransactionFactory';
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { AccountAssetLinkService, LinkResult } from '../services/AccountAssetLinkService';
 import { TransactionSignService } from '../services/TransactionSignService';
@@ -70,7 +71,7 @@ interface LedgerState {
   addLiabilityWithMetadata: (params: { name: string; amount: number; type?: any; currency?: string }) => void;
   addPastSnapshot: (params: { dateStr: string; totalAssets: number; totalLiabilities: number; label?: string }) => void;
   captureSnapshot: (label?: string) => void;
-  commitImportedRows: (validRows?: Transaction[]) => { appended: number; duplicates: number };
+  commitImportedRows: (validRows?: Transaction[]) => { appended: number; duplicates: number; divergentDuplicates: number };
 
   // Account & Budget Actions (WP-18)
   addAccount: (params: {
@@ -127,11 +128,6 @@ interface LedgerState {
     customEnd?: string;
   }) => Transaction[];
   getNetWorth: () => number;
-}
-
-function generateFingerprint(tx: { account: string; date: string; amount: number; narration: string }): string {
-  const canonicalString = `${tx.account}|${tx.date}|${tx.amount}|${tx.narration.toLowerCase().trim()}`;
-  return Sha256Service.hash(canonicalString);
 }
 
 export const useCanonicalLedger = create<LedgerState>((set, get) => ({
@@ -193,78 +189,40 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   addIncome: (title, amount, account, category, notes) => {
-    const tx: Transaction = {
-      id: 'tx-inc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-      date: getEffectiveAsOfDate(),
-      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
+    // WP-FB-DATA-06a: constructed by the single TransactionFactory authority.
+    repository.transactions.append(TransactionFactory.createIncome({
       title,
-      narration: 'MANUAL/' + title.toUpperCase(),
+      amount,
       account,
       accountId: AccountResolutionService.resolveId(account, get().accounts),
-      direction: 'CREDIT',
-      type: 'Income',
       category,
-      amount,
-      status: 'CLEARED',
       notes
-    };
-    repository.transactions.append(tx);
+    }));
   },
 
   addExpense: (title, amount, account, category, notes) => {
-    const tx: Transaction = {
-      id: 'tx-exp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-      date: getEffectiveAsOfDate(),
-      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
+    repository.transactions.append(TransactionFactory.createExpense({
       title,
-      narration: 'MANUAL/' + title.toUpperCase(),
+      amount,
       account,
       accountId: AccountResolutionService.resolveId(account, get().accounts),
-      direction: 'DEBIT',
-      type: 'Expense',
       category,
-      amount,
-      status: 'CLEARED',
-      notes: notes || 'Manual expense entry'
-    };
-    repository.transactions.append(tx);
+      notes
+    }));
   },
 
   addTransfer: (source, destination, amount) => {
-    const transferId = 'tr-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-    const debitLeg: Transaction = {
-      id: transferId + '-debit',
-      transferId,
-      date: getEffectiveAsOfDate(),
-      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
-      title: 'Transfer to ' + destination,
-      narration: 'TRANSFER-DEBIT/' + transferId,
-      account: source,
-      accountId: AccountResolutionService.resolveId(source, get().accounts),
-      direction: 'DEBIT',
-      type: 'Transfer',
-      category: 'TRANSFER',
+    const accounts = get().accounts;
+    // Both legs come from one construction call. See TransactionFactory's scope
+    // note: this guarantees a transfer is CREATED balanced, not that it stays
+    // balanced — enforcing that is WP-FB-DATA-06b (finding L-01).
+    repository.transactions.appendMany(TransactionFactory.createTransferPair({
+      source,
+      destination,
       amount,
-      status: 'CLEARED',
-      notes: 'Bank-to-Bank Transfer (Debit)'
-    };
-    const creditLeg: Transaction = {
-      id: transferId + '-credit',
-      transferId,
-      date: getEffectiveAsOfDate(),
-      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
-      title: 'Transfer from ' + source,
-      narration: 'TRANSFER-CREDIT/' + transferId,
-      account: destination,
-      accountId: AccountResolutionService.resolveId(destination, get().accounts),
-      direction: 'CREDIT',
-      type: 'Transfer',
-      category: 'TRANSFER',
-      amount,
-      status: 'CLEARED',
-      notes: 'Bank-to-Bank Transfer (Credit)'
-    };
-    repository.transactions.appendMany([debitLeg, creditLeg]);
+      sourceAccountId: AccountResolutionService.resolveId(source, accounts),
+      destinationAccountId: AccountResolutionService.resolveId(destination, accounts)
+    }));
   },
 
   addAsset: (name, amount) => {
@@ -295,10 +253,16 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     const { transactions, accounts } = get();
     let appended = 0;
     let duplicates = 0;
+    let divergentDuplicates = 0;
 
-    const existingFingerprints = new Set(
-      transactions.map(tx => tx.fingerprint || generateFingerprint({ account: tx.account, date: tx.date, amount: tx.amount, narration: tx.narration }))
-    );
+    // WP-FB-DATA-06a: identity resolved through the single authority
+    // (TransactionIdentityService), which is now also what the import pipeline
+    // uses. Two dedup sites, one definition of "same row".
+    const existingByFingerprint = new Map<string, Transaction>();
+    for (const tx of transactions) {
+      const fp = TransactionIdentityService.fingerprintOf(tx);
+      if (!existingByFingerprint.has(fp)) existingByFingerprint.set(fp, tx);
+    }
 
     const candidateRows: Transaction[] = [];
 
@@ -306,13 +270,20 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       for (const row of validRows) {
         // Fingerprint is computed from the UNCHANGED legacy fields
         // (account|date|amount|narration). Introducing accountId does not and
-        // must not alter any fingerprint (WP-FB-DATA-04 §14).
-        const fp = row.fingerprint || generateFingerprint(row);
-        if (existingFingerprints.has(fp)) {
+        // must not alter any fingerprint (WP-FB-DATA-04 §14), and neither does
+        // introducing origin/recordedAt (WP-FB-DATA-06a).
+        const fp = TransactionIdentityService.fingerprintOf(row);
+        const collision = existingByFingerprint.get(fp);
+        if (collision) {
           duplicates++;
+          // L-02 disclosure: the row is still dropped, but a drop that discards a
+          // direction/type correction is now counted and reported, not silent.
+          if (TransactionIdentityService.isDivergentDuplicate(row, collision)) {
+            divergentDuplicates++;
+          }
           continue;
         }
-        existingFingerprints.add(fp);
+        existingByFingerprint.set(fp, row);
 
         // WP-FB-DATA-04: resolve the adapter's bank label to a registered
         // account. No deterministic match => explicitly unmapped (null), never
@@ -328,7 +299,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       }
     }
 
-    return { appended, duplicates };
+    return { appended, duplicates, divergentDuplicates };
   },
 
   addAccount: (params) => {

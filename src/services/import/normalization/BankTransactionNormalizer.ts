@@ -2,7 +2,7 @@ import { BankStatementRecord, NormalizedBankTransaction, ImportRowIssue } from '
 import { Transaction } from '../../../domain/types';
 import { DateNormalizer } from './DateNormalizer';
 import { NarrationNormalizer } from './NarrationNormalizer';
-import { ImportPipelineService } from '../../ImportPipelineService';
+import { TransactionIdentityService } from '../../TransactionIdentityService';
 
 export class BankTransactionNormalizer {
   /**
@@ -82,13 +82,17 @@ export class BankTransactionNormalizer {
       amount,
       status: 'CLEARED',
       notes: `Imported from ${context.fileName}`,
+      // WP-FB-DATA-06a: origin is recorded EXPLICITLY at the point the row is
+      // created, never inferred later from the presence of importBatchId.
+      origin: 'IMPORT',
+      recordedAt: TransactionIdentityService.recordedAt(),
       importBatchId: context.batchId,
       sourceProvider: context.provider,
       sourceFile: context.fileName,
       sourceRowNumber: record.sourceRowNumber
     };
 
-    candidate.fingerprint = ImportPipelineService.generateFingerprint({
+    candidate.fingerprint = TransactionIdentityService.fingerprint({
       account: candidate.account,
       date: candidate.date,
       amount: candidate.amount,

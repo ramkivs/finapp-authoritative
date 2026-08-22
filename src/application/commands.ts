@@ -21,6 +21,7 @@ import {
 } from '../domain/types';
 import { formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { AccountResolutionService } from '../services/AccountResolutionService';
+import { TransactionFactory } from '../domain/TransactionFactory';
 import { TransactionSignService } from '../services/TransactionSignService';
 
 const SAMPLE_DEFAULT_CSV = `Date,Title,Narration,Amount,Type,Account
@@ -30,77 +31,44 @@ const SAMPLE_DEFAULT_CSV = `Date,Title,Narration,Amount,Type,Account
 2026-08-01,Imported Payout 2,ACH/C/DIVIDEND-CREDIT-ROW-2,1000,INCOME,HDFC Bank (...4921)`;
 
 export class FinancialCommands {
+  /**
+   * WP-FB-DATA-06a: these three commands previously duplicated the store's
+   * transaction literals field-for-field, and had already drifted (the transfer
+   * id prefix here was `tr-cmd-` while the store used `tr-`). Both paths now
+   * construct through the single TransactionFactory authority, so the drift is
+   * gone and any future field is added in exactly one place.
+   */
   static recordIncome(title: string, amount: number, account: string, category: string, notes?: string): void {
-    repository.transactions.append({
-      id: 'tx-inc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-      date: getEffectiveAsOfDate(),
-      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
+    repository.transactions.append(TransactionFactory.createIncome({
       title,
-      narration: 'MANUAL/' + title.toUpperCase(),
+      amount,
       account,
       accountId: AccountResolutionService.resolveId(account, repository.accounts.findAllSync()),
-      direction: 'CREDIT',
-      type: 'Income',
       category,
-      amount,
-      status: 'CLEARED',
       notes
-    });
+    }));
   }
 
   static recordExpense(title: string, amount: number, account: string, category: string, notes?: string): void {
-    repository.transactions.append({
-      id: 'tx-exp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-      date: getEffectiveAsOfDate(),
-      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
+    repository.transactions.append(TransactionFactory.createExpense({
       title,
-      narration: 'MANUAL/' + title.toUpperCase(),
+      amount,
       account,
       accountId: AccountResolutionService.resolveId(account, repository.accounts.findAllSync()),
-      direction: 'DEBIT',
-      type: 'Expense',
       category,
-      amount,
-      status: 'CLEARED',
-      notes: notes || 'Manual expense entry'
-    });
+      notes
+    }));
   }
 
   static recordTransfer(source: string, destination: string, amount: number): void {
-    const trId = 'tr-cmd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-    const debitTx: Transaction = {
-      id: trId + '-debit',
-      transferId: trId,
-      date: getEffectiveAsOfDate(),
-      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
-      title: 'Transfer to ' + destination,
-      narration: 'TRANSFER-DEBIT/' + trId,
-      account: source,
-      accountId: AccountResolutionService.resolveId(source, repository.accounts.findAllSync()),
-      direction: 'DEBIT',
-      type: 'Transfer',
-      category: 'TRANSFER',
+    const accounts = repository.accounts.findAllSync();
+    repository.transactions.appendMany(TransactionFactory.createTransferPair({
+      source,
+      destination,
       amount,
-      status: 'CLEARED',
-      notes: 'Bank-to-Bank Transfer (Debit)'
-    };
-    const creditTx: Transaction = {
-      id: trId + '-credit',
-      transferId: trId,
-      date: getEffectiveAsOfDate(),
-      dateStr: formatDisplayDate(getEffectiveAsOfDate()),
-      title: 'Transfer from ' + source,
-      narration: 'TRANSFER-CREDIT/' + trId,
-      account: destination,
-      accountId: AccountResolutionService.resolveId(destination, repository.accounts.findAllSync()),
-      direction: 'CREDIT',
-      type: 'Transfer',
-      category: 'TRANSFER',
-      amount,
-      status: 'CLEARED',
-      notes: 'Bank-to-Bank Transfer (Credit)'
-    };
-    repository.transactions.appendMany([debitTx, creditTx]);
+      sourceAccountId: AccountResolutionService.resolveId(source, accounts),
+      destinationAccountId: AccountResolutionService.resolveId(destination, accounts)
+    }));
   }
 
   static recordAsset(name: string, amount: number): void {
