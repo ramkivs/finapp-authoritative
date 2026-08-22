@@ -244,6 +244,128 @@ export class TransactionAmendmentService {
   }
 
   /**
+   * Target-level refusal, shared by `plan()` and `singleRowCorrectability()`
+   * so a UI's enabled/disabled state can never disagree with what the write
+   * path actually does (WP-FB-DATA-06c-2a).
+   *
+   * This is the same discipline `ImportBatchRollbackService.listBatches`
+   * applies by computing `rollbackEligible` from `plan()` rather than
+   * re-deriving the rules: two implementations of one rule is not one rule.
+   */
+  private static targetRefusal(
+    targetId: string,
+    byId: Map<string, Transaction>
+  ): { code: AmendmentRefusalCode; reason: string } | null {
+    const original = byId.get(targetId);
+    if (!original) {
+      return {
+        code: 'TARGET_NOT_FOUND',
+        reason: `no transaction with id "${targetId}" exists in the ledger`
+      };
+    }
+
+    // ── Q1 = a ──────────────────────────────────────────────────────────────
+    // An excluded row contributes nothing to derived money. Superseding it
+    // would create a LIVE correction carrying its amount, putting money back
+    // that the user had already taken out. Measured at the gate: a
+    // rolled-back ₹1,000 row amended to ₹4,000 resurrected ₹4,000.
+    if (LedgerExclusionService.isExcluded(original)) {
+      const reason = LedgerExclusionService.reasonOf(original);
+      const detail = reason === 'SUPERSEDED'
+        ? 'it has already been superseded — amend the current version of this transaction instead'
+        : reason === 'IMPORT_ROLLBACK'
+          ? 'it was rolled back with its import batch — amending it would put its money back into your balances'
+          : 'it is excluded from balances and reports for an unrecognised reason';
+      return {
+        code: 'TARGET_ALREADY_EXCLUDED',
+        reason: `transaction "${targetId}" cannot be amended: ${detail}`
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * D8 — WHOLE-TRANSFER AMENDMENT. Shared by `plan()` and
+   * `singleRowCorrectability()`.
+   *
+   * A transfer is one economic operation carried by two rows. Superseding one
+   * leg excludes it and leaves the other counting, which the 06c decision gate
+   * measured as ₹2,000 leaving the system with integrity reporting clean.
+   */
+  private static transferWholenessRefusal(
+    targetIds: string[],
+    byId: Map<string, Transaction>,
+    txs: Transaction[]
+  ): { refusal: { code: AmendmentRefusalCode; reason: string } | null; touched: string[] } {
+    const targetSet = new Set(targetIds);
+    const touched: string[] = [];
+
+    for (const targetId of targetIds) {
+      const original = byId.get(targetId);
+      if (!original) continue;
+      const transferId = original.transferId;
+      if (!transferId || touched.includes(transferId)) continue;
+      touched.push(transferId);
+
+      const legs = txs.filter(t => t.transferId === transferId);
+      const untargeted = legs.filter(l => !targetSet.has(l.id));
+      if (untargeted.length > 0) {
+        return {
+          touched,
+          refusal: {
+            code: 'PARTIAL_TRANSFER_AMENDMENT',
+            reason:
+              `amending "${targetId}" would supersede only part of transfer ${transferId} ` +
+              `(${untargeted.length} leg(s) would keep counting the old figures), creating or ` +
+              `destroying money. A transfer must be amended whole (Decision D8)`
+          }
+        };
+      }
+    }
+    return { refusal: null, touched };
+  }
+
+  /**
+   * MAY THIS ONE ROW BE CORRECTED ON ITS OWN? (WP-FB-DATA-06c-2a)
+   *
+   * The question a correction UI actually asks, once per rendered ledger row.
+   * Pure, allocates no ids, reads no clock — safe to call on every render.
+   *
+   * ⚠️ Answers for a SINGLE-ROW correction specifically (Decision Q-UI-2 = a).
+   * A transfer leg is therefore never correctable on its own: 06c-2a ships
+   * single-row corrections only, and the whole-transfer amendment the API does
+   * support (both legs in one `supersede` call) has no UI in this package. The
+   * row is reported as blocked with an explanation rather than silently
+   * omitted, so the user learns the rule instead of wondering why the control
+   * is missing.
+   */
+  static singleRowCorrectability(
+    targetId: string,
+    txs: Transaction[]
+  ): { correctable: boolean; code?: AmendmentRefusalCode; reason?: string } {
+    const byId = new Map(txs.map(t => [t.id, t]));
+
+    const target = this.targetRefusal(targetId, byId);
+    if (target) return { correctable: false, ...target };
+
+    const original = byId.get(targetId) as Transaction;
+    if (original.transferId) {
+      const legs = txs.filter(t => t.transferId === original.transferId);
+      return {
+        correctable: false,
+        code: 'PARTIAL_TRANSFER_AMENDMENT',
+        reason:
+          `This is one leg of a transfer (${legs.length} leg(s)). A transfer moves one amount ` +
+          `between two accounts, so correcting a single leg would create or destroy money. ` +
+          `Transfers must be corrected as a whole, which this version cannot yet do.`
+      };
+    }
+
+    return { correctable: true };
+  }
+
+  /**
    * Decides whether the amendment may proceed. Pure and deterministic — mints
    * no ids and reads no clock, so it can be called freely by a UI to decide
    * whether to enable a control, exactly as `ImportBatchRollbackService.plan`
@@ -281,35 +403,13 @@ export class TransactionAmendmentService {
       }
       targetIds.push(targetId);
 
-      const original = byId.get(targetId);
-      if (!original) {
-        return {
-          ...base,
-          targetIds,
-          refusalCode: 'TARGET_NOT_FOUND',
-          refusalReason: `no transaction with id "${targetId}" exists in the ledger`
-        };
+      // Shared with singleRowCorrectability() so a UI control and the write
+      // path can never disagree about eligibility.
+      const refusal = this.targetRefusal(targetId, byId);
+      if (refusal) {
+        return { ...base, targetIds, refusalCode: refusal.code, refusalReason: refusal.reason };
       }
-
-      // ── Q1 = a ────────────────────────────────────────────────────────────
-      // An excluded row contributes nothing to derived money. Superseding it
-      // would create a LIVE correction carrying its amount, putting money back
-      // that the user had already taken out. Measured at the gate: a
-      // rolled-back ₹1,000 row amended to ₹4,000 resurrected ₹4,000.
-      if (LedgerExclusionService.isExcluded(original)) {
-        const reason = LedgerExclusionService.reasonOf(original);
-        const detail = reason === 'SUPERSEDED'
-          ? 'it has already been superseded — amend the current version of this transaction instead'
-          : reason === 'IMPORT_ROLLBACK'
-            ? 'it was rolled back with its import batch — amending it would put its money back into your balances'
-            : 'it is excluded from balances and reports for an unrecognised reason';
-        return {
-          ...base,
-          targetIds,
-          refusalCode: 'TARGET_ALREADY_EXCLUDED',
-          refusalReason: `transaction "${targetId}" cannot be amended: ${detail}`
-        };
-      }
+      const original = byId.get(targetId) as Transaction;
 
       const changes = (req?.changes ?? {}) as Record<string, unknown>;
       const keys = Object.keys(changes);
@@ -342,35 +442,19 @@ export class TransactionAmendmentService {
       }
     }
 
-    // ── D8 — WHOLE-TRANSFER AMENDMENT ────────────────────────────────────────
-    // A transfer is one economic operation carried by two rows. Superseding one
-    // leg excludes it and leaves the other counting, which the 06c decision
-    // gate measured as ₹2,000 leaving the system with integrity reporting
-    // clean. The caller must therefore amend BOTH legs in the SAME request; a
-    // half request is refused here, and `assertWholeTransferLifecycle` refuses
-    // it again at the repository as defence in depth.
-    const targetSet = new Set(targetIds);
-    const touchedTransferIds: string[] = [];
-    for (const targetId of targetIds) {
-      const original = byId.get(targetId) as Transaction;
-      const transferId = original.transferId;
-      if (!transferId || touchedTransferIds.includes(transferId)) continue;
-      touchedTransferIds.push(transferId);
-
-      const legs = txs.filter(t => t.transferId === transferId);
-      const untargeted = legs.filter(l => !targetSet.has(l.id));
-      if (untargeted.length > 0) {
-        return {
-          ...base,
-          targetIds,
-          refusalCode: 'PARTIAL_TRANSFER_AMENDMENT',
-          refusalReason:
-            `amending "${targetId}" would supersede only part of transfer ${transferId} ` +
-            `(${untargeted.length} leg(s) would keep counting the old figures), creating or ` +
-            `destroying money. A transfer must be amended whole (Decision D8)`
-        };
-      }
+    // D8 — whole-transfer amendment. Shared with singleRowCorrectability().
+    // `assertWholeTransferLifecycle` refuses it again at the repository, as
+    // defence in depth.
+    const wholeness = this.transferWholenessRefusal(targetIds, byId, txs);
+    if (wholeness.refusal) {
+      return {
+        ...base,
+        targetIds,
+        refusalCode: wholeness.refusal.code,
+        refusalReason: wholeness.refusal.reason
+      };
     }
+    const touchedTransferIds = wholeness.touched;
 
     return { status: 'ADMISSIBLE', targetIds, touchedTransferIds, requests, refusalCode: undefined, refusalReason: undefined };
   }

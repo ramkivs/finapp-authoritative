@@ -284,6 +284,21 @@ export const ImportPage: React.FC = () => {
                       {batch.importedAt && <> &middot; imported {batch.importedAt.slice(0, 10)}</>}
                       {batch.excludedCount > 0 && <> &middot; {batch.excludedCount} excluded</>}
                     </div>
+                    {/* WP-FB-DATA-06c-2a / Q-UI-3(iii).
+                        Q1b = c keeps a correction in this batch for provenance but excludes it
+                        from rollback targeting, so rolling the batch back does NOT undo it.
+                        That was previously disclosed only inside a refusal string, which
+                        disappears the moment the batch becomes eligible again. It is now a
+                        standing statement of fact on the batch itself. */}
+                    {batch.correctionCount > 0 && (
+                      <div
+                        data-batch-corrections={batch.correctionCount}
+                        className="mt-1 text-[11px] text-cyan-700 dark:text-cyan-300"
+                      >
+                        {batch.correctionCount} corrected row{batch.correctionCount === 1 ? '' : 's'} —
+                        {' '}your own corrected figures, which a rollback of this import will not undo.
+                      </div>
+                    )}
                     {!batch.rollbackEligible && batch.rollbackBlockedReason && batch.status !== 'ROLLED_BACK' && (
                       <div
                         data-batch-blocked={batch.rollbackBlockedCode}

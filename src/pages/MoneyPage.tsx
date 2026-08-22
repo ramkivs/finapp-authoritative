@@ -13,6 +13,9 @@ import { CurrencyValue } from '../components/CurrencyValue';
 import { BudgetWorkspace } from '../components/money/BudgetWorkspace';
 import { AccountsWorkspace } from '../components/money/AccountsWorkspace';
 import { MoneyInsightsWorkspace } from '../components/money/MoneyInsightsWorkspace';
+import { CorrectTransactionModal } from '../components/money/CorrectTransactionModal';
+import { TransactionAmendmentService } from '../services/TransactionAmendmentService';
+import { Transaction } from '../domain/types';
 import {
   Search,
   Download,
@@ -71,6 +74,30 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
   // figures REMAIN VISIBLE here. DATA-02 forbids silently hiding a record, so
   // the Ledger deliberately does NOT filter them - it labels them instead.
   const excludedRows = LedgerExclusionService.summarise(transactions);
+
+  /* WP-FB-DATA-06c-2a — correction UI state.
+     `correctionNotice` follows the 06c-6a rollback-notice pattern: the outcome
+     is rendered inline and never swallowed (the F-06b-2 lesson). */
+  const [correctTarget, setCorrectTarget] = useState<Transaction | null>(null);
+  const [correctionNotice, setCorrectionNotice] = useState<
+    { kind: 'success' | 'error'; text: string } | null
+  >(null);
+
+  /* Original -> correction resolution.
+     Decision D10 = C made the pointer BACKWARD, so a correction knows its
+     original but not vice versa. Building the reverse index ONCE per render
+     keeps the ledger O(n); resolving it per row would be O(n^2). */
+  const correctionByOriginalId = React.useMemo(() => {
+    const m = new Map<string, Transaction>();
+    for (const t of transactions) {
+      if (TransactionAmendmentService.isCorrection(t)) m.set(t.supersedes as string, t);
+    }
+    return m;
+  }, [transactions]);
+  const txById = React.useMemo(
+    () => new Map(transactions.map(t => [t.id, t])),
+    [transactions]
+  );
 
   const handleSearchChange = (val: string) => {
     setSearchInput(val);
@@ -744,6 +771,22 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                 {/* WP-FB-DATA-06b / Decision T1-b: transfers that no longer balance
                     across accounts. Status is DERIVED from the legs on every render,
                     so it cannot go stale and re-registering the account clears it. */}
+                {correctionNotice && (
+                  <div
+                    id="correction-notice"
+                    data-correction-kind={correctionNotice.kind}
+                    className={`p-4 border-b text-xs ${
+                      correctionNotice.kind === 'success'
+                        ? 'border-green-800/40 bg-green-950/25 text-green-200'
+                        : 'border-red-800/40 bg-red-950/25 text-red-200'
+                    }`}
+                  >
+                    <strong>
+                      {correctionNotice.kind === 'success' ? 'Correction recorded.' : 'Correction refused.'}
+                    </strong>{' '}
+                    {correctionNotice.text}
+                  </div>
+                )}
                 {excludedRows.length > 0 && (
                   <div id="ledger-excluded-notice" className="p-4 border-b border-slate-700/60 bg-slate-800/40">
                     <p className="text-xs font-bold text-slate-200 uppercase tracking-wider">
@@ -809,6 +852,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                         <th className="py-2.5 px-4">Account</th>
                         <th className="py-2.5 px-4">Type</th>
                         <th className="py-2.5 px-4 text-right">Amount (₹)</th>
+                        <th className="py-2.5 px-4 text-right">Correct</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#21262D]/60 text-xs">
@@ -825,18 +869,77 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                           >
                             <td className="py-2.5 px-4 font-medium text-[#F0F6FC]">
                               {row.dateStr}
-                              {LedgerExclusionService.isExcluded(row) && (
-                                <span
-                                  className="ml-1.5 px-1.5 py-0.5 rounded bg-slate-700/60 text-slate-300 text-[9px] font-bold border border-slate-600/50 align-middle"
-                                  title="Still recorded, but excluded from every balance and report."
-                                >
-                                  EXCLUDED
-                                </span>
-                              )}
+                              {/* WP-FB-DATA-06c-2a / Q-UI-3(i). Before this, a corrected row and a
+                                  rolled-back row were visually identical — both just said EXCLUDED.
+                                  The reason has been derivable since 06c-1; it was simply not rendered. */}
+                              {LedgerExclusionService.isExcluded(row) && (() => {
+                                const reason = LedgerExclusionService.reasonOf(row);
+                                const badge = reason === 'SUPERSEDED' ? 'SUPERSEDED'
+                                  : reason === 'IMPORT_ROLLBACK' ? 'ROLLED BACK'
+                                    : 'EXCLUDED';
+                                const why = reason === 'SUPERSEDED'
+                                  ? 'Corrected. A newer version of this transaction is counted instead. Still recorded, nothing deleted.'
+                                  : reason === 'IMPORT_ROLLBACK'
+                                    ? 'Rolled back with its import batch. Still recorded, not counted.'
+                                    : 'Excluded from every balance and report for an unrecognised reason. Still recorded.';
+                                return (
+                                  <span
+                                    data-exclusion-reason={reason}
+                                    className="ml-1.5 px-1.5 py-0.5 rounded bg-slate-700/60 text-slate-300 text-[9px] font-bold border border-slate-600/50 align-middle"
+                                    title={why}
+                                  >
+                                    {badge}
+                                  </span>
+                                );
+                              })()}
                             </td>
                             <td className="py-2.5 px-4">
                               <div className="font-bold text-[#F0F6FC]">{row.title}</div>
                               {row.notes && <div className="text-[10px] text-[#6E7681]">{row.notes}</div>}
+                              {/* WP-FB-DATA-06c-2a — supersession disclosure, both directions. */}
+                              {(() => {
+                                const correction = correctionByOriginalId.get(row.id);
+                                if (!correction) return null;
+                                return (
+                                  <div
+                                    data-superseded-by={correction.id}
+                                    className="text-[10px] text-slate-400 mt-0.5"
+                                    title="This record was corrected. The corrected version is counted instead."
+                                  >
+                                    Corrected — replaced by{' '}
+                                    <span className="font-semibold">₹{correction.amount.toLocaleString('en-IN')}</span>
+                                    {' '}version below
+                                  </div>
+                                );
+                              })()}
+                              {TransactionAmendmentService.isCorrection(row) && (() => {
+                                const original = txById.get(row.supersedes as string);
+                                return (
+                                  <div
+                                    data-supersedes={row.supersedes}
+                                    className="text-[10px] text-cyan-300/80 mt-0.5"
+                                    title="This is a corrected version. The record it replaces is still in the ledger, marked SUPERSEDED."
+                                  >
+                                    Corrects{' '}
+                                    {original
+                                      ? <>the earlier ₹{original.amount.toLocaleString('en-IN')} record</>
+                                      : <>an earlier record</>}
+                                  </div>
+                                );
+                              })()}
+                              {/* Q-UI-3(ii) — truthful for manual AND imported corrections alike.
+                                  `provenanceDiverged` is set unconditionally, so a label like
+                                  "differs from source statement" would be wrong on a manual row
+                                  that never had a source. */}
+                              {row.provenanceDiverged && (
+                                <div
+                                  data-provenance-diverged="true"
+                                  className="text-[10px] text-amber-300/80 mt-0.5"
+                                  title="The figures on this record were entered as a correction, not by the process that originally recorded it."
+                                >
+                                  Edited after recording
+                                </div>
+                              )}
                             </td>
                             <td className="py-2.5 px-4">
                               <code className="text-[11px] text-[#8B949E] bg-[#0D1117] px-1.5 py-0.5 rounded border border-[#21262D]">{row.narration}</code>
@@ -876,6 +979,31 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                             >
                               {TransactionSignService.signedAmount(row) > 0 ? '+' : TransactionSignService.signedAmount(row) < 0 ? '-' : ''}<CurrencyValue value={row.amount} />
                             </td>
+                            {/* WP-FB-DATA-06c-2a — correction entry point.
+                                Eligibility comes from the SERVICE, so a disabled control and an
+                                actual refusal can never disagree. A blocked row keeps a visible,
+                                explained control rather than none at all: a missing button teaches
+                                the user nothing, a disabled one with a reason teaches them the rule. */}
+                            <td className="py-2.5 px-4 text-right">
+                              {(() => {
+                                const e = TransactionAmendmentService.singleRowCorrectability(row.id, transactions);
+                                return (
+                                  <button
+                                    type="button"
+                                    data-correct-transaction={row.id}
+                                    data-correct-blocked-code={e.correctable ? undefined : e.code}
+                                    onClick={() => { setCorrectionNotice(null); setCorrectTarget(row); }}
+                                    disabled={!e.correctable}
+                                    title={e.correctable
+                                      ? 'Record a corrected version of this transaction'
+                                      : e.reason}
+                                    className="px-2 py-1 rounded-lg border border-[#21262D] text-[10px] font-bold text-[#8B949E] hover:text-[#F0F6FC] hover:bg-[#1F2937]/60 disabled:opacity-30 disabled:cursor-not-allowed"
+                                  >
+                                    Correct
+                                  </button>
+                                );
+                              })()}
+                            </td>
                           </tr>
                         );
                       })}
@@ -902,6 +1030,24 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
           <MoneyInsightsWorkspace />
         )}
       </div>
+
+      {/* WP-FB-DATA-06c-2a — correction surface. */}
+      <CorrectTransactionModal
+        isOpen={correctTarget !== null}
+        transaction={correctTarget}
+        onClose={() => setCorrectTarget(null)}
+        onSuccess={(correctionId) => {
+          const original = correctTarget;
+          setCorrectionNotice({
+            kind: 'success',
+            text:
+              `A corrected version of "${original?.title ?? 'the transaction'}" was recorded and is ` +
+              `now counted. The original is kept in the ledger, marked SUPERSEDED, and is no longer ` +
+              `counted in any balance or report. Nothing was deleted.`
+          });
+          void correctionId;
+        }}
+      />
     </div>
   );
 };
