@@ -1,4 +1,5 @@
 /// <reference types="vitest/globals" />
+/// <reference types="vite/client" />
 
 // Registers @testing-library/jest-dom's custom matchers (toBeInTheDocument,
 // toHaveAttribute, ...) on Vitest's Assertion interface for the TypeScript

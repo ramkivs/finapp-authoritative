@@ -1088,41 +1088,66 @@ export class MemoryRepository implements FinancialRepositoryPort {
     return this.transactionsData.filter(tx => tx.accountId === accountId).length;
   }
 
+  /**
+   * WP-FB-DATA-09 (3) — demo data now goes through the ONE write boundary.
+   *
+   * Previously this assigned all nine collections directly and then called
+   * `IndexedDBStorageService.saveAll`, bypassing `write()` entirely. That
+   * bypass had two measured consequences at the 09 discovery gate:
+   *
+   *   1. `demoAssets` carry no `id`, and the `assets` store is keyed on `id`.
+   *      Nothing assigned one, because the repository write path that normally
+   *      does so was never entered. The resulting `DataError` tore the save in
+   *      half and committed a ledger state that never existed in memory.
+   *   2. There was no rollback of any kind. A persistence failure left memory
+   *      holding demo data while storage still held the user's real ledger.
+   *
+   * Routing through `write()` fixes both by construction: identity is assigned
+   * before the mutation, and a failed save reverts this operation's delta and
+   * reconciles storage, exactly as every other repository mutation does.
+   *
+   * Demo amounts and semantics are untouched — only identity is added.
+   */
   async loadDemoData(): Promise<void> {
-    this.transactionsData = [...demoTransactions];
-    this.assetsData = [...demoAssets];
-    this.liabilitiesData = [...demoLiabilities];
-    this.snapshotsData = [...demoSnapshots];
-    this.accountsData = [];
-    this.budgetsData = [];
-    this.policiesData = [];
-    this.goalsData = [];
-    this.profileData = null;
-    this.syncStore();
-    await IndexedDBStorageService.saveAll({
-      transactions: this.transactionsData,
-      assets: this.assetsData,
-      liabilities: this.liabilitiesData,
-      snapshots: this.snapshotsData,
-      accounts: this.accountsData,
-      budgets: this.budgetsData,
-      policies: this.policiesData,
-      goals: this.goalsData,
-      profile: this.profileData
+    return this.write(() => {
+      // The same authority the load migration uses (see `applyMigrations`), so
+      // demo assets acquire real `ast-` ids without inventing a second scheme.
+      const identifiedAssets = AssetIdentityService.migrate(
+        demoAssets.map(a => ({ ...a }))
+      ).assets;
+
+      this.transactionsData = [...demoTransactions];
+      this.assetsData = identifiedAssets;
+      this.liabilitiesData = [...demoLiabilities];
+      this.snapshotsData = [...demoSnapshots];
+      this.accountsData = [];
+      this.budgetsData = [];
+      this.policiesData = [];
+      this.goalsData = [];
+      this.profileData = null;
     });
   }
 
+  /**
+   * WP-FB-DATA-09 (4) — clearing goes through the same boundary.
+   *
+   * `write()` persists the live ledger with `clear()` + `put()` per store and
+   * re-stamps `hasLoadedOnce`, which is byte-for-byte what `clearAll` did, so
+   * the clearing semantics are preserved exactly. What changes is that the
+   * operation is now leased, atomic, and rolled back on failure instead of
+   * leaving memory empty while storage still holds the data.
+   */
   async clearLocalData(): Promise<void> {
-    this.transactionsData = [];
-    this.assetsData = [];
-    this.liabilitiesData = [];
-    this.snapshotsData = [];
-    this.accountsData = [];
-    this.budgetsData = [];
-    this.policiesData = [];
-    this.goalsData = [];
-    this.profileData = null;
-    this.syncStore();
-    await IndexedDBStorageService.clearAll();
+    return this.write(() => {
+      this.transactionsData = [];
+      this.assetsData = [];
+      this.liabilitiesData = [];
+      this.snapshotsData = [];
+      this.accountsData = [];
+      this.budgetsData = [];
+      this.policiesData = [];
+      this.goalsData = [];
+      this.profileData = null;
+    });
   }
 }

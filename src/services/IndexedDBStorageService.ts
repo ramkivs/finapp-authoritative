@@ -98,6 +98,57 @@ export class IndexedDBStorageService {
   public static simulateFailureOnce: boolean = false;
   /** WP-FB-DATA-06c-READFAIL: injects a genuine read-path failure, for tests. */
   public static simulateReadFailureOnce: boolean = false;
+  /**
+   * WP-FB-DATA-09: injects a failure PART-WAY THROUGH queuing the multi-store
+   * save, reproducing the exact condition that produced the historical torn
+   * write. Exists so the abort path is provable rather than assumed.
+   */
+  public static simulateQueueFailureOnce: boolean = false;
+
+  /**
+   * WP-FB-DATA-09 — the keyPath every object store is created with.
+   *
+   * Mirrors `createObjectStore` in `getDB` exactly. Kept adjacent to the
+   * validation that consumes it so the two cannot drift apart silently.
+   */
+  private static readonly STORE_KEY_PATHS: Readonly<Record<string, string>> = {
+    transactions: 'id',
+    assets: 'id',
+    liabilities: 'id',
+    snapshots: 'id',
+    accounts: 'id',
+    budgets: 'id',
+    policies: 'id',
+    goals: 'id',
+    profile: 'id',
+    meta: 'key'
+  };
+
+  /**
+   * WP-FB-DATA-09 — refuse a save whose records cannot be keyed.
+   *
+   * Throws before ANY destructive operation is queued. The message names the
+   * store and the offending index so the failure is diagnosable from the
+   * disclosure alone, and never contains a financial amount.
+   */
+  private static assertRecordsSatisfyKeyPaths(plan: Array<[string, any[]]>): void {
+    for (const [storeName, items] of plan) {
+      const keyPath = this.STORE_KEY_PATHS[storeName];
+      if (!keyPath || !Array.isArray(items)) continue;
+      for (let i = 0; i < items.length; i++) {
+        const record = items[i];
+        const key = record == null ? undefined : (record as any)[keyPath];
+        if (key === undefined || key === null || key === '') {
+          throw new Error(
+            `Refusing to persist: record at index ${i} destined for the "${storeName}" store ` +
+            `has no "${keyPath}" value. Saving it would fail part-way through the write and ` +
+            `leave stored data inconsistent, so the whole operation was refused and nothing ` +
+            `was changed.`
+          );
+        }
+      }
+    }
+  }
 
   /**
    * WP-FB-DATA-06c-READFAIL — set when a `loadAll` genuinely failed.
@@ -505,6 +556,38 @@ export class IndexedDBStorageService {
       const goals = state.goals || [];
       const profile = state.profile ? [state.profile] : [];
 
+      /* WP-FB-DATA-09 (2) — PRE-QUEUE KEYPATH VALIDATION.
+       *
+       * Every object store is created with an explicit keyPath (`id`, or `key`
+       * for `meta`). `IDBObjectStore.put` throws `DataError` SYNCHRONOUSLY when
+       * a record does not carry that key path. Because the whole save is
+       * queued onto one transaction inside a loop, that synchronous throw used
+       * to escape mid-loop, leaving earlier stores already cleared and
+       * repopulated — a torn write (measured at the 09 discovery gate:
+       * `loadDemoData` committed 16 demo transactions while the user's real
+       * accounts, goals and profile survived, producing a ledger state that
+       * never existed in memory).
+       *
+       * Validating BEFORE anything is queued turns that class of fault into a
+       * clean, total refusal: nothing is cleared, nothing is put, storage is
+       * untouched, and the caller receives a named error it can disclose.
+       *
+       * This runs ahead of the environment branch deliberately, so the node
+       * fallback obeys the identical contract — a malformed record must never
+       * be accepted anywhere.
+       */
+      this.assertRecordsSatisfyKeyPaths([
+        ['transactions', state.transactions],
+        ['assets', state.assets],
+        ['liabilities', state.liabilities],
+        ['snapshots', state.snapshots],
+        ['accounts', accounts],
+        ['budgets', budgets],
+        ['policies', policies],
+        ['goals', goals],
+        ['profile', profile]
+      ]);
+
       if (typeof window === 'undefined' || !window.indexedDB) {
         this.nodeFallbackStore = {
           transactions: [...state.transactions],
@@ -527,41 +610,75 @@ export class IndexedDBStorageService {
         const storeNames = ['transactions', 'assets', 'liabilities', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
           .filter(name => db!.objectStoreNames.contains(name));
 
-        const tx = db.transaction(storeNames, 'readwrite');
+        const activeTx = db.transaction(storeNames, 'readwrite');
+
+        /* WP-FB-DATA-09 (1) — the transaction outcome is observed BEFORE any
+         * work is queued, so an abort we trigger ourselves is always awaited
+         * rather than surfacing later as an unhandled rejection. */
+        const settled = new Promise<void>((resolve, reject) => {
+          activeTx.oncomplete = () => resolve();
+          activeTx.onerror = () => reject(activeTx.error || new Error('IndexedDB transaction failed'));
+          activeTx.onabort = () => reject(activeTx.error || new Error('IndexedDB transaction aborted'));
+        });
 
         const clearAndPut = (name: string, items: any[]) => {
           if (db!.objectStoreNames.contains(name)) {
-            const store = tx.objectStore(name);
+            const store = activeTx.objectStore(name);
             store.clear();
             items.forEach(item => store.put(item));
           }
         };
 
-        clearAndPut('transactions', state.transactions);
-        clearAndPut('assets', state.assets);
-        clearAndPut('liabilities', state.liabilities);
-        clearAndPut('snapshots', state.snapshots);
-        clearAndPut('accounts', accounts);
-        clearAndPut('budgets', budgets);
-        clearAndPut('policies', policies);
-        clearAndPut('goals', goals);
-        clearAndPut('profile', profile);
+        try {
+          const writePlan: Array<[string, any[]]> = [
+            ['transactions', state.transactions],
+            ['assets', state.assets],
+            ['liabilities', state.liabilities],
+            ['snapshots', state.snapshots],
+            ['accounts', accounts],
+            ['budgets', budgets],
+            ['policies', policies],
+            ['goals', goals],
+            ['profile', profile]
+          ];
 
-        if (db.objectStoreNames.contains('meta')) {
-          const metaStore = tx.objectStore('meta');
-          metaStore.put({ key: 'hasLoadedOnce', value: true });
+          for (let i = 0; i < writePlan.length; i++) {
+            /* Test seam (mirrors `simulateFailureOnce`): fault injection AFTER
+             * the first store is queued, which is precisely the historical
+             * torn-write condition. Without a seam the abort path below could
+             * only ever be exercised by shipping a malformed record, which the
+             * validation above now prevents. */
+            if (this.simulateQueueFailureOnce && i === 1) {
+              this.simulateQueueFailureOnce = false;
+              throw new Error('Simulated IndexedDB mid-queue failure');
+            }
+            const [name, items] = writePlan[i];
+            clearAndPut(name, items);
+          }
+
+          if (db.objectStoreNames.contains('meta')) {
+            const metaStore = activeTx.objectStore('meta');
+            metaStore.put({ key: 'hasLoadedOnce', value: true });
+          }
+        } catch (queueError) {
+          /* WP-FB-DATA-09 (1) — ABORT, DO NOT MERELY CLOSE.
+           *
+           * `IDBDatabase.close()` does NOT cancel work already queued on a live
+           * transaction; per spec it waits for outstanding transactions to
+           * COMPLETE. The previous implementation only closed the connection,
+           * so everything queued before the fault was committed anyway. That is
+           * exactly how the torn write reached storage.
+           *
+           * Aborting discards every queued operation atomically, then we wait
+           * for the abort to actually land before rethrowing, so the caller can
+           * rely on storage being untouched the moment this promise rejects.
+           */
+          try { activeTx.abort(); } catch { /* already settled — nothing queued survives */ }
+          await settled.catch(() => { /* the abort rejection is expected here */ });
+          throw queueError;
         }
 
-        await new Promise<void>((resolve, reject) => {
-          tx.oncomplete = () => {
-            db!.close();
-            resolve();
-          };
-          tx.onerror = () => {
-            db!.close();
-            reject(tx.error);
-          };
-        });
+        await settled;
       } catch (e) {
         /* WP-FB-DATA-06c-0 (P-5) — PERSISTENCE FAILURE NOW PROPAGATES.
          *
@@ -585,6 +702,15 @@ export class IndexedDBStorageService {
         throw e instanceof Error
           ? e
           : new Error(`IndexedDB persistence failed: ${String(e)}`);
+      } finally {
+        /* The connection is closed on every path. Aborting here as well was
+         * tried and removed: by the time control reaches this block the
+         * transaction has always already settled — the queue-failure path
+         * aborts and awaits it explicitly, `onerror`/`onabort` mean it is
+         * finished, and a `getDB` failure means there is no transaction at
+         * all. A guard with no reachable case and no coverage is dead code,
+         * not defence in depth. */
+        db?.close?.();
       }
     }
   }
