@@ -2,18 +2,83 @@ import React, { useState } from 'react';
 import { Asset, AssetType, GeographyType } from '../../domain/types';
 import { AssetTable } from './AssetTable';
 import { AddAssetModal } from './AddAssetModal';
+import { EditAssetModal } from './EditAssetModal';
 import { CurrencyValue } from '../CurrencyValue';
+import { useCanonicalLedger } from '../../store/useCanonicalLedger';
+import { AssetLifecycleService } from '../../services/AssetLifecycleService';
 import { Plus, Search } from 'lucide-react';
 
 interface Props {
   assets: Asset[];
 }
 
+/**
+ * WP-FB-DATA-07b — notices follow the lifecycle convention already used by
+ * Import History, the Money ledger and Liabilities: a bold headline saying WHAT
+ * happened, then the detail.
+ */
+type Notice = { kind: 'success' | 'error'; headline: string; message: string };
+
 export const AssetsWorkspace: React.FC<Props> = ({ assets }) => {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'All' | AssetType>('All');
   const [geoFilter, setGeoFilter] = useState<'All' | GeographyType>('All');
   const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<Asset | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  /** Which row's delete is in flight (Q-D07b-1b), per row as Import History does. */
+  const [deleteBusy, setDeleteBusy] = useState<string | null>(null);
+  /** Kept visible until persistence settles, so no deletion is claimed early. */
+  const [pendingDelete, setPendingDelete] = useState<{ row: Asset; index: number } | null>(null);
+  const accounts = useCanonicalLedger(s => s.accounts);
+  const { removeAsset } = useCanonicalLedger();
+
+  /**
+   * WP-FB-DATA-07b — DELETE (Q-D07b-1b = (b)).
+   *
+   * Irreversible, so the confirmation quotes the exact name and amount, and —
+   * when the asset is linked to an account — discloses that the link will be
+   * cleared. That is a real consequence the user cannot see from the Wealth
+   * page, and the 07b gate measured it happening in the same atomic write.
+   */
+  const handleDelete = async (asset: Asset) => {
+    if (deleteBusy) {
+      setNotice({
+        kind: 'error',
+        headline: 'One delete at a time.',
+        message: 'Another asset is still being deleted. Wait for that to finish, then try again.'
+      });
+      return;
+    }
+    const claimer = accounts.find(a => a.linkedAssetId === asset.id) || null;
+    const confirmed = window.confirm(
+      AssetLifecycleService.describeDeletion(asset, claimer ? claimer.name : null)
+    );
+    if (!confirmed) return;
+
+    setNotice(null);
+    setDeleteBusy(asset.id as string);
+    setPendingDelete({ row: asset, index: Math.max(0, assets.findIndex(a => a.id === asset.id)) });
+    try {
+      await removeAsset(asset.id as string);
+      setNotice({
+        kind: 'success',
+        headline: 'Asset deleted.',
+        message: claimer
+          ? `"${asset.name}" is no longer part of your net worth, and the link to "${claimer.name}" was cleared.`
+          : `"${asset.name}" is no longer part of your net worth.`
+      });
+    } catch (err: any) {
+      setNotice({
+        kind: 'error',
+        headline: 'Delete refused.',
+        message: err?.message || 'The asset could not be deleted.'
+      });
+    } finally {
+      setDeleteBusy(null);
+      setPendingDelete(null);
+    }
+  };
 
   const filtered = assets.filter(a => {
     if (typeFilter !== 'All' && a.type !== typeFilter) return false;
@@ -24,6 +89,24 @@ export const AssetsWorkspace: React.FC<Props> = ({ assets }) => {
     }
     return true;
   });
+
+  /* A row whose delete is in flight stays on screen, in place, so the table
+     never claims an outcome persistence has not given. Writes are optimistic:
+     memory drops the row the instant delete is called. */
+  const visibleAssets = React.useMemo(() => {
+    if (!pendingDelete) return assets;
+    if (assets.some(a => a.id === pendingDelete.row.id)) return assets;
+    const merged = [...assets];
+    merged.splice(Math.min(pendingDelete.index, merged.length), 0, pendingDelete.row);
+    return merged;
+  }, [assets, pendingDelete]);
+
+  const visibleFiltered = React.useMemo(
+    () => (pendingDelete && !filtered.some(a => a.id === pendingDelete.row.id)
+      ? visibleAssets.filter(a => filtered.some(f => f.id === a.id) || a.id === pendingDelete.row.id)
+      : filtered),
+    [filtered, visibleAssets, pendingDelete]
+  );
 
   const totVal = filtered.reduce((sum, a) => sum + a.amount, 0);
 
@@ -89,7 +172,23 @@ export const AssetsWorkspace: React.FC<Props> = ({ assets }) => {
         </div>
       </div>
 
-      {assets.length === 0 ? (
+      {notice && (
+        <div
+          id="asset-notice"
+          data-asset-kind={notice.kind}
+          role="status"
+          className={
+            notice.kind === 'error'
+              ? 'rounded-2xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-5 py-3.5 text-xs font-semibold text-rose-800 dark:text-rose-300'
+              : 'rounded-2xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 px-5 py-3.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300'
+          }
+        >
+          <strong>{notice.headline}</strong>{' '}
+          {notice.message}
+        </div>
+      )}
+
+      {visibleAssets.length === 0 ? (
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-12 text-center shadow-sm">
           <div className="text-base font-bold text-gray-900 dark:text-white">No assets added</div>
           <div className="text-xs text-gray-500 dark:text-gray-400 mt-2 max-w-sm mx-auto">
@@ -104,15 +203,32 @@ export const AssetsWorkspace: React.FC<Props> = ({ assets }) => {
             <span>Add Asset</span>
           </button>
         </div>
-      ) : filtered.length === 0 ? (
+      ) : visibleFiltered.length === 0 ? (
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-12 text-center text-xs text-gray-500 dark:text-gray-400 shadow-sm">
           No assets match your selected category or search filter.
         </div>
       ) : (
-        <AssetTable assets={filtered} />
+        <AssetTable
+          assets={visibleFiltered}
+          allAssets={visibleAssets}
+          deleteBusyId={deleteBusy}
+          onEdit={(a) => { setNotice(null); setEditing(a); }}
+          onDelete={handleDelete}
+        />
       )}
 
-      <AddAssetModal isOpen={modalOpen} onClose={() => setModalOpen(false)} />
+      <AddAssetModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onSaved={(message) => setNotice({ kind: 'success', headline: 'Asset added.', message })}
+      />
+
+      <EditAssetModal
+        asset={editing}
+        allAssets={visibleAssets}
+        onClose={() => setEditing(null)}
+        onSaved={(message) => setNotice({ kind: 'success', headline: 'Asset saved.', message })}
+      />
     </div>
   );
 };

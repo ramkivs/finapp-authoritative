@@ -9,6 +9,7 @@ import {
 } from '../domain/types';
 import { TransferIntegrityService } from '../services/TransferIntegrityService';
 import { LiabilityLifecycleService } from '../services/LiabilityLifecycleService';
+import { AssetLifecycleService } from '../services/AssetLifecycleService';
 import { TransactionIdentityService } from '../services/TransactionIdentityService';
 import {
   ImportBatchRollbackService, BatchRollbackError, BatchRestoreError
@@ -187,8 +188,26 @@ export class PrismaAssetRepository implements AssetRepository {
     return [];
   }
 
-  async add(_asset: Asset): Promise<void> {
-    // Production implementation: await prisma.asset.create({ data: ... });
+  /**
+   * WP-FB-DATA-07b: the lifecycle POLICY is mirrored here for the same reason
+   * every other guard in this adapter is — a rule enforced in one of two
+   * implementations is not a rule, it is a coincidence of which adapter happens
+   * to be wired. Create appends; duplicate names are permitted; the legacy
+   * exact-name upsert is gone (Q-D07b-1a = (c)).
+   */
+  async add(asset: Asset): Promise<void> {
+    const plan = AssetLifecycleService.planCreate(asset as any, this.findAllSync());
+    void plan;
+    // Production implementation:
+    //   await prisma.asset.create({ data: { ...plan.asset } });
+  }
+
+  /** Id-addressed complete-record replace; refuses an id that is not present. */
+  async update(asset: Asset): Promise<void> {
+    const plan = AssetLifecycleService.planUpdate(asset as any, this.findAllSync());
+    void plan;
+    // Production implementation:
+    //   await prisma.asset.update({ where: { id: plan.asset.id }, data: { ...plan.asset } });
   }
 
   findByIdSync(_id: string): Asset | null {
@@ -196,7 +215,12 @@ export class PrismaAssetRepository implements AssetRepository {
     return null;
   }
 
-  async remove(_id: string): Promise<void> {}
+  /** Physical delete by id (Q-D07b-1b = (b)); the account link is cleared with it. */
+  async remove(id: string): Promise<void> {
+    const plan = AssetLifecycleService.planDelete(id, this.findAllSync());
+    void plan;
+    // Production implementation: await prisma.asset.delete({ where: { id: plan.id } });
+  }
 }
 
 export class PrismaLiabilityRepository implements LiabilityRepository {

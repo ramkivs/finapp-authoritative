@@ -109,14 +109,21 @@ interface LedgerState {
    * any rejection became an invisible unhandled promise rejection.
    */
   addTransfer: (source: string, destination: string, amount: number) => Promise<void>;
-  addAsset: (name: string, amount: number) => void;
+  /**
+   * WP-FB-DATA-07b — asset lifecycle. All four RETURN their promise so the UI
+   * can render a refusal or a persistence failure instead of closing a modal
+   * over a write that never happened.
+   */
+  addAsset: (name: string, amount: number) => Promise<void>;
   /**
    * WP-FB-DATA-07a — liability lifecycle. All four RETURN their promise so the
    * UI can render a refusal or a persistence failure instead of closing a modal
    * over a write that never happened.
    */
   addLiability: (name: string, amount: number) => Promise<void>;
-  addAssetWithMetadata: (params: { name: string; amount: number; type?: any; tag?: string; currency?: string; geography?: any }) => void;
+  addAssetWithMetadata: (params: { name: string; amount: number; type?: any; tag?: string; currency?: string; geography?: any }) => Promise<void>;
+  updateAsset: (params: { id: string; name: string; amount: number; type?: any; tag?: string; currency?: string; geography?: any }) => Promise<void>;
+  removeAsset: (id: string) => Promise<void>;
   addLiabilityWithMetadata: (params: { name: string; amount: number; type?: any; currency?: string }) => Promise<void>;
   updateLiability: (params: { id: string; name: string; amount: number; type?: any; currency?: string }) => Promise<void>;
   removeLiability: (id: string) => Promise<void>;
@@ -339,7 +346,10 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   addAsset: (name, amount) => {
-    repository.assets.add({ name, amount });
+    // WP-FB-DATA-07b: the OverviewPage quick-add path. It bypasses
+    // FinancialCommands, which is precisely why create semantics live at the
+    // repository boundary rather than in a modal.
+    return repository.assets.add({ name, amount });
   },
 
   addLiability: (name, amount) => {
@@ -350,7 +360,15 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   addAssetWithMetadata: (params) => {
-    FinancialCommands.recordAssetWithMetadata(params);
+    return FinancialCommands.recordAssetWithMetadata(params);
+  },
+
+  updateAsset: (params) => {
+    return FinancialCommands.updateAsset(params);
+  },
+
+  removeAsset: (id) => {
+    return FinancialCommands.removeAsset(id);
   },
 
   addLiabilityWithMetadata: (params) => {

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Account, Asset } from '../../domain/types';
 import { CurrencyValue } from '../CurrencyValue';
 import { AccountAssetLinkService } from '../../services/AccountAssetLinkService';
+import { AssetLifecycleService } from '../../services/AssetLifecycleService';
 import { Link2, X, AlertTriangle } from 'lucide-react';
 
 /**
@@ -110,9 +111,21 @@ export const LinkAssetModal: React.FC<Props> = ({
     await settle(onDismissCandidate(account.id, assetId), 'Unable to record that.');
   };
 
-  /** Distinguishing detail so two same-named assets are never ambiguous. */
-  const describe = (a: Asset) =>
-    [a.type, a.currency, a.geography].filter(Boolean).join(' · ');
+  /**
+   * Distinguishing detail so two same-named assets are never ambiguous.
+   *
+   * WP-FB-DATA-07b: duplicate asset names are now PERMITTED (Q-D07b-1a = (c)),
+   * so this selector is a place where the user must be able to tell them apart.
+   * The 07b gate measured the hard case — three "Gold" rows where two were
+   * identical on name, type, currency AND geography — so when metadata cannot
+   * separate them the shared authority falls back to the identity.
+   */
+  const describe = (a: Asset) => {
+    const metadata = [a.type, a.currency, a.geography].filter(Boolean).join(' · ');
+    const distinguishing = AssetLifecycleService.describeDistinguishing(a, assets);
+    const needsId = distinguishing && distinguishing.startsWith('ref ');
+    return needsId ? [metadata, distinguishing].filter(Boolean).join(' · ') : metadata;
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

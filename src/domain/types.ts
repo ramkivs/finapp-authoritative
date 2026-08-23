@@ -523,14 +523,29 @@ export interface BatchRollbackResultShape {
   alreadyExcludedCount: number;
 }
 
+/**
+ * WP-FB-DATA-07b promotes edit onto the port and retires the name-upsert.
+ *
+ * `add` CREATES — it appends. Duplicate names are PERMITTED (Q-D07b-1a = (c));
+ * the silent exact-name upsert is gone.
+ * `update` replaces the complete record addressed by `id`, refusing an id that
+ * is not present rather than appending a phantom row.
+ * `remove` physically deletes one asset by `id` and clears any account link in
+ * the same write (Q-D07b-1b = (b)).
+ *
+ * This is an ASSET capability only. The transaction write surface is unchanged
+ * and still has no delete: D9-A stands.
+ */
 export interface AssetRepository {
   findAll(): Promise<Asset[]>;
   findAllSync(): Asset[];
-  /** Upserts by `Asset.id`; assigns one when absent (WP-FB-DATA-04c-1). */
+  /** Appends a new asset; never merges on name (WP-FB-DATA-07b). */
   add(asset: Asset): Promise<void>;
+  /** Complete-record replace addressed by `Asset.id`. */
+  update(asset: Asset): Promise<void>;
   /** Finds by authoritative id. */
   findByIdSync(id: string): Asset | null;
-  /** Removes by authoritative id. */
+  /** Removes by authoritative id, clearing any account link. */
   remove(id: string): Promise<void>;
 }
 

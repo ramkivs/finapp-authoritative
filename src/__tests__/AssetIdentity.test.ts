@@ -220,11 +220,13 @@ describe('WP-FB-DATA-04c-1 — asset identity', () => {
       expect(repo.assets.findByIdSync('ast-nope')).toBeNull();
     });
 
-    it('upserts by id, and a rename does NOT change the id', async () => {
+    it('updates by id, and a rename does NOT change the id', async () => {
       await repo.assets.add({ name: 'Gold', amount: 100 });
       const id = repo.assetsData[0].id;
 
-      await repo.assets.add({ id, name: 'Gold Bullion', amount: 250 });
+      // WP-FB-DATA-07b: the id-addressed replace moved from `add` to `update`.
+      // `add` now always appends (Q-D07b-1a = (c)).
+      await repo.assets.update({ id, name: 'Gold Bullion', amount: 250 });
 
       expect(repo.assetsData).toHaveLength(1);          // updated, not appended
       expect(repo.assetsData[0].id).toBe(id);           // identity survived rename
@@ -232,13 +234,22 @@ describe('WP-FB-DATA-04c-1 — asset identity', () => {
       expect(repo.assetsData[0].amount).toBe(250);
     });
 
-    it('preserves legacy exact-name upsert for id-less callers', async () => {
+    /* WP-FB-DATA-07b AMENDMENT — this section used to assert the OPPOSITE.
+       The legacy exact-name upsert was preserved by 04c-1 because assets had no
+       Edit UI and re-adding under the same name was the only way to correct a
+       figure. 07b ships Edit and Delete, and Q-D07b-1a = (c) permits duplicate
+       names, so the silent upsert is retired: it was measured destroying
+       ₹5,00,000 through the real modal with no notice. */
+    it('07b: an id-less add with an existing name APPENDS — no silent upsert', async () => {
       await repo.assets.add({ name: 'Gold', amount: 100 });
       const id = repo.assetsData[0].id;
       await repo.assets.add({ name: 'Gold', amount: 400 });   // same name, no id
-      expect(repo.assetsData).toHaveLength(1);
+
+      expect(repo.assetsData).toHaveLength(2);
       expect(repo.assetsData[0].id).toBe(id);
-      expect(repo.assetsData[0].amount).toBe(400);
+      expect(repo.assetsData[0].amount).toBe(100);            // NOT destroyed
+      expect(repo.assetsData[1].amount).toBe(400);
+      expect(new Set(repo.assetsData.map((a: Asset) => a.id)).size).toBe(2);
     });
 
     it('treats differently-cased names as distinct assets (no merging)', async () => {

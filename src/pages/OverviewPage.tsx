@@ -73,13 +73,32 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
   const [liabName, setLiabName] = useState('');
   const [liabAmt, setLiabAmt] = useState('');
 
-  const handleAddAsset = (e: React.FormEvent) => {
+  /**
+   * WP-FB-DATA-07b — the SECOND asset create path.
+   *
+   * It bypasses `FinancialCommands` and calls the store directly, which is
+   * exactly why create semantics live at the repository boundary. The write is
+   * awaited so a persistence failure is shown here rather than swallowed — the
+   * 07b gate measured this path closing over a failed write in silence.
+   */
+  const [assetNotice, setAssetNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+
+  const handleAddAsset = async (e: React.FormEvent) => {
     e.preventDefault();
     if (assetName.trim() && assetAmt) {
-      addAsset(assetName.trim(), Number(assetAmt));
-      setAssetName('');
-      setAssetAmt('');
-      setShowAssetForm(false);
+      setAssetNotice(null);
+      try {
+        await addAsset(assetName.trim(), Number(assetAmt));
+        setAssetNotice({ kind: 'success', message: `Added "${assetName.trim()}".` });
+        setAssetName('');
+        setAssetAmt('');
+        setShowAssetForm(false);
+      } catch (err: any) {
+        setAssetNotice({
+          kind: 'error',
+          message: err?.message || 'The asset could not be saved.'
+        });
+      }
     }
   };
 
@@ -654,8 +673,23 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
       </div>
 
       {/* Inline Quick Modal Forms (Preserving All Certified Contracts) */}
+      {assetNotice && (
+        <div
+          id="asset-notice"
+          data-asset-kind={assetNotice.kind}
+          role="status"
+          className={
+            assetNotice.kind === 'error'
+              ? 'rounded-2xl border border-rose-800 bg-rose-950/30 px-5 py-3.5 text-xs font-semibold text-rose-300'
+              : 'rounded-2xl border border-emerald-800 bg-emerald-950/30 px-5 py-3.5 text-xs font-semibold text-emerald-300'
+          }
+        >
+          {assetNotice.message}
+        </div>
+      )}
+
       {showAssetForm && (
-        <form onSubmit={handleAddAsset} className="bg-[#161B22] p-5 rounded-2xl border border-[#21262D] shadow-xl flex flex-col md:flex-row gap-3.5 items-end">
+        <form id="overview-asset-form" onSubmit={handleAddAsset} className="bg-[#161B22] p-5 rounded-2xl border border-[#21262D] shadow-xl flex flex-col md:flex-row gap-3.5 items-end">
           <div className="flex-1 w-full">
             <label className="block text-xs font-bold text-[#8B949E] mb-1">Asset Name</label>
             <input

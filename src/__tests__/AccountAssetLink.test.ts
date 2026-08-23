@@ -479,7 +479,8 @@ describe('WP-FB-DATA-04c-2 — Account↔Asset link', () => {
       await repo.assets.add({ name: 'Fresh', amount: 10 });
       expect(AssetIdentityService.isValidId(repo.assetsData[0].id)).toBe(true);
       const id = repo.assetsData[0].id;
-      await repo.assets.add({ id, name: 'Fresh Renamed', amount: 20 });
+      // WP-FB-DATA-07b: id-addressed replace is `update`; `add` always appends.
+      await repo.assets.update({ id, name: 'Fresh Renamed', amount: 20 });
       expect(repo.assetsData).toHaveLength(1);
       expect(repo.assetsData[0].id).toBe(id);
     });

@@ -72,8 +72,16 @@ export class FinancialCommands {
     }));
   }
 
-  static recordAsset(name: string, amount: number): void {
-    repository.assets.add({ name, amount });
+  /**
+   * WP-FB-DATA-07b: the promise is RETURNED, not discarded.
+   *
+   * A rejection is a refusal or a persistence failure — either way the user's
+   * holding was NOT recorded, and a caller that cannot see it shows a UI that
+   * disagrees with storage. The 07b gate measured exactly that: a failing asset
+   * create closed the modal as if it had worked.
+   */
+  static recordAsset(name: string, amount: number): Promise<void> {
+    return repository.assets.add({ name, amount });
   }
 
   /**
@@ -87,8 +95,21 @@ export class FinancialCommands {
     return repository.liabilities.add({ name, amount });
   }
 
-  static recordAssetWithMetadata(params: { name: string; amount: number; type?: AssetType; tag?: string; currency?: string; geography?: GeographyType }): void {
-    repository.assets.add(params);
+  static recordAssetWithMetadata(params: { name: string; amount: number; type?: AssetType; tag?: string; currency?: string; geography?: GeographyType }): Promise<void> {
+    return repository.assets.add(params);
+  }
+
+  /**
+   * WP-FB-DATA-07b — Edit. Addressed by `id`, never by name; the complete
+   * record is submitted so no field is silently blanked (hazard H2).
+   */
+  static updateAsset(params: { id: string; name: string; amount: number; type?: AssetType; tag?: string; currency?: string; geography?: GeographyType }): Promise<void> {
+    return repository.assets.update(params);
+  }
+
+  /** WP-FB-DATA-07b — Delete by `id` (Q-D07b-1b = (b)). Irreversible. */
+  static removeAsset(id: string): Promise<void> {
+    return repository.assets.remove(id);
   }
 
   static recordLiabilityWithMetadata(params: { name: string; amount: number; type?: LiabilityType; currency?: string }): Promise<void> {

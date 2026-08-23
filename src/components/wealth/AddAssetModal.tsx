@@ -6,6 +6,8 @@ import { X, ArrowLeft } from 'lucide-react';
 interface Props {
   isOpen: boolean;
   onClose: () => void;
+  /** WP-FB-DATA-07b: lets the workspace report the outcome next to the table. */
+  onSaved?: (message: string) => void;
 }
 
 const ASSET_CATEGORIES: Array<{ type: AssetType; desc: string }> = [
@@ -19,7 +21,7 @@ const ASSET_CATEGORIES: Array<{ type: AssetType; desc: string }> = [
   { type: 'Other', desc: 'Other institutional assets' }
 ];
 
-export const AddAssetModal: React.FC<Props> = ({ isOpen, onClose }) => {
+export const AddAssetModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   const [step, setStep] = useState<1 | 2>(1);
   const [selectedType, setSelectedType] = useState<AssetType>('Equity');
   const [name, setName] = useState('');
@@ -27,6 +29,8 @@ export const AddAssetModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [tag, setTag] = useState('');
   const [currency, setCurrency] = useState('INR');
   const [geography, setGeography] = useState<GeographyType>('India');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const { addAssetWithMetadata } = useCanonicalLedger();
 
@@ -37,22 +41,39 @@ export const AddAssetModal: React.FC<Props> = ({ isOpen, onClose }) => {
     setStep(2);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  /**
+   * WP-FB-DATA-07b: the write is AWAITED.
+   *
+   * Previously this called and closed. The 07b gate measured a failing create
+   * closing the modal as if it had worked, with no notice and an unhandled page
+   * error. A refusal or a persistence failure now keeps the modal open and says
+   * why.
+   */
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !amount) return;
-    addAssetWithMetadata({
-      name,
-      amount: Number(amount),
-      type: selectedType,
-      tag: tag || undefined,
-      currency: currency || undefined,
-      geography: geography || undefined
-    });
-    setName('');
-    setAmount('');
-    setTag('');
-    setStep(1);
-    onClose();
+    if (!name || !amount || busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await addAssetWithMetadata({
+        name: name.trim(),
+        amount: Number(amount),
+        type: selectedType,
+        tag: tag || undefined,
+        currency: currency || undefined,
+        geography: geography || undefined
+      });
+      onSaved?.(`"${name.trim()}" is now part of your net worth.`);
+      setName('');
+      setAmount('');
+      setTag('');
+      setStep(1);
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || 'The asset could not be saved.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -152,6 +173,17 @@ export const AddAssetModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
             </div>
 
+            {error && (
+              <div
+                id="add-asset-error"
+                data-asset-kind="error"
+                role="alert"
+                className="rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-3.5 py-2.5 text-xs font-semibold text-rose-800 dark:text-rose-300"
+              >
+                {error}
+              </div>
+            )}
+
             <div className="flex items-center justify-between pt-3 border-t border-gray-200 dark:border-gray-800 mt-6">
               <button
                 type="button"
@@ -163,10 +195,12 @@ export const AddAssetModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </button>
 
               <button
+                id="add-asset-submit"
                 type="submit"
-                className="px-5 py-2.5 rounded-xl bg-green-700 hover:bg-green-800 text-white font-bold text-xs transition shadow-sm"
+                disabled={busy}
+                className="px-5 py-2.5 rounded-xl bg-green-700 hover:bg-green-800 disabled:opacity-50 text-white font-bold text-xs transition shadow-sm"
               >
-                Save Asset
+                {busy ? 'Saving…' : 'Save Asset'}
               </button>
             </div>
           </form>

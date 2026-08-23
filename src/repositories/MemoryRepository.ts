@@ -28,6 +28,7 @@ import { DateRangeService, formatDisplayDate, getEffectiveAsOfDate } from '../se
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransactionSignService } from '../services/TransactionSignService';
 import { AssetIdentityService } from '../services/AssetIdentityService';
+import { AssetLifecycleService } from '../services/AssetLifecycleService';
 import { LiabilityLifecycleService } from '../services/LiabilityLifecycleService';
 import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
 import { TransferIntegrityService, TransferValidation } from '../services/TransferIntegrityService';
@@ -336,58 +337,64 @@ export class MemoryAssetRepository implements AssetRepository {
   }
 
   /**
-   * Upsert keyed on the authoritative `Asset.id` (WP-FB-DATA-04c-1).
+   * WP-FB-DATA-07b — CREATE. Always appends.
    *
-   * When the incoming asset carries no id the legacy create path applies: an
-   * existing record with the identical (exact) name is updated in place and
-   * keeps its id, exactly as before this package, so `recordAsset(name, amount)`
-   * behaves unchanged. Otherwise a new stable id is generated.
+   * The legacy exact-name upsert that WP-FB-DATA-04c-1 deliberately preserved
+   * is GONE (Q-D07b-1a = (c)). It existed only because re-adding under the same
+   * name was the product's only correction mechanism; 07b ships Edit, so the
+   * silent upsert would now be a second, different mutation semantics for one
+   * user intent — and the gate measured it destroying ₹5,00,000 through the
+   * real modal, with no notice of any kind.
    *
-   * Names are NEVER normalised for matching here - that would merge assets the
-   * user deliberately created as distinct.
+   * Duplicate names are PERMITTED. The obligation that creates is on the UI,
+   * which must make same-named assets distinguishable wherever they are shown
+   * or chosen between (`AssetLifecycleService.describeDistinguishing`).
    */
   async add(asset: Asset): Promise<void> {
     return this.parent.write(() => {
-      const previous = this.parent.assetsData;
-      let next: Asset[];
-
-      const byId = AssetIdentityService.isValidId(asset.id)
-        ? previous.findIndex(a => a.id === asset.id)
-        : -1;
-
-      if (byId >= 0) {
-        next = [...previous];
-        next[byId] = { ...asset, id: previous[byId].id };
-      } else {
-        // Legacy create path: exact-name match preserves prior upsert behaviour.
-        const byName = AssetIdentityService.isValidId(asset.id)
-          ? -1
-          : previous.findIndex(a => a.name === asset.name);
-        if (byName >= 0) {
-          next = [...previous];
-          next[byName] = { ...asset, id: previous[byName].id || AssetIdentityService.generateId() };
-        } else {
-          next = [...previous, { ...asset, id: asset.id || AssetIdentityService.generateId() }];
-        }
-      }
-
-      this.parent.assetsData = next;
+      // Planned inside the write boundary so the judgement is made against the
+      // state that is actually mutated (WP-FB-DATA-07c).
+      this.parent.assetsData =
+        AssetLifecycleService.planCreate(asset as any, this.parent.assetsData).next;
     });
   }
 
-  /** Removes by authoritative id (WP-FB-DATA-04c-1); never by display name. */
+  /**
+   * WP-FB-DATA-07b — EDIT. Id-addressed complete-record replace, one atomic write.
+   *
+   * Refuses an id that is not present instead of appending, takes identity from
+   * storage rather than the caller, and carries every editable field through —
+   * the three hazards the gate measured against the bare primitive.
+   */
+  async update(asset: Asset): Promise<void> {
+    return this.parent.write(() => {
+      this.parent.assetsData =
+        AssetLifecycleService.planUpdate(asset as any, this.parent.assetsData).next;
+    });
+  }
+
+  /**
+   * WP-FB-DATA-07b — DELETE (Q-D07b-1b = (b)). Id-addressed, one row, one write.
+   *
+   * Physical deletion of a user-entered holding. It is irreversible and there
+   * is deliberately no soft-delete state on `Asset`: importing that vocabulary
+   * would extend a transaction-lifecycle concept to a different entity. D9-A
+   * still prohibits transaction deletion.
+   *
+   * The account link is cleared in the SAME write (04c-2), so no account is
+   * ever left holding a dangling reference. The account, its transactions and
+   * its balance are untouched — measured at the 07b gate.
+   *
+   * A target that is not present now REFUSES rather than silently succeeding.
+   */
   async remove(id: string): Promise<void> {
     return this.parent.write(() => {
-      const previous = this.parent.assetsData;
-      const previousAccounts = this.parent.accountsData;
-      const next = previous.filter(a => a.id !== id);
+      const plan = AssetLifecycleService.planDelete(id, this.parent.assetsData);
 
-      // WP-FB-DATA-04c-2: no account may be left holding a dangling reference.
-      // The account, its transactions and its balance are untouched.
       this.parent.accountsData =
-        AccountAssetLinkService.clearLinksToAsset(id, this.parent.accountsData).accounts;
+        AccountAssetLinkService.clearLinksToAsset(plan.id, this.parent.accountsData).accounts;
 
-      this.parent.assetsData = next;
+      this.parent.assetsData = plan.next;
     });
   }
 }
