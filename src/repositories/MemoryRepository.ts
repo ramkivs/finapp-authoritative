@@ -28,6 +28,7 @@ import { DateRangeService, formatDisplayDate, getEffectiveAsOfDate } from '../se
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransactionSignService } from '../services/TransactionSignService';
 import { AssetIdentityService } from '../services/AssetIdentityService';
+import { LiabilityIdentityService } from '../services/LiabilityIdentityService';
 import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
 import { TransferIntegrityService, TransferValidation } from '../services/TransferIntegrityService';
 import { TransactionIdentityService, DuplicateIdGroup } from '../services/TransactionIdentityService';
@@ -504,15 +505,56 @@ export class MemoryLiabilityRepository implements LiabilityRepository {
     return [...this.parent.liabilitiesData];
   }
 
+  /**
+   * WP-FB-DATA-07 — identity-aware upsert.
+   *
+   * Resolution order, mirroring `MemoryAssetRepository.add` exactly:
+   *
+   *   1. a VALID `id` addresses that record, whatever its name is now
+   *      (this is what makes a future rename safe);
+   *   2. otherwise, exact-name match updates in place.
+   *
+   * ⚠️ STEP 2 IS DELIBERATE AND MUST NOT BE REMOVED IN THIS PACKAGE.
+   * There is no liability edit UI, no delete UI and no `removeLiability` store
+   * action: re-adding under the same name is the product's ONLY correction
+   * mechanism. The 07 gate measured the alternative — a paydown re-entered as
+   * `Car Loan 350,000` would append instead of update, taking total debt from
+   * 350,000 to 850,000 and understating net worth by 500,000.
+   *
+   * Decision Q-D07-1 = (c) delivers this in two steps. WP-FB-DATA-07a adds
+   * Edit/Delete against the stable id and only then refuses duplicate names.
+   * Until that exists, appending would break the user's only way to correct a
+   * balance.
+   */
   async add(liability: Liability): Promise<void> {
     const previous = this.parent.liabilitiesData;
-    const idx = previous.findIndex(l => l.name === liability.name);
+
+    const byId = LiabilityIdentityService.isValidId(liability.id)
+      ? previous.findIndex(l => l.id === liability.id)
+      : -1;
+
     let next: Liability[];
-    if (idx >= 0) {
+
+    if (byId >= 0) {
       next = [...previous];
-      next[idx] = { ...liability };
+      next[byId] = { ...liability, id: previous[byId].id };
     } else {
-      next = [...previous, { ...liability }];
+      // Legacy create path: exact-name match preserves prior upsert behaviour.
+      const byName = LiabilityIdentityService.isValidId(liability.id)
+        ? -1
+        : previous.findIndex(l => l.name === liability.name);
+      if (byName >= 0) {
+        next = [...previous];
+        next[byName] = {
+          ...liability,
+          id: previous[byName].id || LiabilityIdentityService.generateId()
+        };
+      } else {
+        next = [...previous, {
+          ...liability,
+          id: liability.id || LiabilityIdentityService.generateId()
+        }];
+      }
     }
     this.parent.liabilitiesData = next;
     this.parent.syncStore();
@@ -535,9 +577,17 @@ export class MemoryLiabilityRepository implements LiabilityRepository {
     }
   }
 
-  async remove(name: string): Promise<void> {
+  /**
+   * ⚠️ NOT ON THE `LiabilityRepository` PORT AND NOT CALLED ANYWHERE.
+   *
+   * The 07 discovery gate found this as dead code keyed on `name`. It is now
+   * id-addressable so that it cannot be wired up later against a mutable
+   * display string, but it remains deliberately off the port: no liability
+   * deletion capability is authorised until WP-FB-DATA-07a decides one.
+   */
+  async remove(id: string): Promise<void> {
     const previous = this.parent.liabilitiesData;
-    const next = previous.filter(l => l.name !== name);
+    const next = previous.filter(l => l.id !== id);
     this.parent.liabilitiesData = next;
     this.parent.syncStore();
     try {

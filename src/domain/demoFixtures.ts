@@ -27,7 +27,9 @@ export const demoAssets: Asset[] = [
 ];
 
 export const demoLiabilities: Liability[] = [
-  { name: 'Home Loan (ICICI Bank)', amount: 1850000 }
+  // WP-FB-DATA-07: fixture ids are stable literals so demo data is
+  // reproducible; generated ids are only for user-created records.
+  { id: 'lia-demo-home-loan', name: 'Home Loan (ICICI Bank)', amount: 1850000 }
 ];
 
 export const demoSnapshots: NetWorthSnapshot[] = [

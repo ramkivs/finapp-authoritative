@@ -307,6 +307,31 @@ export interface Asset {
 }
 
 export interface Liability {
+  /**
+   * Authoritative persisted identity (WP-FB-DATA-07).
+   *
+   * Stable, unique and non-user-editable. Survives renames. This — not `name` —
+   * is the key for storage and for any future reference to a liability.
+   *
+   * Optional in the type purely for backward compatibility with existing
+   * construction sites such as `recordLiability({ name, amount })`; the
+   * repository assigns one on write and migration assigns one on load, so every
+   * persisted liability carries an id at rest. This mirrors `Asset.id` exactly.
+   *
+   * ⚠️ Liabilities were the LAST entity keyed on a display string. Before this,
+   * two liabilities named "Home Loan" collapsed into one and the first amount
+   * was destroyed in memory — measured at ₹25,00,000.
+   *
+   * ⚠️ Adding an id does NOT make the create path append. Re-adding a liability
+   * under the same name is still an in-place update, because that is the only
+   * correction mechanism the product currently has (Decision Q-D07-1 = c,
+   * step 1). WP-FB-DATA-07a changes that, and only after adding an Edit
+   * affordance.
+   *
+   * ⚠️ Must never appear in search text, user-facing display or financial
+   * calculations.
+   */
+  id?: string;
   name: string;
   amount: number;
   type?: LiabilityType;

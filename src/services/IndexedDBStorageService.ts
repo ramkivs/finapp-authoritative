@@ -10,12 +10,16 @@ import {
   FinancialProfile
 } from '../domain/types';
 import { AssetIdentityService } from './AssetIdentityService';
+import { LiabilityIdentityService } from './LiabilityIdentityService';
 
 const DB_NAME = 'finboom_db';
 // WP-FB-DATA-04c-1: bumped 3 -> 4. The `assets` object store moves from
 // keyPath 'name' to keyPath 'id' so that a mutable display name is no longer
 // the storage key. See migrateAssetsToIdKeyPath() below.
-const DB_VERSION = 4;
+// WP-FB-DATA-07: 4 -> 5 migrates `liabilities` from a 'name' keyPath to 'id',
+// the last store still keyed on a mutable display string.
+// See migrateLiabilitiesToIdKeyPath() below.
+const DB_VERSION = 5;
 
 export interface StoredLedgerState {
   transactions: Transaction[];
@@ -91,9 +95,18 @@ export class IndexedDBStorageService {
           this.migrateAssetsToIdKeyPath(db, upgradeTx);
         }
 
+        // WP-FB-DATA-07: liabilities 'name' -> 'id'. Same placement and the
+        // same reason as the assets migration above — it must run BEFORE the
+        // create-if-absent block, or an existing legacy store would be left on
+        // its old keyPath. Gated on < 5 so it also runs for users already on
+        // version 4, whose assets are migrated but whose liabilities are not.
+        if (e.oldVersion > 0 && e.oldVersion < 5 && db.objectStoreNames.contains('liabilities') && upgradeTx) {
+          this.migrateLiabilitiesToIdKeyPath(db, upgradeTx);
+        }
+
         if (!db.objectStoreNames.contains('transactions')) db.createObjectStore('transactions', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'id' });
-        if (!db.objectStoreNames.contains('liabilities')) db.createObjectStore('liabilities', { keyPath: 'name' });
+        if (!db.objectStoreNames.contains('liabilities')) db.createObjectStore('liabilities', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('snapshots')) db.createObjectStore('snapshots', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('accounts')) db.createObjectStore('accounts', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('budgets')) db.createObjectStore('budgets', { keyPath: 'id' });
@@ -124,6 +137,21 @@ export class IndexedDBStorageService {
 
   static getLastAssetMigrationReport() {
     return this.lastAssetMigrationReport;
+  }
+
+  /**
+   * WP-FB-DATA-07 — outcome of the liabilities `name` -> `id` migration.
+   * Same contract as the asset report above: on failure the upgrade is ABORTED
+   * and this records why, so a failed migration is inspectable rather than
+   * silent.
+   */
+  private static lastLiabilityMigrationReport: {
+    countBefore: number; countAfter: number; assigned: number; preserved: number;
+    ambiguous: number; invalid: number; ok: boolean; failures: string[];
+  } | null = null;
+
+  static getLastLiabilityMigrationReport() {
+    return this.lastLiabilityMigrationReport;
   }
 
   private static migrateAssetsToIdKeyPath(db: IDBDatabase, upgradeTx: IDBTransaction): void {
@@ -163,6 +191,69 @@ export class IndexedDBStorageService {
       this.lastAssetMigrationReport = {
         countBefore: -1, countAfter: -1, assigned: 0, preserved: 0,
         ambiguous: 0, invalid: 0, ok: false, failures: ['failed to read legacy assets store']
+      };
+      try { upgradeTx.abort(); } catch { /* already settled */ }
+    };
+  }
+
+  /**
+   * WP-FB-DATA-07 — migrate the `liabilities` store from `keyPath: 'name'` to
+   * `keyPath: 'id'`.
+   *
+   * Byte-for-byte the same shape as `migrateAssetsToIdKeyPath` above, and for
+   * the same reasons:
+   *
+   *   - read the legacy records BEFORE the store is destroyed;
+   *   - assign ids with a pure, idempotent, order-preserving transform;
+   *   - VERIFY the result is lossless;
+   *   - ABORT the whole upgrade if verification fails, rather than recreating
+   *     the store — a failed migration must never be allowed to destroy a
+   *     user's debt records;
+   *   - only then delete and recreate with the new keyPath.
+   *
+   * Duplicate-named records are carried across as SEPARATE rows with DISTINCT
+   * ids. Under the old `name` keyPath IndexedDB could only hold one of them;
+   * after this migration the store can hold both, which is why the create-path
+   * upsert (MemoryLiabilityRepository.add) is what still prevents duplicates —
+   * not the storage layer. That separation is the whole point of Q-D07-1 = (c).
+   */
+  private static migrateLiabilitiesToIdKeyPath(db: IDBDatabase, upgradeTx: IDBTransaction): void {
+    const legacy = upgradeTx.objectStore('liabilities');
+    if (legacy.keyPath === 'id') return;                    // already migrated
+
+    const readAll = legacy.getAll();
+    readAll.onsuccess = () => {
+      const before: Liability[] = (readAll.result || []) as Liability[];
+      const snapshot = before.map(l => ({ ...l }));         // pre-change copy
+
+      const result = LiabilityIdentityService.migrate(before);
+      const verification = LiabilityIdentityService.verify(snapshot, result.liabilities);
+
+      this.lastLiabilityMigrationReport = {
+        countBefore: snapshot.length,
+        countAfter: result.liabilities.length,
+        assigned: result.assigned,
+        preserved: result.preserved,
+        ambiguous: result.ambiguous,
+        invalid: result.invalid,
+        ok: verification.ok,
+        failures: verification.failures
+      };
+
+      if (!verification.ok) {
+        // Do not recreate the store on a failed verification.
+        try { upgradeTx.abort(); } catch { /* transaction already settled */ }
+        return;
+      }
+
+      db.deleteObjectStore('liabilities');
+      const store = db.createObjectStore('liabilities', { keyPath: 'id' });
+      for (const liability of result.liabilities) store.put(liability);
+    };
+    readAll.onerror = () => {
+      this.lastLiabilityMigrationReport = {
+        countBefore: -1, countAfter: -1, assigned: 0, preserved: 0,
+        ambiguous: 0, invalid: 0, ok: false, failures: ['failed to read legacy liabilities store']
       };
       try { upgradeTx.abort(); } catch { /* already settled */ }
     };
