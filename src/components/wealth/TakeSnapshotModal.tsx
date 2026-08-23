@@ -9,15 +9,27 @@ interface Props {
 
 export const TakeSnapshotModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [label, setLabel] = useState('');
+  /** WP-FB-DATA-08B: persistence is awaited before the modal closes. */
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const { captureSnapshot } = useCanonicalLedger();
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    captureSnapshot(label || undefined);
-    setLabel('');
-    onClose();
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await captureSnapshot(label || undefined);
+      setLabel('');
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || 'The snapshot could not be saved.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -55,6 +67,26 @@ export const TakeSnapshotModal: React.FC<Props> = ({ isOpen, onClose }) => {
             </p>
           </div>
 
+          {error && (
+
+            <div
+
+              id="take-snapshot-error"
+
+              data-write-kind="error"
+
+              role="alert"
+
+              className="mb-3 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-3 py-2 text-xs font-semibold text-rose-800 dark:text-rose-300"
+
+            >
+
+              {error}
+
+            </div>
+
+          )}
+
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-gray-200 dark:border-gray-800">
             <button
               type="button"
@@ -65,6 +97,9 @@ export const TakeSnapshotModal: React.FC<Props> = ({ isOpen, onClose }) => {
             </button>
             <button
               type="submit"
+              id="take-snapshot-submit"
+              data-write-busy={busy ? 'true' : 'false'}
+              disabled={busy}
               className="px-5 py-2 rounded-xl bg-green-700 hover:bg-green-800 text-white font-extrabold text-xs transition shadow-sm"
             >
               Take Snapshot

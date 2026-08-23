@@ -466,13 +466,32 @@ describe('WP-FB-DATA-08A — destructive deletion and import commit disclosure',
 
   /* ═══════════════ §5 scope boundary ═════════════════════════════════════ */
   describe('§5 scope boundary — Tier 1 + Tier 2 only', () => {
-    it('Tier 3 and 4 actions are deliberately UNCHANGED by this package', () => {
+    /* WP-FB-DATA-08B AMENDMENT — this assertion used to pin Tier 3/4 as
+       void-returning, which was 08A's scope boundary. 08B was authorised to
+       close exactly those nine paths, so the boundary moved: they now return
+       promises like the Tier 1/2 paths. The 08A surfaces themselves remain
+       asserted unchanged by the rest of this file. */
+    it('Tier 3 and 4 actions now propagate their promises (closed by 08B)', async () => {
+      /* Called with VALID payloads on purpose: an invalid one throws
+         synchronously from validation before any promise exists, which is
+         correct behaviour and would say nothing about propagation. */
+      repo.accountsData = [acct('acc-1', 'HDFC')]; repo.syncStore();
       const s = S();
-      // still void-returning: out of scope for 08A, carried to 08B
-      for (const k of ['addAccount', 'addIncome', 'addExpense', 'saveMonthlyBudget',
-                       'addPolicy', 'addGoal', 'saveProfile', 'captureSnapshot', 'addPastSnapshot']) {
-        const returned = (() => { try { return s[k](...[undefined, undefined, undefined, undefined] as any); } catch { return undefined; } })();
-        expect(typeof (returned as any)?.then).not.toBe('function');
+      const calls: Array<[string, any]> = [
+        ['addAccount', () => s.addAccount({ name: 'X', type: 'Bank', openingBalance: 0, asOfDate: '2026-08-01' })],
+        ['addIncome', () => s.addIncome('Pay', 10, 'HDFC', 'Income')],
+        ['addExpense', () => s.addExpense('Rent', 10, 'HDFC', 'Housing')],
+        ['saveMonthlyBudget', () => s.saveMonthlyBudget('2026-08', { Housing: 10 })],
+        ['addPolicy', () => s.addPolicy({ provider: 'LIC', type: 'Term Life', coverAmount: 1, premiumAmount: 1 })],
+        ['addGoal', () => s.addGoal({ name: 'G', template: 'Emergency Buffer', targetAmount: 1 })],
+        ['saveProfile', () => s.saveProfile({ id: 'p', monthlyIncome: 1, monthlyExpenses: 1, savingsRate: 1, updatedAt: '' } as any)],
+        ['captureSnapshot', () => s.captureSnapshot()],
+        ['addPastSnapshot', () => s.addPastSnapshot({ dateStr: '2026-07-01', totalAssets: 1, totalLiabilities: 0 })]
+      ];
+      for (const [name, call] of calls) {
+        const returned = call();
+        expect(typeof returned?.then, `${name} must return a promise`).toBe('function');
+        await returned;
       }
     });
 

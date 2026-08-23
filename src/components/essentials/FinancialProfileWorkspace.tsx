@@ -16,6 +16,8 @@ export const FinancialProfileWorkspace: React.FC<Props> = ({ profile }) => {
   const [dependents, setDependents] = useState<string>(profile?.dependents !== undefined ? String(profile.dependents) : '');
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [error, setError] = useState('');
+  /** WP-FB-DATA-08B: in-flight while persistence is unresolved. */
+  const [busy, setBusy] = useState(false);
 
   const { saveProfile } = useCanonicalLedger();
 
@@ -38,11 +40,22 @@ export const FinancialProfileWorkspace: React.FC<Props> = ({ profile }) => {
   const computedSavings = Math.max(0, incNum - expNum);
   const computedSavingsRate = incNum > 0 ? Math.round((computedSavings / incNum) * 100) : 0;
 
-  const handleSave = (e: React.FormEvent) => {
+  /**
+   * WP-FB-DATA-08B: the write is AWAITED, and the success indicator follows
+   * storage rather than the call.
+   *
+   * Measured at the 08B gate: this called and reported success, so a
+   * persistence failure left the profile unsaved with no disclosure and an
+   * unhandled page error. The synchronous validation catch is unchanged - it
+   * still surfaces "Monthly income cannot be negative." and friends.
+   */
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     setError('');
+    setBusy(true);
     try {
-      saveProfile({
+      await saveProfile({
         id: 'default-profile',
         age: age ? Number(age) : undefined,
         monthlyIncome: incNum,
@@ -55,6 +68,8 @@ export const FinancialProfileWorkspace: React.FC<Props> = ({ profile }) => {
       setTimeout(() => setSavedSuccess(false), 3000);
     } catch (err: any) {
       setError(err.message || 'Error saving financial profile.');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -179,10 +194,12 @@ export const FinancialProfileWorkspace: React.FC<Props> = ({ profile }) => {
             <button
               id="btn-save-profile"
               type="submit"
-              className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-green-700 hover:bg-green-800 text-white font-extrabold text-xs transition shadow-sm"
+              data-write-busy={busy ? 'true' : 'false'}
+              disabled={busy}
+              className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-green-700 hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold text-xs transition shadow-sm"
             >
               <Save size={14} />
-              <span>Save Financial Profile</span>
+              <span>{busy ? 'Saving…' : 'Save Financial Profile'}</span>
             </button>
           </form>
         </div>

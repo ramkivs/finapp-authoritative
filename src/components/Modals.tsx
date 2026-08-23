@@ -18,12 +18,30 @@ export const IncomeModal: React.FC<ModalProps> = ({ isOpen, onClose }) => {
   const [notes, setNotes] = useState('Quarterly Interim Dividend');
 
   const addIncome = useCanonicalLedger(s => s.addIncome);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
-    addIncome(ticker, Number(amount), account, type, notes);
-    onClose();
+  /**
+   * WP-FB-DATA-08B: the write is AWAITED.
+   *
+   * Measured at the 08B gate: this called and closed, so a persistence failure
+   * left the ledger unchanged, told the user nothing, and escaped as an
+   * unhandled page error.
+   */
+  const handleSave = async () => {
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await addIncome(ticker, Number(amount), account, type, notes);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'The income could not be recorded.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -105,11 +123,24 @@ export const IncomeModal: React.FC<ModalProps> = ({ isOpen, onClose }) => {
           >
             Cancel
           </button>
+          {error && (
+            <div
+              id="add-income-error"
+              data-write-kind="error"
+              role="alert"
+              className="w-full mb-2 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-3 py-2 text-xs font-semibold text-rose-800 dark:text-rose-300"
+            >
+              {error}
+            </div>
+          )}
           <button
+            id="add-income-submit"
+            data-write-busy={busy ? 'true' : 'false'}
+            disabled={busy}
             onClick={handleSave}
-            className="px-5 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-bold shadow-sm"
+            className="px-5 py-2 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold shadow-sm"
           >
-            Save to Canonical Ledger
+            {busy ? 'Saving…' : 'Save to Canonical Ledger'}
           </button>
         </div>
       </div>
@@ -127,12 +158,30 @@ export const ExpenseModal: React.FC<ModalProps> = ({ isOpen, onClose }) => {
   const [category, setCategory] = useState('DINING');
 
   const addExpense = useCanonicalLedger(s => s.addExpense);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
-    addExpense(title, Number(amount), account, category);
-    onClose();
+  /**
+   * WP-FB-DATA-08B: the write is AWAITED.
+   *
+   * Measured at the 08B gate: this called and closed, so a persistence failure
+   * left the ledger unchanged, told the user nothing, and escaped as an
+   * unhandled page error.
+   */
+  const handleSave = async () => {
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await addExpense(title, Number(amount), account, category);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'The expense could not be recorded.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -211,11 +260,24 @@ export const ExpenseModal: React.FC<ModalProps> = ({ isOpen, onClose }) => {
           >
             Cancel
           </button>
+          {error && (
+            <div
+              id="add-expense-error"
+              data-write-kind="error"
+              role="alert"
+              className="w-full mb-2 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-3 py-2 text-xs font-semibold text-rose-800 dark:text-rose-300"
+            >
+              {error}
+            </div>
+          )}
           <button
+            id="add-expense-submit"
+            data-write-busy={busy ? 'true' : 'false'}
+            disabled={busy}
             onClick={handleSave}
-            className="px-5 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-bold shadow-sm"
+            className="px-5 py-2 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold shadow-sm"
           >
-            Save Expense
+            {busy ? 'Saving…' : 'Save Expense'}
           </button>
         </div>
       </div>

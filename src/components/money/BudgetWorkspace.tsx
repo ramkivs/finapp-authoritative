@@ -19,6 +19,18 @@ export const BudgetWorkspace: React.FC<Props> = ({ transactions, budgets }) => {
   const [selectedMonth, setSelectedMonth] = useState<string>('2026-08');
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  /**
+   * WP-FB-DATA-08B: a failure notice, and an in-flight flag.
+   *
+   * These two actions write through FinancialCommands directly, bypassing the
+   * store. The 08B gate measured copy-previous returning a truthy budget while
+   * persistence had FAILED, which fired the success toast
+   * "Copied budget allocations from previous month (Total: ₹900)" for a month
+   * that was never stored. The toast must now follow storage, not the return
+   * value.
+   */
+  const [budgetError, setBudgetError] = useState<string | null>(null);
+  const [budgetBusy, setBudgetBusy] = useState<null | 'suggest' | 'copy'>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -44,18 +56,36 @@ export const BudgetWorkspace: React.FC<Props> = ({ transactions, budgets }) => {
 
   const remainingVariance = totalBudget - totalActualSpent;
 
-  const handleAutoSuggest = () => {
+  const handleAutoSuggest = async () => {
+    if (budgetBusy) return;
+    setBudgetError(null);
     const suggested = FinancialCommands.autoSuggestBudget(selectedMonth);
-    FinancialCommands.saveMonthlyBudget(selectedMonth, suggested.allocations);
-    showToast(`Auto-suggest populated ₹${suggested.totalBudget.toLocaleString()} based on trailing 3-month expense averages.`);
+    setBudgetBusy('suggest');
+    try {
+      await FinancialCommands.saveMonthlyBudget(selectedMonth, suggested.allocations);
+      showToast(`Auto-suggest populated ₹${suggested.totalBudget.toLocaleString()} based on trailing 3-month expense averages.`);
+    } catch (e: any) {
+      setBudgetError(e?.message || 'The budget could not be saved.');
+    } finally {
+      setBudgetBusy(null);
+    }
   };
 
-  const handleCopyPrevious = () => {
-    const copied = FinancialCommands.copyBudgetFromPreviousMonth(selectedMonth);
-    if (copied) {
-      showToast(`Copied budget allocations from previous month (Total: ₹${copied.totalBudget.toLocaleString()}).`);
-    } else {
-      showToast('No budget found in the immediately previous month to copy.');
+  const handleCopyPrevious = async () => {
+    if (budgetBusy) return;
+    setBudgetError(null);
+    setBudgetBusy('copy');
+    try {
+      const copied = await FinancialCommands.copyBudgetFromPreviousMonth(selectedMonth);
+      if (copied) {
+        showToast(`Copied budget allocations from previous month (Total: ₹${copied.totalBudget.toLocaleString()}).`);
+      } else {
+        showToast('No budget found in the immediately previous month to copy.');
+      }
+    } catch (e: any) {
+      setBudgetError(e?.message || 'The budget could not be copied.');
+    } finally {
+      setBudgetBusy(null);
     }
   };
 
@@ -72,6 +102,17 @@ export const BudgetWorkspace: React.FC<Props> = ({ transactions, budgets }) => {
         <div className="bg-green-50 dark:bg-green-950/40 border border-green-300 dark:border-green-800 p-3 rounded-xl text-green-800 dark:text-green-300 text-xs font-semibold flex items-center gap-2">
           <CheckCircle2 size={16} className="text-green-600 dark:text-green-400 flex-shrink-0" />
           <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {budgetError && (
+        <div
+          id="budget-error"
+          data-budget-kind="error"
+          role="alert"
+          className="bg-rose-50 dark:bg-rose-950/30 border border-rose-300 dark:border-rose-800 p-3 rounded-xl text-rose-800 dark:text-rose-300 text-xs font-semibold"
+        >
+          <strong>Budget not saved.</strong>{' '}{budgetError}
         </div>
       )}
 
@@ -101,17 +142,21 @@ export const BudgetWorkspace: React.FC<Props> = ({ transactions, budgets }) => {
         <div className="flex items-center gap-2.5 flex-wrap">
           <button
             id="btn-auto-suggest-budget"
+            data-budget-busy={budgetBusy === 'suggest' ? 'true' : 'false'}
+            disabled={budgetBusy !== null}
             onClick={handleAutoSuggest}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 font-bold text-xs transition border border-gray-200 dark:border-gray-700"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed text-gray-800 dark:text-gray-200 font-bold text-xs transition border border-gray-200 dark:border-gray-700"
           >
             <Zap size={14} className="text-amber-500" />
-            <span>Auto-Suggest</span>
+            <span>{budgetBusy === 'suggest' ? 'Saving…' : 'Auto-Suggest'}</span>
           </button>
 
           <button
             id="btn-copy-previous-budget"
+            data-budget-busy={budgetBusy === 'copy' ? 'true' : 'false'}
+            disabled={budgetBusy !== null}
             onClick={handleCopyPrevious}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 font-bold text-xs transition border border-gray-200 dark:border-gray-700"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed text-gray-800 dark:text-gray-200 font-bold text-xs transition border border-gray-200 dark:border-gray-700"
           >
             <Copy size={14} className="text-cyan-600 dark:text-cyan-400" />
             <span>Copy Previous Month</span>
@@ -193,11 +238,13 @@ export const BudgetWorkspace: React.FC<Props> = ({ transactions, budgets }) => {
           </p>
           <div className="mt-5 flex items-center justify-center gap-3 flex-wrap">
             <button
+              data-budget-busy={budgetBusy === 'suggest' ? 'true' : 'false'}
+              disabled={budgetBusy !== null}
               onClick={handleAutoSuggest}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-xs font-bold transition border border-gray-200 dark:border-gray-700"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed text-gray-800 dark:text-gray-200 text-xs font-bold transition border border-gray-200 dark:border-gray-700"
             >
               <Zap size={14} className="text-amber-500" />
-              <span>Auto-Suggest</span>
+              <span>{budgetBusy === 'suggest' ? 'Saving…' : 'Auto-Suggest'}</span>
             </button>
             <button
               onClick={() => setEditModalOpen(true)}

@@ -129,7 +129,7 @@ export class FinancialCommands {
     return repository.liabilities.remove(id);
   }
 
-  static addPastSnapshot(params: { dateStr: string; totalAssets: number; totalLiabilities: number; label?: string }): void {
+  static addPastSnapshot(params: { dateStr: string; totalAssets: number; totalLiabilities: number; label?: string }): Promise<void> {
     const { dateStr, totalAssets, totalLiabilities, label } = params;
     // Future date validation against the effective as-of date
     const parts = dateStr.split("-");
@@ -152,15 +152,15 @@ export class FinancialCommands {
       status: "Anchored Permanent",
       label
     };
-    repository.snapshots.create(snap);
+    return repository.snapshots.create(snap);
   }
 
-  static createSnapshot(label?: string): void {
+  static createSnapshot(label?: string): Promise<void> {
     if (label) {
       const totalAssets = repository.assets.findAllSync().reduce((sum, a) => sum + a.amount, 0);
       const totalLiabilities = repository.liabilities.findAllSync().reduce((sum, l) => sum + l.amount, 0);
       const netWorth = totalAssets - totalLiabilities;
-      repository.snapshots.create({
+      return repository.snapshots.create({
         id: "snap-" + Date.now(),
         dateStr: formatDisplayDate(getEffectiveAsOfDate()) + " (Today)",
         totalAssets,
@@ -169,9 +169,8 @@ export class FinancialCommands {
         status: "Anchored Permanent",
         label
       });
-    } else {
-      repository.snapshots.create();
     }
+    return repository.snapshots.create();
   }
 
   static importStatement(
@@ -228,7 +227,7 @@ export class FinancialCommands {
     currency?: string;
     asOfDate?: string;
     notes?: string;
-  }): Account {
+  }): Promise<Account> {
     if (!params.name || !params.name.trim()) {
       throw new Error('Account name is required.');
     }
@@ -245,8 +244,10 @@ export class FinancialCommands {
       notes: params.notes?.trim() || undefined
     };
 
-    repository.accounts.add(account);
-    return account;
+    // WP-FB-DATA-08B: the persistence promise is RETURNED. The constructed
+    // record is still handed back, but only once storage has agreed - no
+    // caller may claim success from it before that.
+    return repository.accounts.add(account).then(() => account);
   }
 
   /**
@@ -265,7 +266,7 @@ export class FinancialCommands {
    * WP-18: Monthly Budget Commands
    * ========================================================================= */
 
-  static saveMonthlyBudget(monthStr: string, allocations: Record<string, number>): MonthlyBudget {
+  static saveMonthlyBudget(monthStr: string, allocations: Record<string, number>): Promise<MonthlyBudget> {
     const cleanedAllocations: Record<string, number> = {};
     let totalBudget = 0;
 
@@ -285,8 +286,10 @@ export class FinancialCommands {
       updatedAt: new Date().toISOString()
     };
 
-    repository.budgets.save(budget);
-    return budget;
+    // WP-FB-DATA-08B: the persistence promise is RETURNED. The constructed
+    // record is still handed back, but only once storage has agreed - no
+    // caller may claim success from it before that.
+    return repository.budgets.save(budget).then(() => budget);
   }
 
   /**
@@ -339,7 +342,14 @@ export class FinancialCommands {
   /**
    * Copy Budget Allocations from Previous Month ($M-1$).
    */
-  static copyBudgetFromPreviousMonth(targetMonthStr: string, sourceMonthStr?: string): MonthlyBudget | null {
+  /**
+   * WP-FB-DATA-08B: awaits the underlying save.
+   *
+   * The 08B gate measured this returning a truthy budget while persistence had
+   * failed, which fired BudgetWorkspace's toast: "Copied budget allocations
+   * from previous month (Total: 900)" for a month that was never stored.
+   */
+  static copyBudgetFromPreviousMonth(targetMonthStr: string, sourceMonthStr?: string): Promise<MonthlyBudget | null> {
     let srcMonth = sourceMonthStr;
     if (!srcMonth) {
       const [yearStr, monthStr] = targetMonthStr.split('-');
@@ -353,7 +363,7 @@ export class FinancialCommands {
     }
 
     const srcBudget = repository.budgets.findForMonthSync(srcMonth);
-    if (!srcBudget) return null;
+    if (!srcBudget) return Promise.resolve(null);
 
     return this.saveMonthlyBudget(targetMonthStr, { ...srcBudget.allocations });
   }
@@ -372,7 +382,7 @@ export class FinancialCommands {
     status?: 'Active' | 'Lapsed' | 'Pending';
     currency?: string;
     notes?: string;
-  }): InsurancePolicy {
+  }): Promise<InsurancePolicy> {
     if (!params.provider || !params.provider.trim()) {
       throw new Error('Insurance provider name is required.');
     }
@@ -406,8 +416,10 @@ export class FinancialCommands {
       notes: params.notes?.trim() || undefined
     };
 
-    repository.policies.add(policy);
-    return policy;
+    // WP-FB-DATA-08B: the persistence promise is RETURNED. The constructed
+    // record is still handed back, but only once storage has agreed - no
+    // caller may claim success from it before that.
+    return repository.policies.add(policy).then(() => policy);
   }
 
   /**
@@ -433,7 +445,7 @@ export class FinancialCommands {
     status?: 'In Progress' | 'Achieved' | 'Paused';
     currency?: string;
     notes?: string;
-  }): FinancialGoal {
+  }): Promise<FinancialGoal> {
     if (!params.name || !params.name.trim()) {
       throw new Error('Goal name is required.');
     }
@@ -471,8 +483,10 @@ export class FinancialCommands {
       notes: params.notes?.trim() || undefined
     };
 
-    repository.goals.add(goal);
-    return goal;
+    // WP-FB-DATA-08B: the persistence promise is RETURNED. The constructed
+    // record is still handed back, but only once storage has agreed - no
+    // caller may claim success from it before that.
+    return repository.goals.add(goal).then(() => goal);
   }
 
   /**
@@ -487,7 +501,7 @@ export class FinancialCommands {
     return repository.goals.remove(id);
   }
 
-  static saveProfile(profile: FinancialProfile): void {
+  static saveProfile(profile: FinancialProfile): Promise<void> {
     const inc = Number(profile.monthlyIncome);
     if (isNaN(inc) || inc < 0) {
       throw new Error('Monthly income cannot be negative.');
@@ -509,7 +523,7 @@ export class FinancialCommands {
     const computedSavings = Math.max(0, inc - exp);
     const savingsRate = inc > 0 ? Math.round((computedSavings / inc) * 100) : 0;
 
-    repository.profile.save({
+    return repository.profile.save({
       ...profile,
       id: 'default-profile',
       monthlyIncome: inc,

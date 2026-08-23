@@ -82,6 +82,32 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
    * 07b gate measured this path closing over a failed write in silence.
    */
   const [assetNotice, setAssetNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  /**
+   * WP-FB-DATA-08B — the two snapshot buttons on this page.
+   *
+   * They are not modal-shaped, so they report inline. Measured at the 08B gate:
+   * `captureSnapshot()` was fire-and-forget here, so a failed snapshot produced
+   * no feedback at all and an unhandled page error.
+   */
+  const [snapshotNotice, setSnapshotNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [snapshotBusy, setSnapshotBusy] = useState(false);
+
+  const handleCaptureSnapshot = async () => {
+    if (snapshotBusy) return;
+    setSnapshotNotice(null);
+    setSnapshotBusy(true);
+    try {
+      await captureSnapshot();
+      setSnapshotNotice({ kind: 'success', message: 'Net worth snapshot captured.' });
+    } catch (e: any) {
+      setSnapshotNotice({
+        kind: 'error',
+        message: e?.message || 'The snapshot could not be saved.'
+      });
+    } finally {
+      setSnapshotBusy(false);
+    }
+  };
 
   const handleAddAsset = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -148,8 +174,11 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
           icon={Activity}
           action={
             <button
-              onClick={() => captureSnapshot()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition cursor-pointer"
+              id="overview-capture-snapshot-empty"
+              data-write-busy={snapshotBusy ? 'true' : 'false'}
+              disabled={snapshotBusy}
+              onClick={handleCaptureSnapshot}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs shadow-sm transition cursor-pointer"
             >
               <Camera size={13} />
               <span>Capture Snapshot</span>
@@ -463,8 +492,11 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
             badgeText={snapshots.length > 0 ? `${snapshots.length} Snapshots` : undefined}
             action={
               <button
-                onClick={() => captureSnapshot()}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#0D1117] hover:bg-[#21262D] border border-[#21262D] text-[11px] font-bold text-[#F0F6FC] transition cursor-pointer"
+                id="overview-capture-snapshot"
+                data-write-busy={snapshotBusy ? 'true' : 'false'}
+                disabled={snapshotBusy}
+                onClick={handleCaptureSnapshot}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#0D1117] hover:bg-[#21262D] border border-[#21262D] disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold text-[#F0F6FC] transition cursor-pointer"
                 title="Capture Snapshot"
               >
                 <Camera size={12} className="text-[#4F8CFF]" />
@@ -673,6 +705,21 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
       </div>
 
       {/* Inline Quick Modal Forms (Preserving All Certified Contracts) */}
+      {snapshotNotice && (
+        <div
+          id="snapshot-notice"
+          data-snapshot-kind={snapshotNotice.kind}
+          role="status"
+          className={
+            snapshotNotice.kind === 'error'
+              ? 'rounded-2xl border border-rose-800 bg-rose-950/30 px-5 py-3.5 text-xs font-semibold text-rose-300'
+              : 'rounded-2xl border border-emerald-800 bg-emerald-950/30 px-5 py-3.5 text-xs font-semibold text-emerald-300'
+          }
+        >
+          {snapshotNotice.message}
+        </div>
+      )}
+
       {assetNotice && (
         <div
           id="asset-notice"

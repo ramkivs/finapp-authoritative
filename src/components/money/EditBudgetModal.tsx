@@ -14,6 +14,8 @@ interface Props {
 export const EditBudgetModal: React.FC<Props> = ({ isOpen, onClose, monthStr, initialAllocations }) => {
   const [allocations, setAllocations] = useState<Record<string, number>>({});
   const { saveMonthlyBudget } = useCanonicalLedger();
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     setAllocations({ ...initialAllocations });
@@ -31,10 +33,22 @@ export const EditBudgetModal: React.FC<Props> = ({ isOpen, onClose, monthStr, in
 
   const totalBudget = Object.values(allocations).reduce((sum, val) => sum + (Number(val) || 0), 0);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  /**
+   * WP-FB-DATA-08B: the write is AWAITED and the modal closes only on success.
+   */
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    saveMonthlyBudget(monthStr, allocations);
-    onClose();
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await saveMonthlyBudget(monthStr, allocations);
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || 'The budget could not be saved.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -96,8 +110,21 @@ export const EditBudgetModal: React.FC<Props> = ({ isOpen, onClose, monthStr, in
               >
                 Cancel
               </button>
+              {error && (
+                <div
+                  id="edit-budget-error"
+                  data-write-kind="error"
+                  role="alert"
+                  className="mb-3 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-3 py-2 text-xs font-semibold text-rose-800 dark:text-rose-300"
+                >
+                  {error}
+                </div>
+              )}
               <button
                 type="submit"
+              id="edit-budget-submit"
+              data-write-busy={busy ? 'true' : 'false'}
+              disabled={busy}
                 className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-green-700 hover:bg-green-800 text-white font-extrabold text-xs transition shadow-sm"
               >
                 <Check size={14} />

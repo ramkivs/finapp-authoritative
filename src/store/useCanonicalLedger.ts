@@ -101,8 +101,8 @@ interface LedgerState {
   loadDemoData: () => Promise<void>;
   clearLocalData: () => Promise<void>;
 
-  addIncome: (title: string, amount: number, account: string, category: string, notes?: string) => void;
-  addExpense: (title: string, amount: number, account: string, category: string, notes?: string) => void;
+  addIncome: (title: string, amount: number, account: string, category: string, notes?: string) => Promise<void>;
+  addExpense: (title: string, amount: number, account: string, category: string, notes?: string) => Promise<void>;
   /**
    * WP-FB-DATA-06b: returns the persistence promise so a transfer-integrity
    * rejection is visible to the caller. Previously fire-and-forget, which meant
@@ -127,8 +127,8 @@ interface LedgerState {
   addLiabilityWithMetadata: (params: { name: string; amount: number; type?: any; currency?: string }) => Promise<void>;
   updateLiability: (params: { id: string; name: string; amount: number; type?: any; currency?: string }) => Promise<void>;
   removeLiability: (id: string) => Promise<void>;
-  addPastSnapshot: (params: { dateStr: string; totalAssets: number; totalLiabilities: number; label?: string }) => void;
-  captureSnapshot: (label?: string) => void;
+  addPastSnapshot: (params: { dateStr: string; totalAssets: number; totalLiabilities: number; label?: string }) => Promise<void>;
+  captureSnapshot: (label?: string) => Promise<void>;
   commitImportedRows: (validRows?: Transaction[]) => ImportCommitOutcome;
 
   // Account & Budget Actions (WP-18)
@@ -171,7 +171,7 @@ interface LedgerState {
     currency?: string;
     asOfDate?: string;
     notes?: string;
-  }) => void;
+  }) => Promise<void>;
   /**
    * WP-FB-DATA-08A - destructive deletions RETURN their promise.
    *
@@ -204,7 +204,16 @@ interface LedgerState {
   unlinkAccountFromAsset: (accountId: string) => LinkOutcome;
   /** WP-FB-DATA-05b G3: record "not the same money" for a same-name candidate. */
   dismissAssetCandidate: (accountId: string, assetId: string) => LinkOutcome;
-  saveMonthlyBudget: (monthStr: string, allocations: Record<string, number>) => void;
+  /**
+   * WP-FB-DATA-08B — the remaining write actions RETURN their promise.
+   *
+   * Measured at the 08B gate: each of these discarded it, so a persistence
+   * failure reverted memory correctly, told the user nothing, and escaped as an
+   * unhandled page error. Discovery also measured that NO caller consumes a
+   * return value from these paths, so ordinary promise propagation is enough —
+   * the 08A admission/`persisted` split would be complexity with no beneficiary.
+   */
+  saveMonthlyBudget: (monthStr: string, allocations: Record<string, number>) => Promise<void>;
 
   // Essentials Actions (WP-19)
   addPolicy: (params: {
@@ -217,7 +226,7 @@ interface LedgerState {
     status?: 'Active' | 'Lapsed' | 'Pending';
     currency?: string;
     notes?: string;
-  }) => void;
+  }) => Promise<void>;
   removePolicy: (id: string) => Promise<void>;
   addGoal: (params: {
     name: string;
@@ -230,9 +239,9 @@ interface LedgerState {
     status?: 'In Progress' | 'Achieved' | 'Paused';
     currency?: string;
     notes?: string;
-  }) => void;
+  }) => Promise<void>;
   removeGoal: (id: string) => Promise<void>;
-  saveProfile: (profile: FinancialProfile) => void;
+  saveProfile: (profile: FinancialProfile) => Promise<void>;
 
   getFilteredTransactions: (params?: {
     type?: 'Expense' | 'Income' | 'Transfer' | 'All';
@@ -336,7 +345,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
 
   addIncome: (title, amount, account, category, notes) => {
     // WP-FB-DATA-06a: constructed by the single TransactionFactory authority.
-    repository.transactions.append(TransactionFactory.createIncome({
+    return repository.transactions.append(TransactionFactory.createIncome({
       title,
       amount,
       account,
@@ -347,7 +356,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   addExpense: (title, amount, account, category, notes) => {
-    repository.transactions.append(TransactionFactory.createExpense({
+    return repository.transactions.append(TransactionFactory.createExpense({
       title,
       amount,
       account,
@@ -413,11 +422,11 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   addPastSnapshot: (params) => {
-    FinancialCommands.addPastSnapshot(params);
+    return FinancialCommands.addPastSnapshot(params);
   },
 
   captureSnapshot: (label) => {
-    FinancialCommands.createSnapshot(label);
+    return FinancialCommands.createSnapshot(label);
   },
 
   commitImportedRows: (validRows) => {
@@ -569,7 +578,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   addAccount: (params) => {
-    FinancialCommands.recordAccount(params);
+    return FinancialCommands.recordAccount(params).then(() => {});
   },
 
   removeAccount: (id) => {
@@ -595,11 +604,11 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   saveMonthlyBudget: (monthStr, allocations) => {
-    FinancialCommands.saveMonthlyBudget(monthStr, allocations);
+    return FinancialCommands.saveMonthlyBudget(monthStr, allocations).then(() => {});
   },
 
   addPolicy: (params) => {
-    FinancialCommands.recordPolicy(params);
+    return FinancialCommands.recordPolicy(params).then(() => {});
   },
 
   removePolicy: (id) => {
@@ -607,7 +616,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   addGoal: (params) => {
-    FinancialCommands.recordGoal(params);
+    return FinancialCommands.recordGoal(params).then(() => {});
   },
 
   removeGoal: (id) => {
@@ -615,7 +624,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   saveProfile: (profile) => {
-    FinancialCommands.saveProfile(profile);
+    return FinancialCommands.saveProfile(profile);
   },
 
   getFilteredTransactions: (params) => {

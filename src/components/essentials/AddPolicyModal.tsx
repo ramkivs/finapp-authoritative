@@ -19,6 +19,8 @@ export const AddPolicyModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [currency, setCurrency] = useState('');
   const [notes, setNotes] = useState('');
   const [error, setError] = useState('');
+  /** WP-FB-DATA-08B: in-flight while persistence is unresolved. */
+  const [busy, setBusy] = useState(false);
 
   const { addPolicy } = useCanonicalLedger();
 
@@ -29,7 +31,8 @@ export const AddPolicyModal: React.FC<Props> = ({ isOpen, onClose }) => {
     setStep(2);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
+    if (busy) return;
     e.preventDefault();
     setError('');
 
@@ -42,8 +45,10 @@ export const AddPolicyModal: React.FC<Props> = ({ isOpen, onClose }) => {
       return;
     }
 
+    setBusy(true);
+
     try {
-      addPolicy({
+      await addPolicy({
         type: selectedType,
         provider: provider.trim(),
         policyNumber: policyNumber.trim() || undefined,
@@ -67,6 +72,8 @@ export const AddPolicyModal: React.FC<Props> = ({ isOpen, onClose }) => {
       onClose();
     } catch (err: any) {
       setError(err.message || 'Error recording insurance policy.');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -231,6 +238,9 @@ export const AddPolicyModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 </button>
                 <button
                   type="submit"
+                  id="add-policy-submit"
+                  data-write-busy={busy ? 'true' : 'false'}
+                  disabled={busy}
                   className="px-5 py-2 rounded-xl bg-green-700 hover:bg-green-800 text-xs font-bold text-white transition shadow-sm"
                 >
                   Save Policy
