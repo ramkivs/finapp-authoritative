@@ -4,16 +4,28 @@ import { CurrencyValue } from '../CurrencyValue';
 import { AccountAssetLinkService } from '../../services/AccountAssetLinkService';
 import { Link2, X, AlertTriangle } from 'lucide-react';
 
+/**
+ * WP-FB-DATA-07c-R2 — the handlers now report persistence as well as admission.
+ *
+ * `ok` says the link service admitted the request; `persisted` says whether the
+ * change reached storage. Both matter, and only the first used to be shown.
+ */
+interface LinkHandlerResult {
+  ok: boolean;
+  message?: string;
+  persisted?: Promise<void>;
+}
+
 interface Props {
   isOpen: boolean;
   account: Account | null;
   accounts: Account[];
   assets: Asset[];
   onClose: () => void;
-  onLink: (accountId: string, assetId: string) => { ok: boolean; message?: string };
-  onUnlink: (accountId: string) => { ok: boolean; message?: string };
+  onLink: (accountId: string, assetId: string) => LinkHandlerResult;
+  onUnlink: (accountId: string) => LinkHandlerResult;
   /** WP-FB-DATA-05b G3: record that a same-name pair is NOT the same money. */
-  onDismissCandidate?: (accountId: string, assetId: string) => { ok: boolean; message?: string };
+  onDismissCandidate?: (accountId: string, assetId: string) => LinkHandlerResult;
 }
 
 /**
@@ -34,8 +46,33 @@ export const LinkAssetModal: React.FC<Props> = ({
   isOpen, account, accounts, assets, onClose, onLink, onUnlink, onDismissCandidate
 }) => {
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   if (!isOpen || !account) return null;
+
+  /**
+   * WP-FB-DATA-07c-R2 — one settle path for all three operations.
+   *
+   * Before this, every handler closed the modal the moment the link service
+   * said `ok`, and threw the persistence promise away. Measured in Chromium: a
+   * failing write closed the modal with no error while neither memory nor
+   * storage held the link, and the rejection escaped as an unhandled page
+   * error. The modal now closes only after storage has agreed, and renders the
+   * real `e.message` when it has not.
+   */
+  const settle = async (res: LinkHandlerResult, fallback: string) => {
+    if (!res.ok) { setError(res.message || fallback); return; }
+    if (!res.persisted) { onClose(); return; }   // nothing was written (no-op)
+    setBusy(true);
+    try {
+      await res.persisted;
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || fallback);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const status = AccountAssetLinkService.statusOf(account, assets);
   const linkedAssets = assets.filter(a => !!a.id);
@@ -45,18 +82,16 @@ export const LinkAssetModal: React.FC<Props> = ({
     return c && c.id !== account.id ? c : null;
   };
 
-  const handleLink = (assetId: string) => {
+  const handleLink = async (assetId: string) => {
+    if (busy) return;
     setError(null);
-    const res = onLink(account.id, assetId);
-    if (!res.ok) setError(res.message || 'Unable to link this asset.');
-    else onClose();
+    await settle(onLink(account.id, assetId), 'Unable to link this asset.');
   };
 
-  const handleUnlink = () => {
+  const handleUnlink = async () => {
+    if (busy) return;
     setError(null);
-    const res = onUnlink(account.id);
-    if (!res.ok) setError(res.message || 'Unable to unlink.');
-    else onClose();
+    await settle(onUnlink(account.id), 'Unable to unlink.');
   };
 
   const normalize = (n?: string) => (n || '').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -68,12 +103,11 @@ export const LinkAssetModal: React.FC<Props> = ({
     asset.type === 'Cash & Savings' &&
     normalize(asset.name) === normalize(account.name);
 
-  const handleDismiss = (assetId: string) => {
+  const handleDismiss = async (assetId: string) => {
+    if (busy) return;
     setError(null);
     if (!onDismissCandidate) return;
-    const res = onDismissCandidate(account.id, assetId);
-    if (!res.ok) setError(res.message || 'Unable to record that.');
-    else onClose();
+    await settle(onDismissCandidate(account.id, assetId), 'Unable to record that.');
   };
 
   /** Distinguishing detail so two same-named assets are never ambiguous. */
@@ -137,9 +171,11 @@ export const LinkAssetModal: React.FC<Props> = ({
               <button
                 id="btn-unlink-asset"
                 onClick={handleUnlink}
-                className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 text-[11px] font-bold text-rose-600 dark:text-rose-400 hover:border-rose-400 transition flex-shrink-0"
+                disabled={busy}
+                data-link-busy={busy ? 'true' : 'false'}
+                className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold text-rose-600 dark:text-rose-400 hover:border-rose-400 transition flex-shrink-0"
               >
-                Unlink
+                {busy ? 'Saving…' : 'Unlink'}
               </button>
             </div>
           )}
@@ -184,8 +220,9 @@ export const LinkAssetModal: React.FC<Props> = ({
                 {!claimer && isHeldCandidate(asset) && onDismissCandidate && (
                   <button
                     data-dismiss-candidate={asset.id}
+                    disabled={busy}
                     onClick={() => handleDismiss(asset.id!)}
-                    className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 text-[11px] font-bold text-gray-700 dark:text-gray-300 hover:border-gray-400 transition"
+                    className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold text-gray-700 dark:text-gray-300 hover:border-gray-400 transition"
                     title="These are different money — count both"
                   >
                     Not the same
@@ -193,7 +230,8 @@ export const LinkAssetModal: React.FC<Props> = ({
                 )}
                 <button
                   data-link-asset={asset.id}
-                  disabled={!!claimer || status.state === 'LINKED'}
+                  data-link-busy={busy ? 'true' : 'false'}
+                  disabled={!!claimer || status.state === 'LINKED' || busy}
                   onClick={() => handleLink(asset.id!)}
                   className="px-3 py-1.5 rounded-lg bg-green-700 hover:bg-green-800 disabled:bg-gray-300 dark:disabled:bg-gray-700 disabled:cursor-not-allowed text-white text-[11px] font-bold transition flex-shrink-0"
                   title={
@@ -204,7 +242,7 @@ export const LinkAssetModal: React.FC<Props> = ({
                       : 'Link this asset'
                   }
                 >
-                  Link
+                  {busy ? 'Saving…' : 'Link'}
                 </button>
                 </div>
               </div>

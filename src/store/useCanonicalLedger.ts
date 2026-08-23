@@ -27,6 +27,40 @@ import { AccountAssetLinkService, LinkResult } from '../services/AccountAssetLin
 import { TransactionSignService } from '../services/TransactionSignService';
 import { repository } from '../repositories';
 
+/**
+ * WP-FB-DATA-07c-R2 — the outcome of an account-link operation.
+ *
+ * `ok`/`reason`/`message` answer "was the request admitted?" — synchronously,
+ * as they always have. `persisted` answers "did the accepted change reach
+ * storage?" and is present ONLY when a write was attempted.
+ */
+export interface LinkOutcome extends LinkResult {
+  /** Resolves when the change is stored; rejects with the persistence error. */
+  persisted?: Promise<void>;
+}
+
+/**
+ * Attaches the persistence promise to an admitted link result.
+ *
+ * ONE helper for all three actions on purpose: the 06c family repeatedly showed
+ * that a rule applied at two of three call sites is not a rule. `link`,
+ * `unlink` and `dismissCandidate` share identical write semantics, so they must
+ * share identical failure semantics.
+ *
+ * The promise is RETURNED, never awaited here and never swallowed. A `.catch`
+ * placed here would silence the very failure the caller has to render — but
+ * leaving the promise entirely unobserved would produce an unhandled rejection
+ * for callers that legitimately ignore it, so the rejection is marked handled
+ * exactly once while the original promise is what the caller receives.
+ */
+function withPersistence(result: LinkResult): LinkOutcome {
+  if (!result.ok || result.unchanged) return result;
+  const persisted = (repository as any).applyAccountsUpdate(result.accounts) as Promise<void>;
+  // Keep the rejection observable to the caller AND handled for the runtime.
+  persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
+  return { ...result, persisted };
+}
+
 interface LedgerState {
   transactions: Transaction[];
   assets: Asset[];
@@ -142,11 +176,30 @@ interface LedgerState {
     notes?: string;
   }) => void;
   removeAccount: (id: string) => void;
-  /** WP-FB-DATA-04c-2: explicit Account<->Asset link (0..1 <-> 0..1). */
-  linkAccountToAsset: (accountId: string, assetId: string) => LinkResult;
-  unlinkAccountFromAsset: (accountId: string) => LinkResult;
+  /**
+   * WP-FB-DATA-04c-2: explicit Account<->Asset link (0..1 <-> 0..1).
+   *
+   * WP-FB-DATA-07c-R2 — these three now carry `persisted`.
+   *
+   * The synchronous part of the result is a DECISION: whether the link service
+   * admitted the request at all (claim conflicts, unknown ids, no-op). That has
+   * always been synchronous and stays synchronous, because callers branch on it
+   * immediately.
+   *
+   * `persisted` is the separate question of whether the accepted change actually
+   * reached storage. It used to be discarded: measured at the 07c-R1 gate, a
+   * persistence failure closed the modal as if the link had worked while memory
+   * and storage both held no link, and the rejection surfaced as an unhandled
+   * page error. A caller that cannot see this promise cannot tell the user the
+   * truth.
+   *
+   * It is present only when a write was actually attempted — a refusal or an
+   * unchanged result writes nothing and therefore promises nothing.
+   */
+  linkAccountToAsset: (accountId: string, assetId: string) => LinkOutcome;
+  unlinkAccountFromAsset: (accountId: string) => LinkOutcome;
   /** WP-FB-DATA-05b G3: record "not the same money" for a same-name candidate. */
-  dismissAssetCandidate: (accountId: string, assetId: string) => LinkResult;
+  dismissAssetCandidate: (accountId: string, assetId: string) => LinkOutcome;
   saveMonthlyBudget: (monthStr: string, allocations: Record<string, number>) => void;
 
   // Essentials Actions (WP-19)
@@ -473,28 +526,19 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   linkAccountToAsset: (accountId, assetId) => {
     const { accounts, assets } = get();
     const result = AccountAssetLinkService.link(accountId, assetId, accounts, assets);
-    if (result.ok && !result.unchanged) {
-      (repository as any).applyAccountsUpdate(result.accounts);
-    }
-    return result;
+    return withPersistence(result);
   },
 
   unlinkAccountFromAsset: (accountId) => {
     const { accounts } = get();
     const result = AccountAssetLinkService.unlink(accountId, accounts);
-    if (result.ok && !result.unchanged) {
-      (repository as any).applyAccountsUpdate(result.accounts);
-    }
-    return result;
+    return withPersistence(result);
   },
 
   dismissAssetCandidate: (accountId, assetId) => {
     const { accounts } = get();
     const result = AccountAssetLinkService.dismissCandidate(accountId, assetId, accounts);
-    if (result.ok && !result.unchanged) {
-      (repository as any).applyAccountsUpdate(result.accounts);
-    }
-    return result;
+    return withPersistence(result);
   },
 
   saveMonthlyBudget: (monthStr, allocations) => {
