@@ -25,13 +25,17 @@ export const ImportPage: React.FC = () => {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const { transactions, commitImportedRows, rollbackImportBatch } = useCanonicalLedger();
+  const { transactions, commitImportedRows, rollbackImportBatch, restoreImportBatch } = useCanonicalLedger();
 
   // WP-FB-DATA-06c-6a. Derived from the persisted rows on every render, so the
   // list reconciles itself after a rollback with no manual refresh.
   const importBatches = ImportBatchRollbackService.listBatches(transactions);
   const [rollbackBusy, setRollbackBusy] = useState<string | null>(null);
   const [rollbackNotice, setRollbackNotice] = useState<
+    { kind: 'success' | 'error'; text: string } | null
+  >(null);
+  const [restoreBusy, setRestoreBusy] = useState<string | null>(null);
+  const [restoreNotice, setRestoreNotice] = useState<
     { kind: 'success' | 'error'; text: string } | null
   >(null);
 
@@ -45,6 +49,7 @@ export const ImportPage: React.FC = () => {
    */
   const handleRollback = async (batch: ImportBatchSummary) => {
     setRollbackNotice(null);
+    setRestoreNotice(null);
 
     const message =
       `Roll back the import of "${batch.file}"?\n\n` +
@@ -72,6 +77,61 @@ export const ImportPage: React.FC = () => {
       setRollbackNotice({
         kind: 'error',
         text: e?.message || 'The import batch could not be rolled back.'
+      });
+    }
+  };
+
+  /**
+   * WP-FB-DATA-06c-2c — restore one import batch (Decision D6-1 = R5, D6-2).
+   *
+   * Deliberately the mirror of `handleRollback` above: same confirmation
+   * discipline, same busy state, same inline notice, same never-swallow rule.
+   *
+   * ⚠️ THE CONFIRMATION QUOTES `restoreTargetCount`, NOT `rowCount`.
+   * A batch containing a superseded original is restorable for only part of
+   * itself — the 06c-2c gate measured `rowCount 3` against
+   * `restoreTargetCount 1`. Saying "3 transactions will be restored" would
+   * overstate what the user is agreeing to by two rows.
+   *
+   * ⚠️ THE NOTICE RENDERS `e.message`, NEVER `e.code`.
+   * `BatchRestoreError` carries a code, but a READFAIL or a genuine IndexedDB
+   * failure arrives as a plain `Error` with no code at all — the gate measured
+   * exactly that. A handler keying on `.code` would print "undefined" on the
+   * one failure that matters most.
+   */
+  const handleRestore = async (batch: ImportBatchSummary) => {
+    setRollbackNotice(null);
+    setRestoreNotice(null);
+
+    const n = batch.restoreTargetCount;
+    const untouched = batch.restoreUntouchedCount;
+    const message =
+      `Restore the import of "${batch.file}"?\n\n` +
+      `${n} transaction${n === 1 ? '' : 's'} will be returned to your balances and reports.\n\n` +
+      (untouched > 0
+        ? `${untouched} other row${untouched === 1 ? '' : 's'} in this import stay excluded for a ` +
+          `different reason and are not affected.\n\n`
+        : '') +
+      `The rollback stays recorded in this import's history.`;
+
+    if (!window.confirm(message)) return;
+
+    setRestoreBusy(batch.batchId);
+    try {
+      const result = await restoreImportBatch(batch.batchId);
+      setRestoreBusy(null);
+      setRestoreNotice({
+        kind: 'success',
+        text:
+          `Restored "${batch.file}". ${result.restoredCount} transaction` +
+          `${result.restoredCount === 1 ? '' : 's'} are counted in your balances and reports again. ` +
+          `This import's rollback history is still recorded.`
+      });
+    } catch (e: any) {
+      setRestoreBusy(null);
+      setRestoreNotice({
+        kind: 'error',
+        text: e?.message || 'The import batch could not be restored.'
       });
     }
   };
@@ -240,6 +300,7 @@ export const ImportPage: React.FC = () => {
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
               Rolling back an import excludes its transactions from balances and reports.
               Nothing is deleted &mdash; the rows stay in the Canonical Ledger, marked EXCLUDED.
+              A rolled-back import can be restored, and the rollback stays recorded either way.
             </p>
 
             {rollbackNotice && (
@@ -254,6 +315,21 @@ export const ImportPage: React.FC = () => {
               >
                 <strong>{rollbackNotice.kind === 'success' ? 'Import rolled back.' : 'Rollback refused.'}</strong>{' '}
                 {rollbackNotice.text}
+              </div>
+            )}
+
+            {restoreNotice && (
+              <div
+                id="restore-notice"
+                data-restore-kind={restoreNotice.kind}
+                className={`mb-3 rounded-lg border p-3 text-xs ${
+                  restoreNotice.kind === 'success'
+                    ? 'border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200'
+                    : 'border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200'
+                }`}
+              >
+                <strong>{restoreNotice.kind === 'success' ? 'Import restored.' : 'Restore refused.'}</strong>{' '}
+                {restoreNotice.text}
               </div>
             )}
 
@@ -299,6 +375,29 @@ export const ImportPage: React.FC = () => {
                         {' '}your own corrected figures, which a rollback of this import will not undo.
                       </div>
                     )}
+                    {/* WP-FB-DATA-06c-2c / Q1 = (b) — RESTORE HISTORY.
+                        Decision D6-3 required that a restore must not erase the fact that a
+                        rollback happened, and 06c-2b satisfied that in the DATA. The 06c-2c
+                        gate then measured that it was invisible on screen: after
+                        rollback -> restore -> rollback the row read exactly like a plain
+                        rollback. `restoredCount` already persists; this renders it, so the
+                        audit event the user's data records is an audit event the user can see. */}
+                    {batch.restoredCount > 0 && (
+                      <div
+                        data-batch-restored={batch.restoredCount}
+                        className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-300"
+                      >
+                        {batch.restoredCount} row{batch.restoredCount === 1 ? '' : 's'} previously restored
+                      </div>
+                    )}
+                    {!batch.restoreEligible && batch.restoreBlockedReason && batch.status !== 'LIVE' && (
+                      <div
+                        data-batch-restore-blocked={batch.restoreBlockedCode}
+                        className="mt-1 text-[11px] text-amber-700 dark:text-amber-300"
+                      >
+                        Cannot restore: {batch.restoreBlockedReason}
+                      </div>
+                    )}
                     {!batch.rollbackEligible && batch.rollbackBlockedReason && batch.status !== 'ROLLED_BACK' && (
                       <div
                         data-batch-blocked={batch.rollbackBlockedCode}
@@ -308,15 +407,28 @@ export const ImportPage: React.FC = () => {
                       </div>
                     )}
                   </div>
+                  <div className="shrink-0 flex items-center gap-2">
+                  <button
+                    data-restore-batch={batch.batchId}
+                    onClick={() => handleRestore(batch)}
+                    disabled={!batch.restoreEligible || restoreBusy === batch.batchId}
+                    title={batch.restoreEligible
+                      ? `Return ${batch.restoreTargetCount} transaction(s) to balances and reports`
+                      : batch.restoreBlockedReason}
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {restoreBusy === batch.batchId ? 'Restoring…' : 'Restore Import'}
+                  </button>
                   <button
                     data-rollback-batch={batch.batchId}
                     onClick={() => handleRollback(batch)}
                     disabled={!batch.rollbackEligible || rollbackBusy === batch.batchId}
                     title={batch.rollbackEligible ? 'Exclude this import from balances and reports' : batch.rollbackBlockedReason}
-                    className="shrink-0 px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {rollbackBusy === batch.batchId ? 'Rolling back…' : 'Roll Back Import'}
                   </button>
+                  </div>
                 </div>
               ))}
             </div>

@@ -173,6 +173,30 @@ export interface ImportBatchSummary {
   /** Populated when `rollbackEligible` is false. */
   rollbackBlockedCode?: RollbackRefusalCode;
   rollbackBlockedReason?: string;
+  /* ── RESTORE (WP-FB-DATA-06c-2c) ──────────────────────────────────────────
+   *
+   * The exact mirror of the three rollback fields above, computed from
+   * `planRestore()` for the same reason: the UI must ask the authority the
+   * write path asks. Before 06c-2c this summary knew nothing about restore, so
+   * a restore control had no way to agree with `restoreBatch` except by
+   * re-deriving the rules — two implementations of one rule, which is not one
+   * rule. */
+  /** Whether `restoreBatch` would currently succeed. */
+  restoreEligible: boolean;
+  /** Populated when `restoreEligible` is false. */
+  restoreBlockedCode?: RestoreRefusalCode;
+  restoreBlockedReason?: string;
+  /**
+   * How many rows a restore would ACTUALLY return.
+   *
+   * ⚠️ NOT `rowCount`. A batch containing a superseded original is restorable
+   * for only part of itself — the 06c-2c gate measured `rowCount 3` against
+   * `restoreTargetCount 1`. A confirmation quoting `rowCount` would overstate
+   * what the user is agreeing to by two rows.
+   */
+  restoreTargetCount: number;
+  /** Excluded rows a restore will deliberately NOT touch (e.g. SUPERSEDED). */
+  restoreUntouchedCount: number;
 }
 
 export interface BatchRollbackResult {
@@ -360,6 +384,7 @@ export class ImportBatchRollbackService {
       const excludedCount = rows.filter(r => LedgerExclusionService.isExcluded(r)).length;
 
       const plan = this.plan(batchId, txs);
+      const restorePlan = this.planRestore(batchId, txs);
 
       const status: ImportBatchSummary['status'] =
         excludedCount === 0 ? 'LIVE'
@@ -380,7 +405,12 @@ export class ImportBatchRollbackService {
         status,
         rollbackEligible: plan.status === 'ADMISSIBLE',
         rollbackBlockedCode: plan.status === 'ADMISSIBLE' ? undefined : plan.refusalCode,
-        rollbackBlockedReason: plan.status === 'ADMISSIBLE' ? undefined : plan.refusalReason
+        rollbackBlockedReason: plan.status === 'ADMISSIBLE' ? undefined : plan.refusalReason,
+        restoreEligible: restorePlan.status === 'ADMISSIBLE',
+        restoreBlockedCode: restorePlan.status === 'ADMISSIBLE' ? undefined : restorePlan.refusalCode,
+        restoreBlockedReason: restorePlan.status === 'ADMISSIBLE' ? undefined : restorePlan.refusalReason,
+        restoreTargetCount: restorePlan.targetIds.length,
+        restoreUntouchedCount: restorePlan.untouchedExcludedIds.length
       };
     });
 
