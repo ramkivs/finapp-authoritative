@@ -7,7 +7,7 @@ import { TransactionIdentityService } from '../../TransactionIdentityService';
 export class BankTransactionNormalizer {
   /**
    * Transforms an ingestion-layer BankStatementRecord into a canonical FinBoom Transaction.
-   * Enforces debit/credit rules, date validation, narration security sanitization, and SHA-256 fingerprinting.
+   * Enforces debit/credit rules, date validation, narration security sanitization, and deterministic fingerprinting.
    */
   static normalize(
     record: BankStatementRecord,

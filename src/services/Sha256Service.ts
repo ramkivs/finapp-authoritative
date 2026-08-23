@@ -1,4 +1,49 @@
+/**
+ * FinBoom deterministic content digest.
+ *
+ * ⚠️ THIS IS NOT SHA-256, DESPITE THE CLASS NAME.
+ *
+ * Measured at the POST10 discovery gate against the RFC known-answer vectors
+ * and against the browser's own `crypto.subtle.digest('SHA-256', …)`:
+ *
+ *     hash('abc') -> 8466c30a3bdfa36dc3d7959f676fc764606b043baa55931857bb5487d3ced497
+ *     SHA-256('abc') = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+ *
+ * The two do not agree, and neither does the empty-string vector. The cause is
+ * an operator-precedence error in the message schedule below: `+` binds tighter
+ * than `^`, so the sigma0 group is XORed with the sum of the remaining terms
+ * instead of being added to them. The enclosing parentheses the reference
+ * algorithm requires are absent.
+ *
+ * WHAT IT ACTUALLY IS: a deterministic, stable, 64-hex-character digest.
+ * Identical input always yields identical output, which is the only property
+ * its callers depend on.
+ *
+ * WHAT IT IS NOT — do not claim any of these without new measurement:
+ *   - it is NOT SHA-256, and NOT equivalent to SHA-256
+ *   - it is NOT a standards-conforming digest of any kind
+ *   - it is NOT independently verifiable by a third party
+ *   - it has NOT been analysed for collision resistance (NOT MEASURED)
+ *
+ * WHY IT IS NOT BEING CORRECTED (Decision Q-POST10-1 = (c)):
+ * `Transaction.fingerprint` is PERSISTED in users' IndexedDB, and
+ * `TransactionIdentityService.fingerprintOf` prefers the stored value.
+ * Changing the algorithm would change every newly computed fingerprint while
+ * stored ones kept the old value, so a re-imported row that duplicates an
+ * existing one would stop matching and be inserted twice. The measured harm was
+ * the false claim, not the behaviour, so the claim was corrected and the digest
+ * left byte-for-byte intact. No migration, no recomputation.
+ *
+ * The class name is retained deliberately: renaming it would touch every
+ * consumer for no behavioural gain. The name is internal and never shown to a
+ * user; every user-facing and documentation claim has been corrected.
+ */
 export class Sha256Service {
+  /**
+   * Deterministic 64-hex-character digest of `ascii`.
+   *
+   * Stable across calls and across reloads. NOT SHA-256 — see the class note.
+   */
   static hash(ascii: string): string {
     const mathPow = Math.pow;
     const maxWord = mathPow(2, 32);

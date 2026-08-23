@@ -108,7 +108,7 @@ describe('WP-FB-DATA-06a — transaction integrity foundations', () => {
       })).toBe('HDFC Bank|2026-06-01|5000|acme payroll jun');
     });
 
-    it('is a genuine SHA-256 digest of that exact string', () => {
+    it('is the deterministic digest of that exact string (NOT SHA-256 — see Sha256Service)', () => {
       expect(TransactionIdentityService.fingerprint(BASE))
         .toBe(Sha256Service.hash('HDFC Bank|2026-06-01|5000|acme payroll jun'));
       expect(TransactionIdentityService.fingerprint(BASE)).toMatch(/^[0-9a-f]{64}$/);

@@ -6,7 +6,7 @@ import { Transaction, TransactionOrigin } from '../domain/types';
  *
  * THE SINGLE PLACE where a transaction fingerprint is defined and computed.
  *
- * Before this service the identical canonical-string + SHA-256 logic existed in
+ * Before this service the identical canonical-string + digest logic existed in
  * THREE places (WP-FB-DATA-06 discovery, finding L-06):
  *
  *   1. `MemoryRepository.ts:33`        — module-local `generateFingerprint` (DEAD: never called)
@@ -22,7 +22,7 @@ import { Transaction, TransactionOrigin } from '../domain/types';
  * FINGERPRINT DEFINITION — DELIBERATELY UNCHANGED IN THIS PACKAGE
  * ─────────────────────────────────────────────────────────────────────────────
  *
- *   SHA256(`${account}|${date}|${amount}|${narration.toLowerCase().trim()}`)
+ *   digest(`${account}|${date}|${amount}|${narration.toLowerCase().trim()}`)
  *
  * WP-FB-DATA-06a is a foundations package with NO intended user-visible
  * financial change. The canonical string is therefore byte-for-byte identical
@@ -188,7 +188,15 @@ export class TransactionIdentityService {
     return `${tx.account}|${tx.date}|${tx.amount}|${tx.narration.toLowerCase().trim()}`;
   }
 
-  /** SHA-256 of the canonical string. The one fingerprint implementation. */
+  /**
+   * Deterministic digest of the canonical string. The one fingerprint
+   * implementation.
+   *
+   * ⚠️ `Sha256Service` is NOT SHA-256 despite its name (POST10 gate, measured).
+   * It is deterministic and stable, which is all this depends on. The digest is
+   * PERSISTED on `Transaction.fingerprint`, so it must never be changed without
+   * a migration -- see the note on `Sha256Service`.
+   */
   static fingerprint(tx: FingerprintInput): string {
     return Sha256Service.hash(this.canonicalString(tx));
   }

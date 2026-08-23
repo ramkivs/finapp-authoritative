@@ -1,6 +1,12 @@
 /**
  * FINBOOM WP-22: Provenance Service
- * Calculates input fingerprints and structured execution identities via RFC 8785 JCS & SHA-256
+ * Calculates input fingerprints and structured execution identities via
+ * RFC 8785 JCS canonicalization and a deterministic digest.
+ *
+ * ⚠️ The digest is NOT SHA-256 despite `Sha256Service`'s name (POST10 gate,
+ * measured against the RFC vectors and native WebCrypto). Fingerprints are
+ * reproducible within FinBoom; they are NOT independently verifiable by a
+ * third party. Do not describe them as SHA-256 anywhere user-facing.
  */
 
 import { Sha256Service } from '../Sha256Service';

@@ -328,7 +328,7 @@ export const ImportPage: React.FC = () => {
             Upload Statement File (.csv, .txt, .xls, .xlsx)
           </h4>
           <p className="text-sm text-gray-500 mb-5">
-            Native support for HDFC Bank, ICICI Bank, SBI Bank & Generic CSV exports with SHA-256 deduplication and formula sanitization.
+            Native support for HDFC Bank, ICICI Bank, SBI Bank &amp; Generic CSV exports with deterministic fingerprint deduplication and formula sanitization.
           </p>
           <button
             type="button"

@@ -82,7 +82,7 @@ export const ProvenanceBadge: React.FC<Props> = ({ provenance, className = '' })
 
           <div className="pt-1.5 border-t border-[#21262D]/40 flex items-center justify-between">
             <div className="overflow-hidden pr-2">
-              <span className="font-semibold text-[#6E7681] block text-[9px] uppercase">Execution Fingerprint (RFC 8785 JCS + SHA-256)</span>
+              <span className="font-semibold text-[#6E7681] block text-[9px] uppercase">Execution Fingerprint (RFC 8785 JCS, deterministic digest)</span>
               <code className="text-[9px] font-mono text-[#4F8CFF] block truncate">
                 {provenance.executionFingerprint}
               </code>

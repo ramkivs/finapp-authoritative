@@ -8,7 +8,7 @@ export type { CSVImportResult, ImportRowIssue, DivergentDuplicate } from './impo
 
 export class ImportPipelineService {
   /**
-   * Generates a genuine SHA-256 hexadecimal digest (64 hex characters)
+   * Generates a deterministic 64-hex-character digest (NOT SHA-256 -- see Sha256Service)
    * of the canonical transaction string `${account}|${date}|${amount}|${narration}`.
    *
    * WP-FB-DATA-06a: this is now a thin delegation. The definition lives in
@@ -103,7 +103,7 @@ export class ImportPipelineService {
   /**
    * TEXT PATH: Main bulk import entrypoint for CSV, TXT, HTML .xls, and HDFC fixed-width text files.
    * Detects source format (HDFC, ICICI, SBI, Generic CSV), routes to matching bank adapter,
-   * normalizes rows into canonical Transactions, applies SHA-256 fingerprint deduplication.
+   * normalizes rows into canonical Transactions, applies deterministic fingerprint deduplication.
    */
   static processCSV(
     csvText: string,
