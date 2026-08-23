@@ -10,6 +10,73 @@ import { CalculatorsPage } from './pages/CalculatorsPage';
 import { IncomeModal, ExpenseModal, TransferModal } from './components/Modals';
 import { CustomDateModal } from './components/CustomDateModal';
 import { ShieldCheck } from 'lucide-react';
+import { useCanonicalLedger } from './store/useCanonicalLedger';
+
+/**
+ * WP-FB-DATA-10 / Decision Q-D10-1 = (a).
+ *
+ * When the initial IndexedDB load fails the app must say so. Before this, the
+ * failure escaped as an unhandled page error and the user was shown an ordinary
+ * empty ledger — a failed read looked exactly like a genuine first run.
+ *
+ * Per Q-D10-1(a) this is a NOTICE plus a RETRY, not a loading screen and not an
+ * interaction block: the READFAIL latch already refuses writes while a load has
+ * failed, so stored data is safe without taking the application away from the
+ * user. What was missing was telling them, and giving them a way back.
+ */
+const StartupNotice: React.FC = () => {
+  const initStatus = useCanonicalLedger(s => s.initStatus);
+  const initError = useCanonicalLedger(s => s.initError);
+  const initialize = useCanonicalLedger(s => s.initialize);
+  const [retrying, setRetrying] = useState<boolean>(false);
+
+  /* The notice stays up while a retry is in flight. `initialize` flips
+   * initStatus to 'loading' immediately, and hiding on that would make the
+   * failure — and the busy state — vanish mid-retry, briefly presenting the
+   * unloaded ledger as if it were fine. */
+  if (initStatus !== 'failed' && !retrying) return null;
+
+  const onRetry = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      // Success is not claimed here: `initialize` flips initStatus to 'ready'
+      // only after the load actually resolves, which unmounts this notice.
+      await initialize();
+    } catch {
+      /* Still failed — initStatus/initError are already updated and the
+       * notice stays on screen with the current message. */
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <div
+      id="startup-notice"
+      data-startup-kind="error"
+      role="alert"
+      className="mb-4 rounded-2xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-5 py-3.5 text-xs font-semibold text-rose-800 dark:text-rose-300 flex flex-wrap items-center justify-between gap-3"
+    >
+      <div className="min-w-0">
+        <strong>Your saved ledger could not be loaded.</strong>{' '}
+        This is not an empty ledger — your stored data has not been read, and nothing has been
+        changed or deleted. Saving is blocked until a load succeeds, so your data cannot be
+        overwritten. {initError}
+      </div>
+      <button
+        id="btn-retry-startup"
+        type="button"
+        onClick={onRetry}
+        disabled={retrying}
+        aria-busy={retrying}
+        className="shrink-0 px-3 py-1.5 rounded-xl border border-rose-400 dark:border-rose-700 bg-white/70 dark:bg-rose-900/40 text-rose-900 dark:text-rose-200 font-bold hover:bg-white dark:hover:bg-rose-900/70 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {retrying ? 'Retrying…' : 'Retry loading'}
+      </button>
+    </div>
+  );
+};
 
 export function App() {
   const [activeTab, setActiveTab] = useState<string>('money');
@@ -83,6 +150,7 @@ export function App() {
         />
 
         <main className="p-4 md:p-6 lg:p-8 max-w-[1440px] w-full mx-auto flex-1">
+          <StartupNotice />
           {activeTab === 'overview' && <OverviewPage navigateTo={navigateTo} />}
           {activeTab === 'wealth' && <WealthPage />}
           {activeTab === 'money' && (

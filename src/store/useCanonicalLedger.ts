@@ -98,6 +98,22 @@ interface LedgerState {
   }) => void;
 
   initialize: () => Promise<void>;
+  /**
+   * WP-FB-DATA-10 — observable initialization outcome.
+   *
+   * The startup load is asynchronous and can fail. Without this the UI cannot
+   * tell "the ledger is empty" apart from "the ledger could not be read", and
+   * the 10 discovery gate measured exactly that: a blocked IndexedDB produced a
+   * normal-looking empty FinBoom with no indication anything had gone wrong.
+   *
+   * This is a DISCLOSURE signal, not a data-safety mechanism. The authority on
+   * whether stored data is safe to overwrite remains
+   * `IndexedDBStorageService.loadFailed` and the write refusal it drives; this
+   * state deliberately does not duplicate or override it.
+   */
+  initStatus: 'loading' | 'ready' | 'failed';
+  /** Actionable message for the user when `initStatus === 'failed'`. */
+  initError: string | null;
   loadDemoData: () => Promise<void>;
   clearLocalData: () => Promise<void>;
 
@@ -295,6 +311,8 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   policies: [],
   goals: [],
   profile: null,
+  initStatus: 'loading',
+  initError: null,
   privacyMasked: typeof window !== 'undefined' ? localStorage.getItem('finapp.privacy.masked') === 'true' : false,
   filterType: 'All',
   dateRange: 'This Month',
@@ -332,7 +350,21 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   initialize: async () => {
-    await repository.initialize();
+    // WP-FB-DATA-10: the outcome is recorded so the UI can disclose it. The
+    // rejection is still rethrown — callers (and the retry affordance) must be
+    // able to observe the failure, and 06c-READFAIL's propagation contract is
+    // unchanged. Only the reporting is new.
+    set({ initStatus: 'loading', initError: null });
+    try {
+      await repository.initialize();
+      set({ initStatus: 'ready', initError: null });
+    } catch (e) {
+      set({
+        initStatus: 'failed',
+        initError: e instanceof Error ? e.message : String(e)
+      });
+      throw e;
+    }
   },
 
   loadDemoData: async () => {
@@ -662,10 +694,41 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   }
 }));
 
+/**
+ * WP-FB-DATA-10 — the startup load, as a named and therefore testable unit.
+ *
+ * Extracted from the timer body for one reason: a `.catch()` buried inside a
+ * module-scope `setTimeout` runs exactly once, at module evaluation, and no
+ * test can reach it. Naming it means the swallow itself is covered, rather
+ * than a test re-implementing the same shape and proving nothing about the
+ * shipped code.
+ *
+ * Resolves in BOTH outcomes — the failure has already been recorded in
+ * `initStatus`/`initError` by `initialize`, and App's #startup-notice renders
+ * from that state. Nothing is left for a caller to handle.
+ */
+export function runStartupInitialization(): Promise<void> {
+  return useCanonicalLedger.getState().initialize().catch(() => {
+    /* Recorded in initStatus/initError; deliberately not rethrown. */
+  });
+}
+
 // Initialize storage automatically in browser
 if (typeof window !== 'undefined') {
   (window as any).useCanonicalLedger = useCanonicalLedger;
   setTimeout(() => {
-    useCanonicalLedger.getState().initialize();
+    /* WP-FB-DATA-10 — the startup load is OBSERVED, not discarded.
+     *
+     * This call was previously fire-and-forget. The 10 discovery gate measured
+     * the consequence in real Chromium: with IndexedDB blocked, the rejection
+     * escaped as an unhandled `pageerror` while the user was shown an ordinary
+     * empty ledger — indistinguishable from a genuine first run.
+     *
+     * NOTE: this does NOT fix the import cycle
+     * (store -> repositories -> MemoryRepository -> store). Handling the
+     * rejection stops vitest reporting the resulting `undefined.initialize`
+     * TypeError, but that test-lifecycle race is untouched and out of scope.
+     */
+    void runStartupInitialization();
   }, 0);
 }
