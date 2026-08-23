@@ -14,6 +14,7 @@ import {
   GoalTemplateType,
   FinancialProfile,
   BatchRollbackResultShape,
+  BatchRestoreResultShape,
   AmendmentRequestShape,
   AmendmentResultShape
 } from '../domain/types';
@@ -99,6 +100,17 @@ interface LedgerState {
    * rejection (the F-06b-2 lesson).
    */
   rollbackImportBatch: (importBatchId: string) => Promise<BatchRollbackResultShape>;
+  /**
+   * WP-FB-DATA-06c-2b / Decision D6-1 = R5 — reverse an import-batch rollback.
+   *
+   * Returns the promise so a refusal reaches the caller rather than becoming an
+   * invisible unhandled rejection (the F-06b-2 lesson).
+   *
+   * ⚠️ Whole batch only (D6-2), IMPORT_ROLLBACK only (D6-1). This is NOT undo:
+   * there is deliberately no `undo`, `revert`, `restoreTransaction` or
+   * `unsupersedeTransaction` on this store, and D6-7 keeps it that way.
+   */
+  restoreImportBatch: (importBatchId: string) => Promise<BatchRestoreResultShape>;
   /**
    * WP-FB-DATA-06c-2 — amend recorded transactions by supersession.
    *
@@ -422,6 +434,10 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
 
   rollbackImportBatch: (importBatchId) => {
     return repository.transactions.rollbackBatch(importBatchId);
+  },
+
+  restoreImportBatch: (importBatchId) => {
+    return repository.transactions.restoreBatch(importBatchId);
   },
 
   supersedeTransactions: (requests) => {

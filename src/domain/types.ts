@@ -134,6 +134,53 @@ export interface Transaction {
   /** Why it is excluded. See `LedgerExclusionReason`. */
   excludedReason?: LedgerExclusionReason;
   /**
+   * ISO-8601 timestamp of the most recent IMPORT_ROLLBACK RESTORE
+   * (WP-FB-DATA-06c-2b, Decision D6-3). Absent = never restored.
+   *
+   * ─────────────────────────────────────────────────────────────────────────
+   * WHY THIS FIELD EXISTS AT ALL
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * D6-3 requires that a restore must NOT erase the fact that a rollback
+   * occurred, and that `rollback -> restore -> rollback` stays distinguishable
+   * from a plain `rollback`.
+   *
+   * Before this field, `excludedAt` was the ONLY record that a rollback had
+   * happened. Restore clears it, so the D6/D9 gate measured that
+   * `rollback -> restore -> rollback` was unbounded and left no trace at all:
+   * the final state was byte-identical to a batch rolled back once.
+   *
+   * ─────────────────────────────────────────────────────────────────────────
+   * WHY EXACTLY ONE FIELD, AND WHY A TIMESTAMP RATHER THAN A LOG
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * Constraint 15 requires the MINIMUM representation that satisfies D6-3 and
+   * explicitly forbids inventing a general audit framework. One optional
+   * timestamp is provably sufficient, because restore is reachable only from
+   * an IMPORT_ROLLBACK exclusion (Decision D6-1 = R5). Its presence therefore
+   * PROVES a rollback happened and was undone:
+   *
+   *   excluded + no restoredAt   -> rolled back once, never restored
+   *   not excluded + restoredAt  -> rolled back, then restored
+   *   excluded + restoredAt      -> rolled back, restored, rolled back AGAIN
+   *   not excluded + no restoredAt -> never rolled back
+   *
+   * All four states are distinguishable, which is exactly what D6-3 asks for.
+   * A `lastRolledBackAt` companion would be redundant (it equals `excludedAt`
+   * whenever the row is excluded, and adds nothing once it is not), and a
+   * full event log would be the general audit framework constraint 15 forbids.
+   *
+   * ⚠️ NEVER CLEARED. `ImportBatchRollbackService.apply` spreads the existing
+   * row, so a subsequent rollback preserves this automatically. Nothing in the
+   * codebase may clear it — clearing it would re-create the very history loss
+   * D6-3 exists to prevent.
+   *
+   * ⚠️ NOT A LIFECYCLE STATE. Whether a row counts is decided solely by
+   * `excludedAt` via `LedgerExclusionService`. This field is history, not
+   * state, and no derivation surface may read it.
+   */
+  restoredAt?: string;
+  /**
    * BACKWARD supersession pointer (WP-FB-DATA-06c-2, Decisions D3 = B, D5 = C,
    * D10 = C).
    *
@@ -372,6 +419,27 @@ export interface TransactionRepository {
    */
   rollbackBatch(importBatchId: string): Promise<BatchRollbackResultShape>;
   /**
+   * WP-FB-DATA-06c-2b / Decision D6-1 = R5 — reverses an import-batch rollback
+   * by CLEARING the IMPORT_ROLLBACK exclusion on that batch's rows.
+   *
+   * ⚠️ SCOPE, DELIBERATELY NARROW.
+   *   - Whole batch only (D6-2). There is no per-row restore, by design.
+   *   - IMPORT_ROLLBACK only (D6-1). A `SUPERSEDED` row is never restored: the
+   *     D6/D9 gate measured that restoring one produced a persisted, silent,
+   *     undisclosed double count (15,500 -> 20,500, two included versions).
+   *   - It is NOT general undo (D6-7). It clears an exclusion; it retracts no
+   *     business operation and disposes of no row.
+   *
+   * ⚠️ NOT NAMED `restore`. The name is `restoreBatch` for the same reason
+   * `rollbackBatch` is not `removeBatch`: a bare `restore` would imply a
+   * general capability that D6-7 explicitly withholds.
+   *
+   * Rejects with `BatchRestoreError` when the batch is unknown, was never
+   * rolled back, has already been restored, carries an unrecognised exclusion
+   * reason, or when restoring it would leave a transfer partly excluded.
+   */
+  restoreBatch(importBatchId: string): Promise<BatchRestoreResultShape>;
+  /**
    * WP-FB-DATA-06c-2 / Decisions D3, D4, D5, D10, D11, D12 — the ONE atomic
    * amendment primitive.
    *
@@ -414,6 +482,15 @@ export interface AmendmentResultShape {
 }
 
 /** Structural mirror of `BatchRollbackResult` (kept here to avoid a service import in the port). */
+/** Structural mirror of `BatchRestoreResult` (WP-FB-DATA-06c-2b). */
+export interface BatchRestoreResultShape {
+  batchId: string;
+  restoredCount: number;
+  restoredIds: string[];
+  /** ISO timestamp stamped onto every restored row as the D6-3 audit record. */
+  restoredAt: string;
+}
+
 export interface BatchRollbackResultShape {
   batchId: string;
   excludedCount: number;

@@ -514,13 +514,23 @@ describe('WP-FB-DATA-06c-6 — import batch rollback', () => {
       expect(typeof (S() as any).undo).toBe('undefined');
     });
 
-    it('rollback cannot be undone — no restore capability was added', async () => {
+    /* WP-FB-DATA-06c-2b REVERSED THIS TEST, deliberately. It asserted that a
+     * rollback could not be undone, which was true while D6 was open. Decision
+     * D6-1 = R5 resolved it: a WHOLE import batch may be restored. The scope
+     * boundary it was really protecting — no per-row restore, no general undo,
+     * no deletion — is asserted here instead. */
+    it('rollback can be undone at BATCH granularity only (D6-1 = R5, D6-2)', async () => {
       const A = acct('A', 10000);
       await seedBatch(A, 'batch-A', [100]);
       await repository.transactions.rollbackBatch('batch-A');
       const t = repository.transactions as any;
-      expect(typeof t.restoreBatch).toBe('undefined');
-      expect(typeof (S() as any).restoreImportBatch).toBe('undefined');
+      expect(typeof t.restoreBatch).toBe('function');
+      expect(typeof (S() as any).restoreImportBatch).toBe('function');
+      // no per-row restore, no general undo, no deletion
+      for (const k of ['restore', 'restoreTransaction', 'undo', 'revert',
+                       'remove', 'removeBatch', 'deleteTransaction']) {
+        expect(typeof t[k]).toBe('undefined');
+      }
     });
 
     it('the exclusion reason vocabulary is still only IMPORT_ROLLBACK', async () => {

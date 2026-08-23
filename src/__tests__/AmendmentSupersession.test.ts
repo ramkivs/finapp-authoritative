@@ -878,22 +878,30 @@ describe('WP-FB-DATA-06c-2 — amendment / supersession', () => {
 
   /* ═══════════════════════ §9 scope boundary ═════════════════════════════ */
   describe('§9 scope boundary — nothing else was resolved', () => {
-    it('ACCEPTANCE 14 — there is NO restore capability (Q2 = d)', () => {
+    /* WP-FB-DATA-06c-2b NARROWED THIS LIST — by exactly the two authorised
+     * names. Decision D6-1 = R5 permits `restoreBatch` (whole import batch,
+     * IMPORT_ROLLBACK only) and its store seam `restoreImportBatch`. Every
+     * other name stays forbidden, and a BARE `restore` in particular stays
+     * forbidden because D6-7 withholds general undo. Widening this list any
+     * further is how an unmade decision gets made by accident. */
+    it('the only restore capability is whole-batch restoreBatch (D6-1 = R5)', () => {
       const t = repository.transactions as any;
-      for (const k of ['restore', 'unsupersede', 'revert', 'undo', 'restoreBatch',
+      expect(typeof t.restoreBatch).toBe('function');
+      for (const k of ['restore', 'unsupersede', 'revert', 'undo',
                        'restoreTransaction', 'amend', 'update', 'remove', 'replace',
-                       'patch', 'reverse', 'tombstone', 'removeBatch']) {
+                       'patch', 'reverse', 'tombstone', 'removeBatch', 'deleteTransaction']) {
         expect(typeof t[k]).toBe('undefined');
       }
       expect(typeof t.supersede).toBe('function');
     });
 
-    it('ACCEPTANCE 14 — no restore surface on the store either (D6 OPEN)', () => {
+    it('the store exposes batch restore ONLY — no general undo (D6-7)', () => {
       const s = S() as any;
+      expect(typeof s.restoreImportBatch).toBe('function');
       expect(typeof s.undo).toBe('undefined');
-      expect(typeof s.restoreImportBatch).toBe('undefined');
       expect(typeof s.restoreTransaction).toBe('undefined');
       expect(typeof s.unsupersedeTransaction).toBe('undefined');
+      expect(typeof s.deleteTransaction).toBe('undefined');
       expect(typeof s.supersedeTransactions).toBe('function');
     });
 

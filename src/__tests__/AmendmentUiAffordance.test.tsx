@@ -732,13 +732,13 @@ describe('WP-FB-DATA-06c-2a — amendment UI affordance', () => {
 
   /* ═════════════════ §9 scope boundary ═══════════════════════════════════ */
   describe('§9 the UI adds no authority and no restore', () => {
-    it('the write surface is STILL exactly four primitives', () => {
+    it('the write surface is exactly five primitives (06c-2b added restoreBatch)', () => {
       const t = repository.transactions as any;
       const names = Object.getOwnPropertyNames(Object.getPrototypeOf(t))
         .filter(n => n !== 'constructor' && typeof t[n] === 'function');
       const reads = ['findMany', 'findManySync', 'findById', 'findAll', 'findAllSync'];
       expect(names.filter(n => !reads.includes(n)).sort())
-        .toEqual(['append', 'appendMany', 'rollbackBatch', 'supersede']);
+        .toEqual(['append', 'appendMany', 'restoreBatch', 'rollbackBatch', 'supersede']);
     });
 
     it('no restore/undo affordance is rendered anywhere in the modal', async () => {
@@ -758,10 +758,11 @@ describe('WP-FB-DATA-06c-2a — amendment UI affordance', () => {
       expect(text).toContain('nothing is deleted');
     });
 
-    it('the store still exposes no restore action', () => {
+    it('the store exposes batch restore only — no per-transaction restore or undo', () => {
       const s = S();
-      for (const k of ['undo', 'restoreTransaction', 'restoreImportBatch', 'unsupersedeTransaction']) {
-        expect(typeof s[k]).toBe('undefined');
+      expect(typeof (s as any).restoreImportBatch).toBe('function');
+      for (const k of ['undo', 'restoreTransaction', 'unsupersedeTransaction', 'deleteTransaction']) {
+        expect(typeof (s as any)[k]).toBe('undefined');
       }
       expect(typeof s.supersedeTransactions).toBe('function');
     });

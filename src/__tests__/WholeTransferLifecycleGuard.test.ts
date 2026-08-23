@@ -465,15 +465,19 @@ describe('WP-FB-DATA-06c-1a — whole-transfer lifecycle guard', () => {
     it('the ONLY lifecycle primitive added is supersede (D12 = C)', () => {
       const t = repository.transactions as any;
       expect(typeof t.supersede).toBe('function');
+      // 06c-2b added `restoreBatch` (D6-1 = R5). A bare `restore` stays absent.
+      expect(typeof t.restoreBatch).toBe('function');
       for (const k of ['update', 'remove', 'replace', 'patch', 'amend', 'reverse',
-                       'tombstone', 'restore', 'unsupersede', 'restoreBatch', 'removeBatch']) {
+                       'tombstone', 'restore', 'unsupersede', 'removeBatch']) {
         expect(typeof t[k]).toBe('undefined');
       }
     });
 
-    it('still no undo surface (D6 unresolved)', () => {
+    it('still no GENERAL undo surface (D6-7 keeps it withheld)', () => {
       expect(typeof (S() as any).undo).toBe('undefined');
-      expect(typeof (S() as any).restoreImportBatch).toBe('undefined');
+      expect(typeof (S() as any).restoreTransaction).toBe('undefined');
+      // batch restore is the one authorised exception
+      expect(typeof (S() as any).restoreImportBatch).toBe('function');
     });
 
     it('DELETED is still not an exclusion reason (D11 = B added SUPERSEDED only)', () => {

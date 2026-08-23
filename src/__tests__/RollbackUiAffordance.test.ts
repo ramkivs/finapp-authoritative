@@ -288,11 +288,12 @@ describe('WP-FB-DATA-06c-6a — rollback UI affordance', () => {
 
   /* ═══════════════════════════ §6 scope boundary ═══════════════════════════ */
   describe('§6 scope boundary', () => {
-    it('no restore/undo capability was added', () => {
+    it('batch restore exists (06c-2b); general undo still does not', () => {
       const t = repository.transactions as any;
-      expect(typeof t.restoreBatch).toBe('undefined');
-      expect(typeof (S() as any).restoreImportBatch).toBe('undefined');
+      expect(typeof t.restoreBatch).toBe('function');
+      expect(typeof (S() as any).restoreImportBatch).toBe('function');
       expect(typeof (S() as any).undo).toBe('undefined');
+      expect(typeof t.restore).toBe('undefined');
     });
 
     it('still no hard-removal or amendment API', () => {

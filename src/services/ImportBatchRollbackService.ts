@@ -61,6 +61,72 @@ export interface RollbackPlan {
   refusalReason?: string;
 }
 
+/* =============================================================================
+ * RESTORE (WP-FB-DATA-06c-2b, Decision D6-1 = R5)
+ *
+ * Restore lives HERE, alongside rollback, deliberately. It is the inverse of
+ * the operation defined a few lines above and reasons about the same object —
+ * an import batch. A separate `ImportBatchRestoreService` would be a second
+ * authority over one concept, and the rules would drift the first time either
+ * side changed.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHAT RESTORE IS NOT
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * It is not undo. It clears an IMPORT_ROLLBACK exclusion and stamps an audit
+ * timestamp; it retracts no business operation, disposes of no row and touches
+ * no other field (Decision D6-7). It cannot act on a SUPERSEDED row, because
+ * the D6/D9 gate measured that restoring one produced a persisted, silent,
+ * undisclosed double count — two included versions of one economic event, with
+ * `activeVersionOf()` returning null.
+ *
+ * It is not deletion. Decision D9-1 = D9-A: there is no deletion capability in
+ * this system and this package adds none.
+ * ========================================================================== */
+
+export type RestoreRefusalCode =
+  | 'EMPTY_BATCH_ID'
+  | 'BATCH_NOT_FOUND'
+  /** No row in the batch is currently excluded by IMPORT_ROLLBACK. */
+  | 'NOT_ROLLED_BACK'
+  /** A row in the batch is excluded for a reason this build cannot name (D6-5). */
+  | 'UNRECOGNISED_EXCLUSION_REASON'
+  /** A transfer touched by this batch has legs excluded for different reasons (D6-6). */
+  | 'MIXED_EXCLUSION_REASONS'
+  /** Restoring would leave part of a transfer excluded (D6-10 / D8). */
+  | 'WOULD_SPLIT_TRANSFER';
+
+export interface RestorePlan {
+  batchId: string;
+  status: 'ADMISSIBLE' | 'REFUSED';
+  /** Rows this restore would return to the ledger. */
+  targetIds: string[];
+  /** Rows in the batch excluded for a reason restore must not touch (e.g. SUPERSEDED). */
+  untouchedExcludedIds: string[];
+  refusalCode?: RestoreRefusalCode;
+  refusalReason?: string;
+}
+
+export interface BatchRestoreResult {
+  batchId: string;
+  restoredCount: number;
+  restoredIds: string[];
+  restoredAt: string;
+}
+
+/** Thrown when a restore is refused. Carries the machine-readable code. */
+export class BatchRestoreError extends Error {
+  readonly code: RestoreRefusalCode;
+  readonly batchId: string;
+  constructor(plan: RestorePlan) {
+    super(`Import batch restore refused — ${plan.refusalReason}`);
+    this.name = 'BatchRestoreError';
+    this.code = plan.refusalCode as RestoreRefusalCode;
+    this.batchId = plan.batchId;
+  }
+}
+
 /**
  * A user-facing summary of one import batch (WP-FB-DATA-06c-6a).
  *
@@ -94,6 +160,13 @@ export interface ImportBatchSummary {
    * from a `PARTIALLY_EXCLUDED` badge.
    */
   correctionCount: number;
+  /**
+   * Rows in this batch that carry a restore audit stamp (WP-FB-DATA-06c-2b,
+   * D6-3). Non-zero means this batch was rolled back and later restored — a
+   * fact that survives a SUBSEQUENT rollback, so `rollback -> restore ->
+   * rollback` never looks like a plain `rollback`.
+   */
+  restoredCount: number;
   status: 'LIVE' | 'ROLLED_BACK' | 'PARTIALLY_EXCLUDED';
   /** Whether `rollbackBatch` would currently succeed. */
   rollbackEligible: boolean;
@@ -303,6 +376,7 @@ export class ImportBatchRollbackService {
         totalAmount: rows.reduce((sum, r) => sum + r.amount, 0),
         excludedCount,
         correctionCount: rows.filter(r => TransactionAmendmentService.isCorrection(r)).length,
+        restoredCount: rows.filter(r => typeof r.restoredAt === 'string' && r.restoredAt.length > 0).length,
         status,
         rollbackEligible: plan.status === 'ADMISSIBLE',
         rollbackBlockedCode: plan.status === 'ADMISSIBLE' ? undefined : plan.refusalCode,
@@ -316,6 +390,155 @@ export class ImportBatchRollbackService {
       if (a.importedAt) return -1;
       if (b.importedAt) return 1;
       return 0;
+    });
+  }
+
+  /**
+   * Decides whether an import batch may be RESTORED (WP-FB-DATA-06c-2b).
+   *
+   * Pure. Refuses rather than partially applying, in every case — the same
+   * discipline `plan()` applies, and for the same reason: a restore that
+   * half-succeeds leaves the user believing their import is back while some of
+   * its money is still missing.
+   */
+  static planRestore(batchId: string, txs: Transaction[]): RestorePlan {
+    const base: RestorePlan = {
+      batchId, status: 'REFUSED', targetIds: [], untouchedExcludedIds: []
+    };
+
+    if (typeof batchId !== 'string' || batchId.trim().length === 0) {
+      return { ...base, refusalCode: 'EMPTY_BATCH_ID', refusalReason: 'no import batch id was supplied' };
+    }
+
+    const rows = this.rowsInBatch(batchId, txs);
+    if (rows.length === 0) {
+      return {
+        ...base,
+        refusalCode: 'BATCH_NOT_FOUND',
+        refusalReason: `no transactions belong to import batch "${batchId}"`
+      };
+    }
+
+    const excluded = rows.filter(r => LedgerExclusionService.isExcluded(r));
+
+    /* ── D6-5 — UNRECOGNISED REASON REFUSES THE WHOLE OPERATION ────────────
+     *
+     * A row excluded for a reason this build cannot name is money it does not
+     * understand. `LedgerExclusionService.reasonOf` already refuses to guess;
+     * restoring on top of that guess would put the money back anyway. Skipping
+     * such a row silently would be worse still: the user would be told the
+     * batch was restored while part of it stayed out. */
+    const unrecognised = excluded.filter(r => LedgerExclusionService.reasonOf(r) === 'UNKNOWN');
+    if (unrecognised.length > 0) {
+      return {
+        ...base,
+        refusalCode: 'UNRECOGNISED_EXCLUSION_REASON',
+        refusalReason:
+          `import batch "${batchId}" contains ${unrecognised.length} row(s) excluded for a reason ` +
+          `this version does not recognise (${unrecognised.map(r => String(r.excludedReason)).join(', ')}). ` +
+          `They are left exactly as they are rather than guessed at`
+      };
+    }
+
+    // Decision D6-1 = R5: IMPORT_ROLLBACK is the ONLY restorable exclusion.
+    const targets = excluded.filter(r => LedgerExclusionService.reasonOf(r) === 'IMPORT_ROLLBACK');
+    const untouched = excluded.filter(r => LedgerExclusionService.reasonOf(r) !== 'IMPORT_ROLLBACK');
+
+    if (targets.length === 0) {
+      const restoredBefore = rows.some(r => typeof r.restoredAt === 'string' && r.restoredAt.length > 0);
+      return {
+        ...base,
+        untouchedExcludedIds: untouched.map(r => r.id),
+        refusalCode: 'NOT_ROLLED_BACK',
+        refusalReason:
+          restoredBefore
+            ? `import batch "${batchId}" has already been restored; there is nothing left to bring back`
+            : `import batch "${batchId}" is not rolled back, so there is nothing to restore` +
+              (untouched.length > 0
+                ? `. ${untouched.length} row(s) are excluded for another reason and a restore does not touch them`
+                : '')
+      };
+    }
+
+    /* ── D6-6 / D8 — TRANSFERS ─────────────────────────────────────────────
+     *
+     * Two distinct failures, deliberately reported separately.
+     *
+     * MIXED_EXCLUSION_REASONS: the legs of one transfer were excluded by
+     * different mechanisms, so no restore of this batch can make the transfer
+     * whole again. Refused with its own code because the remedy is different —
+     * the user must resolve the supersession first.
+     *
+     * WOULD_SPLIT_TRANSFER: every leg shares the reason, but some leg sits
+     * outside this batch and would keep counting alone. */
+    const targetIds = new Set(targets.map(t => t.id));
+    const touchedTransferIds = new Set(
+      rows.map(r => r.transferId).filter((id): id is string => !!id)
+    );
+
+    for (const transferId of touchedTransferIds) {
+      const legs = txs.filter(t => t.transferId === transferId);
+      const excludedLegs = legs.filter(l => LedgerExclusionService.isExcluded(l));
+      if (excludedLegs.length === 0) continue;      // nothing of this transfer is excluded
+
+      const reasons = new Set(excludedLegs.map(l => LedgerExclusionService.reasonOf(l)));
+      if (reasons.size > 1) {
+        return {
+          ...base,
+          untouchedExcludedIds: untouched.map(r => r.id),
+          refusalCode: 'MIXED_EXCLUSION_REASONS',
+          refusalReason:
+            `transfer ${transferId} has legs excluded for different reasons ` +
+            `(${[...reasons].join(', ')}). Restoring only the rolled-back leg would leave the transfer ` +
+            `half counted, creating or destroying money. A transfer must be restored whole (Decision D8)`
+        };
+      }
+
+      // every leg that is excluded must be coming back in THIS restore
+      const stranded = excludedLegs.filter(l => !targetIds.has(l.id));
+      if (stranded.length > 0) {
+        return {
+          ...base,
+          untouchedExcludedIds: untouched.map(r => r.id),
+          refusalCode: 'WOULD_SPLIT_TRANSFER',
+          refusalReason:
+            `restoring "${batchId}" would return only part of transfer ${transferId} ` +
+            `(${stranded.length} leg(s) would stay excluded), creating or destroying money. ` +
+            `A transfer must be restored whole`
+        };
+      }
+    }
+
+    return {
+      batchId,
+      status: 'ADMISSIBLE',
+      targetIds: targets.map(t => t.id),
+      untouchedExcludedIds: untouched.map(r => r.id)
+    };
+  }
+
+  /**
+   * Produces the next transaction array for a restore. Pure.
+   *
+   * Removes ONLY `excludedAt` / `excludedReason` and stamps `restoredAt`
+   * (Constraint 8). Amount, date, account, direction, category, status, id,
+   * fingerprint and every provenance field are left exactly as they were — a
+   * restored row must be the same record that was imported, not a new one.
+   *
+   * ⚠️ `restoredAt` IS THE AUDIT RECORD (D6-3). It is written here and cleared
+   * nowhere. `apply()` above spreads the existing row, so a later rollback
+   * preserves it and `rollback -> restore -> rollback` stays distinguishable
+   * from a single rollback.
+   */
+  static applyRestore(plan: RestorePlan, txs: Transaction[], now: string): Transaction[] {
+    if (plan.status !== 'ADMISSIBLE') return txs;
+    const targets = new Set(plan.targetIds);
+    return txs.map(t => {
+      if (!targets.has(t.id)) return t;
+      const next = { ...t, restoredAt: now };
+      delete (next as { excludedAt?: string }).excludedAt;
+      delete (next as { excludedReason?: unknown }).excludedReason;
+      return next;
     });
   }
 

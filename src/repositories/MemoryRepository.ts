@@ -20,6 +20,7 @@ import {
   ProfileRepository,
   FinancialRepositoryPort,
   BatchRollbackResultShape,
+  BatchRestoreResultShape,
   AmendmentRequestShape,
   AmendmentResultShape,
 } from '../domain/types';
@@ -31,7 +32,9 @@ import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
 import { TransferIntegrityService, TransferValidation } from '../services/TransferIntegrityService';
 import { TransactionIdentityService, DuplicateIdGroup } from '../services/TransactionIdentityService';
 import { LedgerExclusionService } from '../services/LedgerExclusionService';
-import { ImportBatchRollbackService, BatchRollbackError } from '../services/ImportBatchRollbackService';
+import {
+  ImportBatchRollbackService, BatchRollbackError, BatchRestoreError
+} from '../services/ImportBatchRollbackService';
 import {
   TransactionAmendmentService,
   AmendmentRefusedError,
@@ -219,6 +222,83 @@ export class MemoryTransactionRepository implements TransactionRepository {
       excludedCount: plan.targetIds.length,
       excludedIds: plan.targetIds,
       alreadyExcludedCount: plan.alreadyExcludedIds.length
+    };
+  }
+
+  /**
+   * WP-FB-DATA-06c-2b / Decision D6-1 = R5 — IMPORT BATCH RESTORE.
+   *
+   * The exact mirror of `rollbackBatch` above: validate the whole batch first,
+   * compute the complete next array, mutate memory, sync the store, persist
+   * through the single-IDB-transaction `saveAll`, and roll memory back if
+   * persistence fails.
+   *
+   * ─────────────────────────────────────────────────────────────────────────
+   * WHY THE GATES ARE THE ONES THEY ARE
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * `assertUniqueIds` and `assertAdmissible` are deliberately NOT called.
+   * Restore adds no rows, so there is nothing "incoming": the D6/D9 gate
+   * measured both as structurally inert here (`assertUniqueIds([], prev)`
+   * returns immediately). Calling them would be theatre — a guard that cannot
+   * fail teaches the next maintainer that it is load-bearing when it is not.
+   *
+   * `assertWholeTransferLifecycle` IS called, and it is the real one. The gate
+   * measured that restoring a single leg of an excluded transfer moves 2,000
+   * and is caught by exactly this guard. `planRestore` refuses first with a
+   * clearer code; this is the second door, and it holds no matter how the rows
+   * were selected.
+   *
+   * ⚠️ NO DELETION. Decision D9-1 = D9-A. Nothing here removes a row, and the
+   * absence of any removal path is load-bearing.
+   */
+  async restoreBatch(importBatchId: string): Promise<BatchRestoreResultShape> {
+    const previous = this.parent.transactionsData;
+
+    const plan = ImportBatchRollbackService.planRestore(importBatchId, previous);
+    if (plan.status !== 'ADMISSIBLE') throw new BatchRestoreError(plan);
+
+    const restoredAt = new Date().toISOString();
+    const next = ImportBatchRollbackService.applyRestore(plan, previous, restoredAt);
+
+    // WP-FB-DATA-06c-1a / D8 — whole-transfer gate. Un-excluding one leg is
+    // the same defect class as excluding one leg.
+    TransferIntegrityService.assertWholeTransferLifecycle(previous, next);
+
+    // Restore adds and removes no rows, so DATA-06b structural invariants
+    // cannot change. Asserted rather than assumed.
+    if (!ImportBatchRollbackService.structuralIntegrityUnchanged(previous, next)) {
+      throw new Error(
+        'Import batch restore aborted: transfer structural integrity would change. ' +
+        'This should be impossible for an exclusion-only operation.'
+      );
+    }
+
+    this.parent.transactionsData = next;
+    this.parent.syncStore();
+    try {
+      await IndexedDBStorageService.saveAll({
+        transactions: next,
+        assets: this.parent.assetsData,
+        liabilities: this.parent.liabilitiesData,
+        snapshots: this.parent.snapshotsData,
+        accounts: this.parent.accountsData,
+        budgets: this.parent.budgetsData,
+        policies: this.parent.policiesData,
+        goals: this.parent.goalsData,
+        profile: this.parent.profileData
+      });
+    } catch (e) {
+      this.parent.transactionsData = previous;
+      this.parent.syncStore();
+      throw e;
+    }
+
+    return {
+      batchId: plan.batchId,
+      restoredCount: plan.targetIds.length,
+      restoredIds: plan.targetIds,
+      restoredAt
     };
   }
 

@@ -4,12 +4,14 @@ import {
   LiabilityRepository, SnapshotRepository, FinancialRepositoryPort,
   Account, AccountRepository, MonthlyBudget, BudgetRepository,
   InsurancePolicy, PolicyRepository, FinancialGoal, GoalRepository,
-  FinancialProfile, ProfileRepository, BatchRollbackResultShape,
+  FinancialProfile, ProfileRepository, BatchRollbackResultShape, BatchRestoreResultShape,
   AmendmentRequestShape, AmendmentResultShape
 } from '../domain/types';
 import { TransferIntegrityService } from '../services/TransferIntegrityService';
 import { TransactionIdentityService } from '../services/TransactionIdentityService';
-import { ImportBatchRollbackService, BatchRollbackError } from '../services/ImportBatchRollbackService';
+import {
+  ImportBatchRollbackService, BatchRollbackError, BatchRestoreError
+} from '../services/ImportBatchRollbackService';
 import {
   TransactionAmendmentService,
   AmendmentRefusedError,
@@ -95,6 +97,41 @@ export class PrismaTransactionRepository implements TransactionRepository {
       excludedCount: plan.targetIds.length,
       excludedIds: plan.targetIds,
       alreadyExcludedCount: plan.alreadyExcludedIds.length
+    };
+  }
+
+  /**
+   * WP-FB-DATA-06c-2b: the restore guards are mirrored here for the same reason
+   * every other guard in this adapter is — a rule enforced in one of two
+   * `TransactionRepository` implementations is not a rule, it is a coincidence
+   * of which adapter happens to be wired.
+   *
+   * ⚠️ A real Prisma implementation MUST clear the exclusion stamps and write
+   * `restoredAt` inside ONE `prisma.$transaction([...])`. Restoring half a
+   * batch is the same defect class as excluding half a transfer.
+   *
+   * ⚠️ `findAllSync()` returns `[]` here (pre-existing), so these gates
+   * currently validate against an empty ledger. They are wired so a real
+   * backend inherits them rather than having to remember them.
+   */
+  async restoreBatch(importBatchId: string): Promise<BatchRestoreResultShape> {
+    const existing = this.findAllSync();
+    const plan = ImportBatchRollbackService.planRestore(importBatchId, existing);
+    if (plan.status !== 'ADMISSIBLE') throw new BatchRestoreError(plan);
+
+    const restoredAt = new Date().toISOString();
+    TransferIntegrityService.assertWholeTransferLifecycle(
+      existing,
+      ImportBatchRollbackService.applyRestore(plan, existing, restoredAt)
+    );
+    // Production implementation: await prisma.$transaction(
+    //   plan.targetIds.map(id => prisma.transaction.update({
+    //     where: { id }, data: { excludedAt: null, excludedReason: null, restoredAt } })));
+    return {
+      batchId: plan.batchId,
+      restoredCount: plan.targetIds.length,
+      restoredIds: plan.targetIds,
+      restoredAt
     };
   }
 
