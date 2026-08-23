@@ -16,6 +16,22 @@ interface Props {
 export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [linkTarget, setLinkTarget] = useState<Account | null>(null);
+  /** WP-FB-DATA-08A: which account's removal is in flight. */
+  const [deleteBusy, setDeleteBusy] = useState<string | null>(null);
+  /**
+   * WP-FB-DATA-08A: the row whose removal is pending, kept VISIBLE until
+   * persistence settles.
+   *
+   * Repository writes are optimistic, so memory drops the row the instant
+   * remove() is called. Without this the row vanished immediately and
+   * reappeared on failure - the UI announcing a completed deletion before
+   * storage had agreed to it. Same pattern as the liability and asset
+   * workspaces.
+   */
+  const [pendingDelete, setPendingDelete] = useState<{ row: any; index: number } | null>(null);
+  const [notice, setNotice] = useState<
+    { kind: 'success' | 'error'; headline: string; message: string } | null
+  >(null);
   const { removeAccount, transactions, assets, linkAccountToAsset, unlinkAccountFromAsset, dismissAssetCandidate } = useCanonicalLedger();
 
   // WP-FB-DATA-05a: derived from the canonical transaction collection.
@@ -29,7 +45,23 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
   const brokerTotal = AccountBalanceService.totalForTypes(['Broker'], accounts, transactions, asOf);
   const creditTotal = AccountBalanceService.totalForTypes(['Credit Card'], accounts, transactions, asOf);
 
-  const handleDelete = (id: string, name: string) => {
+  /**
+   * WP-FB-DATA-08A — a destructive deletion that reports its outcome.
+   *
+   * Measured at the 08 gate: the user confirmed this deletion, the write
+   * failed, the row stayed on screen and NOTHING was said. The rejection left
+   * the app as an unhandled page error. The confirmation copy and the
+   * unmapping consequence below are unchanged; only the outcome is now told.
+   */
+  const handleDelete = async (id: string, name: string) => {
+    if (deleteBusy) {
+      setNotice({
+        kind: 'error',
+        headline: 'One removal at a time.',
+        message: 'Another account is still being removed. Wait for that to finish, then try again.'
+      });
+      return;
+    }
     // WP-FB-DATA-04: deletion never silently orphans financial records. State
     // the exact consequence before the user commits to it.
     const linked = transactions.filter(t => t.accountId === id).length;
@@ -40,8 +72,32 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
           `Canonical Ledger marked UNMAPPED, and can be re-linked by registering an account with a matching name.`
         : `Are you sure you want to remove account "${name}"?`;
 
-    if (window.confirm(message)) {
-      removeAccount(id);
+    if (!window.confirm(message)) return;
+
+    setNotice(null);
+    setDeleteBusy(id);
+    setPendingDelete({
+      row: accounts.find((x: any) => x.id === id),
+      index: Math.max(0, accounts.findIndex((x: any) => x.id === id))
+    });
+    try {
+      await removeAccount(id);
+      setNotice({
+        kind: 'success',
+        headline: 'Account removed.',
+        message: linked > 0
+          ? `"${name}" is gone. ${linked} transaction${linked === 1 ? '' : 's'} ${linked === 1 ? 'is' : 'are'} now UNMAPPED and still in the ledger.`
+          : `"${name}" is gone.`
+      });
+    } catch (err: any) {
+      setNotice({
+        kind: 'error',
+        headline: 'Removal refused.',
+        message: err?.message || 'The account could not be removed.'
+      });
+    } finally {
+      setDeleteBusy(null);
+      setPendingDelete(null);
     }
   };
 
@@ -55,6 +111,16 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
       default: return HelpCircle;
     }
   };
+
+  /* The pending row stays on screen, in place, so the list never claims an
+     outcome persistence has not given. */
+  const visibleAccounts = React.useMemo(() => {
+    if (!pendingDelete || !pendingDelete.row) return accounts;
+    if (accounts.some((x: any) => x.id === pendingDelete.row.id)) return accounts;
+    const merged = [...accounts];
+    merged.splice(Math.min(pendingDelete.index, merged.length), 0, pendingDelete.row);
+    return merged;
+  }, [accounts, pendingDelete]);
 
   return (
     <div className="space-y-6">
@@ -82,6 +148,22 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
       {/* WP-FB-DATA-05a: reconciliation notice (Decision B).
           Unmapped activity is excluded from every registered account balance,
           is NOT folded into a pseudo-account, and is NOT lost. */}
+      {notice && (
+        <div
+          id="account-notice"
+          data-account-kind={notice.kind}
+          role="status"
+          className={
+            notice.kind === 'error'
+              ? 'rounded-2xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-5 py-3.5 text-xs font-semibold text-rose-800 dark:text-rose-300'
+              : 'rounded-2xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 px-5 py-3.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300'
+          }
+        >
+          <strong>{notice.headline}</strong>{' '}
+          {notice.message}
+        </div>
+      )}
+
       {reconciliation.unmappedCount > 0 && (
         <div
           id="balance-reconciliation-notice"
@@ -168,7 +250,7 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {accounts.map(acc => {
+          {visibleAccounts.map(acc => {
             const Icon = getTypeIcon(acc.type);
             const isCredit = acc.type === 'Credit Card';
             return (
@@ -214,9 +296,12 @@ export const AccountsWorkspace: React.FC<Props> = ({ accounts }) => {
                         <Link2 size={14} />
                       </button>
                       <button
+                        data-account-delete={acc.id}
+                        data-account-delete-busy={deleteBusy === acc.id ? 'true' : 'false'}
+                        disabled={deleteBusy === acc.id}
                         onClick={() => handleDelete(acc.id, acc.name)}
-                        className="p-1 text-gray-400 hover:text-rose-600 transition"
-                        title="Delete account"
+                        className="p-1 text-gray-400 hover:text-rose-600 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                        title={deleteBusy === acc.id ? `Removing ${acc.name}…` : 'Delete account'}
                       >
                         <Trash2 size={14} />
                       </button>

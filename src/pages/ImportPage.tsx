@@ -34,6 +34,11 @@ export const ImportPage: React.FC = () => {
   const [rollbackNotice, setRollbackNotice] = useState<
     { kind: 'success' | 'error'; text: string } | null
   >(null);
+  /** WP-FB-DATA-08A: the commit is in flight; nothing may be claimed yet. */
+  const [commitBusy, setCommitBusy] = useState(false);
+  const [commitNotice, setCommitNotice] = useState<
+    { kind: 'success' | 'error'; headline: string; text: string } | null
+  >(null);
   const [restoreBusy, setRestoreBusy] = useState<string | null>(null);
   const [restoreNotice, setRestoreNotice] = useState<
     { kind: 'success' | 'error'; text: string } | null
@@ -185,30 +190,65 @@ export const ImportPage: React.FC = () => {
     }
   };
 
-  const handleCommit = () => {
-    if (!importResult) return;
+  /**
+   * WP-FB-DATA-08A — the commit reports only what actually reached storage.
+   *
+   * Measured at the 08 gate with persistence failing: this reported
+   * `appended: 1` and alerted "Appended 1 new rows" while memory AND storage
+   * both held ZERO rows. That is an affirmative false claim, not merely a
+   * silent failure - the worst shape in the whole fire-and-forget family.
+   *
+   * The counts are an ADMISSION decision and stay synchronous; `persisted` is
+   * awaited before anything is reported, and a rejection is rendered with the
+   * real message instead of a success line. The review surface is only cleared
+   * once storage has agreed, so a failed commit can be retried.
+   */
+  const handleCommit = async () => {
+    if (!importResult || commitBusy) return;
+    setCommitNotice(null);
     const {
       appended, duplicates, divergentDuplicates,
       rejectedTransferRows, rejectedTransferReasons,
-      rejectedDuplicateIdRows, rejectedDuplicateIdReasons
+      rejectedDuplicateIdRows, rejectedDuplicateIdReasons,
+      persisted
     } = commitImportedRows(importResult.validRows);
+
+    setCommitBusy(true);
+    try {
+      // Nothing is claimed until storage has agreed.
+      if (persisted) await persisted;
+    } catch (e: any) {
+      setCommitBusy(false);
+      setCommitNotice({
+        kind: 'error',
+        headline: 'Import not committed.',
+        text: `${e?.message || 'The rows could not be saved.'} Nothing was imported — the reviewed rows are still here, so you can try again.`
+      });
+      return;
+    }
+    setCommitBusy(false);
+
     setShowReview(false);
     setImportResult(null);
     // WP-FB-DATA-06a: an excluded row may be reported, but never silently dropped.
     const divergentNote = divergentDuplicates > 0
-      ? `\n\nNote: ${divergentDuplicates} of the excluded duplicates disagreed with the stored row on direction/type. Those differences were NOT applied.`
+      ? ` Note: ${divergentDuplicates} of the excluded duplicates disagreed with the stored row on direction/type; those differences were NOT applied.`
       : '';
     // WP-FB-DATA-06b / T3-b: a rejected transfer row is never silently discarded.
     const transferNote = rejectedTransferRows > 0
-      ? `\n\nRejected: ${rejectedTransferRows} row(s) claimed to be transfers but did not form a valid balanced pair, so they were NOT imported.\n` +
-        rejectedTransferReasons.map(r => '  - ' + r).join('\n')
+      ? ` Rejected: ${rejectedTransferRows} row(s) claimed to be transfers but did not form a valid balanced pair, so they were NOT imported. ` +
+        rejectedTransferReasons.join(' · ')
       : '';
     // WP-FB-DATA-06c-0 / P-1: a row refused for a colliding id is reported, never silent.
     const duplicateIdNote = rejectedDuplicateIdRows > 0
-      ? `\n\nRejected: ${rejectedDuplicateIdRows} row(s) were NOT imported because their transaction id is already in use. No existing row was overwritten.\n` +
-        rejectedDuplicateIdReasons.map(r => '  - ' + r).join('\n')
+      ? ` Rejected: ${rejectedDuplicateIdRows} row(s) were NOT imported because their transaction id is already in use. No existing row was overwritten. ` +
+        rejectedDuplicateIdReasons.join(' · ')
       : '';
-    alert(`Algorithmic Set<fingerprint>: Appended ${appended} new rows. Automatically excluded ${duplicates} exact duplicates.${divergentNote}${transferNote}${duplicateIdNote}`);
+    setCommitNotice({
+      kind: 'success',
+      headline: 'Import committed.',
+      text: `Appended ${appended} new rows. Automatically excluded ${duplicates} exact duplicates.${divergentNote}${transferNote}${duplicateIdNote}`
+    });
   };
 
   const allIssues = [
@@ -226,6 +266,26 @@ export const ImportPage: React.FC = () => {
           1. UPLOAD ➔ 2. DETECT ➔ 3. PARSE ➔ 4. NORMALIZE ➔ 5. REVIEW ➔ COMMIT (Append Mode)
         </p>
       </div>
+
+      {/* WP-FB-DATA-08A: the commit outcome, reported only after storage has
+          agreed. This replaces an alert() that announced "Appended N new rows"
+          before the write had resolved - measured claiming 1 row while both
+          memory and storage held zero. */}
+      {commitNotice && (
+        <div
+          id="commit-notice"
+          data-commit-kind={commitNotice.kind}
+          role="status"
+          className={`rounded-2xl border p-4 text-xs ${
+            commitNotice.kind === 'success'
+              ? 'border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200'
+              : 'border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200'
+          }`}
+        >
+          <strong>{commitNotice.headline}</strong>{' '}
+          {commitNotice.text}
+        </div>
+      )}
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm">
         <h3 className="font-bold text-gray-900 dark:text-white text-base mb-4">
@@ -571,15 +631,18 @@ export const ImportPage: React.FC = () => {
 
                 <div className="pt-2">
                   <button
+                    id="btn-commit-import"
                     onClick={handleCommit}
-                    disabled={importResult.validRows.length === 0}
+                    disabled={importResult.validRows.length === 0 || commitBusy}
                     className={`px-5 py-2.5 rounded-lg font-bold text-sm shadow-sm transition ${
                       importResult.validRows.length === 0
                         ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 cursor-not-allowed'
                         : 'bg-green-700 hover:bg-green-800 text-white'
                     }`}
                   >
-                    Review & Commit {importResult.validRows.length} Valid Rows to Canonical Ledger (Append Mode)
+                    {commitBusy
+                      ? 'Committing…'
+                      : `Review & Commit ${importResult.validRows.length} Valid Rows to Canonical Ledger (Append Mode)`}
                   </button>
                 </div>
               </>

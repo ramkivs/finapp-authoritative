@@ -12,6 +12,22 @@ interface Props {
 export const InsuranceWorkspace: React.FC<Props> = ({ policies }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const { removePolicy } = useCanonicalLedger();
+  /** WP-FB-DATA-08A: which policy's removal is in flight. */
+  const [deleteBusy, setDeleteBusy] = useState<string | null>(null);
+  /**
+   * WP-FB-DATA-08A: the row whose removal is pending, kept VISIBLE until
+   * persistence settles.
+   *
+   * Repository writes are optimistic, so memory drops the row the instant
+   * remove() is called. Without this the row vanished immediately and
+   * reappeared on failure - the UI announcing a completed deletion before
+   * storage had agreed to it. Same pattern as the liability and asset
+   * workspaces.
+   */
+  const [pendingDelete, setPendingDelete] = useState<{ row: any; index: number } | null>(null);
+  const [notice, setNotice] = useState<
+    { kind: 'success' | 'error'; headline: string; message: string } | null
+  >(null);
 
   const totalCover = policies
     .filter(p => p.status === 'Active')
@@ -23,14 +39,73 @@ export const InsuranceWorkspace: React.FC<Props> = ({ policies }) => {
 
   const activeCount = policies.filter(p => p.status === 'Active').length;
 
-  const handleDelete = (id: string, provider: string) => {
-    if (window.confirm(`Are you sure you want to remove policy from "${provider}"?`)) {
-      removePolicy(id);
+  /**
+   * WP-FB-DATA-08A — a destructive deletion that reports its outcome.
+   *
+   * Measured at the 08 gate: the write failed, the row stayed on screen and
+   * nothing was said; the rejection escaped as an unhandled page error. The
+   * confirmation copy is unchanged - only the outcome is now told.
+   */
+  const handleDelete = async (id: string, provider: string) => {
+    if (deleteBusy) {
+      setNotice({
+        kind: 'error',
+        headline: 'One removal at a time.',
+        message: 'Another policy is still being removed. Wait for that to finish, then try again.'
+      });
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to remove policy from "${provider}"?`)) return;
+
+    setNotice(null);
+    setDeleteBusy(id);
+    setPendingDelete({
+      row: policies.find((x: any) => x.id === id),
+      index: Math.max(0, policies.findIndex((x: any) => x.id === id))
+    });
+    try {
+      await removePolicy(id);
+      setNotice({ kind: 'success', headline: 'Policy removed.', message: `"${provider}" is gone.` });
+    } catch (err: any) {
+      setNotice({
+        kind: 'error',
+        headline: 'Removal refused.',
+        message: err?.message || 'The policy could not be removed.'
+      });
+    } finally {
+      setDeleteBusy(null);
+      setPendingDelete(null);
     }
   };
 
+  /* The pending row stays on screen, in place, so the list never claims an
+     outcome persistence has not given. */
+  const visiblePolicies = React.useMemo(() => {
+    if (!pendingDelete || !pendingDelete.row) return policies;
+    if (policies.some((x: any) => x.id === pendingDelete.row.id)) return policies;
+    const merged = [...policies];
+    merged.splice(Math.min(pendingDelete.index, merged.length), 0, pendingDelete.row);
+    return merged;
+  }, [policies, pendingDelete]);
+
   return (
     <div className="space-y-6">
+      {notice && (
+        <div
+          id="policy-notice"
+          data-policy-kind={notice.kind}
+          role="status"
+          className={
+            notice.kind === 'error'
+              ? 'rounded-2xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-5 py-3.5 text-xs font-semibold text-rose-800 dark:text-rose-300'
+              : 'rounded-2xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 px-5 py-3.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300'
+          }
+        >
+          <strong>{notice.headline}</strong>{' '}
+          {notice.message}
+        </div>
+      )}
+
       {/* Controls Bar */}
       <div className="flex items-center justify-between flex-wrap gap-4 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-sm">
         <div>
@@ -125,7 +200,7 @@ export const InsuranceWorkspace: React.FC<Props> = ({ policies }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                {policies.map(p => (
+                {visiblePolicies.map(p => (
                   <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/40 transition">
                     <td className="py-3 px-4 font-semibold">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -157,9 +232,12 @@ export const InsuranceWorkspace: React.FC<Props> = ({ policies }) => {
                     </td>
                     <td className="py-3 px-4 text-right">
                       <button
+                        data-policy-delete={p.id}
+                        data-policy-delete-busy={deleteBusy === p.id ? 'true' : 'false'}
+                        disabled={deleteBusy === p.id}
                         onClick={() => handleDelete(p.id, p.provider)}
-                        className="p-1 text-gray-400 hover:text-rose-600 transition"
-                        title="Delete policy"
+                        className="p-1 text-gray-400 hover:text-rose-600 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                        title={deleteBusy === p.id ? `Removing ${p.provider}…` : 'Delete policy'}
                       >
                         <Trash2 size={15} />
                       </button>

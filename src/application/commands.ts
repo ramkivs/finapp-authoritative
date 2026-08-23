@@ -249,8 +249,16 @@ export class FinancialCommands {
     return account;
   }
 
-  static deleteAccount(id: string): void {
-    repository.accounts.remove(id);
+  /**
+   * WP-FB-DATA-08A: the promise is RETURNED, not discarded.
+   *
+   * This is a destructive operation behind a confirmation. The 08 gate
+   * measured what a discarded rejection looked like: the user confirmed the
+   * deletion, the write failed, the row stayed on screen and NOTHING was
+   * said - the rejection escaped as an unhandled page error instead.
+   */
+  static deleteAccount(id: string): Promise<void> {
+    return repository.accounts.remove(id);
   }
 
   /* =========================================================================
@@ -402,8 +410,16 @@ export class FinancialCommands {
     return policy;
   }
 
-  static deletePolicy(id: string): void {
-    repository.policies.remove(id);
+  /**
+   * WP-FB-DATA-08A: the promise is RETURNED, not discarded.
+   *
+   * This is a destructive operation behind a confirmation. The 08 gate
+   * measured what a discarded rejection looked like: the user confirmed the
+   * deletion, the write failed, the row stayed on screen and NOTHING was
+   * said - the rejection escaped as an unhandled page error instead.
+   */
+  static deletePolicy(id: string): Promise<void> {
+    return repository.policies.remove(id);
   }
 
   static recordGoal(params: {
@@ -459,8 +475,16 @@ export class FinancialCommands {
     return goal;
   }
 
-  static deleteGoal(id: string): void {
-    repository.goals.remove(id);
+  /**
+   * WP-FB-DATA-08A: the promise is RETURNED, not discarded.
+   *
+   * This is a destructive operation behind a confirmation. The 08 gate
+   * measured what a discarded rejection looked like: the user confirmed the
+   * deletion, the write failed, the row stayed on screen and NOTHING was
+   * said - the rejection escaped as an unhandled page error instead.
+   */
+  static deleteGoal(id: string): Promise<void> {
+    return repository.goals.remove(id);
   }
 
   static saveProfile(profile: FinancialProfile): void {

@@ -129,17 +129,7 @@ interface LedgerState {
   removeLiability: (id: string) => Promise<void>;
   addPastSnapshot: (params: { dateStr: string; totalAssets: number; totalLiabilities: number; label?: string }) => void;
   captureSnapshot: (label?: string) => void;
-  commitImportedRows: (validRows?: Transaction[]) => {
-    appended: number;
-    duplicates: number;
-    divergentDuplicates: number;
-    /** WP-FB-DATA-06b / T3-b: rows excluded because they were not a valid transfer pair. */
-    rejectedTransferRows: number;
-    rejectedTransferReasons: string[];
-    /** WP-FB-DATA-06c-0 / P-1: rows excluded because their id was already in use. */
-    rejectedDuplicateIdRows: number;
-    rejectedDuplicateIdReasons: string[];
-  };
+  commitImportedRows: (validRows?: Transaction[]) => ImportCommitOutcome;
 
   // Account & Budget Actions (WP-18)
   /**
@@ -182,7 +172,14 @@ interface LedgerState {
     asOfDate?: string;
     notes?: string;
   }) => void;
-  removeAccount: (id: string) => void;
+  /**
+   * WP-FB-DATA-08A - destructive deletions RETURN their promise.
+   *
+   * Measured at the 08 gate: each of these confirmed a deletion, failed to
+   * persist, reverted memory correctly, and told the user nothing while the
+   * rejection escaped as an unhandled page error.
+   */
+  removeAccount: (id: string) => Promise<void>;
   /**
    * WP-FB-DATA-04c-2: explicit Account<->Asset link (0..1 <-> 0..1).
    *
@@ -221,7 +218,7 @@ interface LedgerState {
     currency?: string;
     notes?: string;
   }) => void;
-  removePolicy: (id: string) => void;
+  removePolicy: (id: string) => Promise<void>;
   addGoal: (params: {
     name: string;
     template: GoalTemplateType;
@@ -234,7 +231,7 @@ interface LedgerState {
     currency?: string;
     notes?: string;
   }) => void;
-  removeGoal: (id: string) => void;
+  removeGoal: (id: string) => Promise<void>;
   saveProfile: (profile: FinancialProfile) => void;
 
   getFilteredTransactions: (params?: {
@@ -245,6 +242,38 @@ interface LedgerState {
     customEnd?: string;
   }) => Transaction[];
   getNetWorth: () => number;
+}
+
+/**
+ * WP-FB-DATA-08A — the outcome of an import commit.
+ *
+ * The counts are an ADMISSION decision: which rows the ledger accepted, which
+ * it excluded as exact duplicates, and which it refused (unpaired transfers,
+ * colliding ids). All of that is computed before anything is written, and 20
+ * existing assertions read it synchronously, so it stays synchronous.
+ *
+ * `persisted` is the separate question of whether the admitted rows reached
+ * storage. It used to be discarded, and the 08 gate measured the consequence:
+ * with persistence failing, this returned `appended: 1` while memory AND
+ * storage both held 0 rows, and ImportPage alerted "Appended 1 new rows".
+ * That was not silence - it was an affirmative false claim.
+ *
+ * ⚠️ `appended` therefore means ADMITTED, not stored. No surface may report it
+ * to the user until `persisted` has resolved.
+ */
+export interface ImportCommitOutcome {
+  /** Rows admitted for persistence. NOT a guarantee that they were stored. */
+  appended: number;
+  duplicates: number;
+  divergentDuplicates: number;
+  /** WP-FB-DATA-06b / T3-b: rows excluded because they were not a valid transfer pair. */
+  rejectedTransferRows: number;
+  rejectedTransferReasons: string[];
+  /** WP-FB-DATA-06c-0 / P-1: rows excluded because their id was already in use. */
+  rejectedDuplicateIdRows: number;
+  rejectedDuplicateIdReasons: string[];
+  /** Resolves when the admitted rows are stored; rejects with the failure. */
+  persisted?: Promise<void>;
 }
 
 export const useCanonicalLedger = create<LedgerState>((set, get) => ({
@@ -393,6 +422,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
 
   commitImportedRows: (validRows) => {
     const { transactions, accounts } = get();
+    let persisted: Promise<void> | undefined;
     let appended = 0;
     let duplicates = 0;
     let divergentDuplicates = 0;
@@ -506,7 +536,11 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       }
 
       if (admissible.length > 0) {
-        repository.transactions.appendMany(admissible);
+        // WP-FB-DATA-08A: the write is observable. `.catch` marks the rejection
+        // handled for the runtime so an ignoring caller cannot produce a page
+        // error, while the promise the caller receives still surfaces it.
+        persisted = repository.transactions.appendMany(admissible);
+        persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
       }
     }
 
@@ -517,7 +551,8 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     return {
       appended, duplicates, divergentDuplicates,
       rejectedTransferRows, rejectedTransferReasons,
-      rejectedDuplicateIdRows, rejectedDuplicateIdReasons
+      rejectedDuplicateIdRows, rejectedDuplicateIdReasons,
+      persisted
     };
   },
 
@@ -538,7 +573,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   removeAccount: (id) => {
-    repository.accounts.remove(id);
+    return repository.accounts.remove(id);
   },
 
   linkAccountToAsset: (accountId, assetId) => {
@@ -568,7 +603,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   removePolicy: (id) => {
-    FinancialCommands.deletePolicy(id);
+    return FinancialCommands.deletePolicy(id);
   },
 
   addGoal: (params) => {
@@ -576,7 +611,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   removeGoal: (id) => {
-    FinancialCommands.deleteGoal(id);
+    return FinancialCommands.deleteGoal(id);
   },
 
   saveProfile: (profile) => {
