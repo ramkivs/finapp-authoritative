@@ -83,13 +83,33 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
     }
   };
 
-  const handleAddLiab = (e: React.FormEvent) => {
+  /**
+   * WP-FB-DATA-07a — the SECOND create path.
+   *
+   * This form bypasses `FinancialCommands` and calls the store directly, which
+   * is exactly why the duplicate-name policy is enforced at the repository
+   * boundary: a check placed in `AddLiabilityModal` would leave this form
+   * unguarded. The write is awaited so a refusal or a persistence failure is
+   * shown here rather than swallowed.
+   */
+  const [liabNotice, setLiabNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+
+  const handleAddLiab = async (e: React.FormEvent) => {
     e.preventDefault();
     if (liabName.trim() && liabAmt) {
-      addLiability(liabName.trim(), Number(liabAmt));
-      setLiabName('');
-      setLiabAmt('');
-      setShowLiabForm(false);
+      setLiabNotice(null);
+      try {
+        await addLiability(liabName.trim(), Number(liabAmt));
+        setLiabNotice({ kind: 'success', message: `Added "${liabName.trim()}".` });
+        setLiabName('');
+        setLiabAmt('');
+        setShowLiabForm(false);
+      } catch (err: any) {
+        setLiabNotice({
+          kind: 'error',
+          message: err?.message || 'The liability could not be saved.'
+        });
+      }
     }
   };
 
@@ -656,6 +676,21 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
             </button>
           </div>
         </form>
+      )}
+
+      {liabNotice && (
+        <div
+          id="liability-notice"
+          data-liability-kind={liabNotice.kind}
+          role="status"
+          className={
+            liabNotice.kind === 'error'
+              ? 'rounded-2xl border border-rose-800 bg-rose-950/30 px-5 py-3.5 text-xs font-semibold text-rose-300'
+              : 'rounded-2xl border border-emerald-800 bg-emerald-950/30 px-5 py-3.5 text-xs font-semibold text-emerald-300'
+          }
+        >
+          {liabNotice.message}
+        </div>
       )}
 
       {showLiabForm && (

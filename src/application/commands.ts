@@ -76,16 +76,36 @@ export class FinancialCommands {
     repository.assets.add({ name, amount });
   }
 
-  static recordLiability(name: string, amount: number): void {
-    repository.liabilities.add({ name, amount });
+  /**
+   * WP-FB-DATA-07a: the promise is RETURNED, not discarded.
+   *
+   * A rejection here is either a refusal (duplicate name) or a persistence
+   * failure — in both cases the user's figure was NOT recorded, and a caller
+   * that cannot see the rejection shows a UI that disagrees with storage.
+   */
+  static recordLiability(name: string, amount: number): Promise<void> {
+    return repository.liabilities.add({ name, amount });
   }
 
   static recordAssetWithMetadata(params: { name: string; amount: number; type?: AssetType; tag?: string; currency?: string; geography?: GeographyType }): void {
     repository.assets.add(params);
   }
 
-  static recordLiabilityWithMetadata(params: { name: string; amount: number; type?: LiabilityType; currency?: string }): void {
-    repository.liabilities.add(params);
+  static recordLiabilityWithMetadata(params: { name: string; amount: number; type?: LiabilityType; currency?: string }): Promise<void> {
+    return repository.liabilities.add(params);
+  }
+
+  /**
+   * WP-FB-DATA-07a — Edit. Addressed by `id`, never by name; the complete
+   * record is submitted so no field is silently blanked (Q-D07a-1 = (c)).
+   */
+  static updateLiability(params: { id: string; name: string; amount: number; type?: LiabilityType; currency?: string }): Promise<void> {
+    return repository.liabilities.update(params);
+  }
+
+  /** WP-FB-DATA-07a — Delete by `id` (Q-D07a-3 = (b)). Irreversible. */
+  static removeLiability(id: string): Promise<void> {
+    return repository.liabilities.remove(id);
   }
 
   static addPastSnapshot(params: { dateStr: string; totalAssets: number; totalLiabilities: number; label?: string }): void {

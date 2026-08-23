@@ -534,10 +534,24 @@ export interface AssetRepository {
   remove(id: string): Promise<void>;
 }
 
+/**
+ * WP-FB-DATA-07a promotes edit and delete onto the port.
+ *
+ * `add` CREATES — it appends and refuses a duplicate name (Q-D07a-2 = (b),
+ * Q-D07a-4 = (b)); the legacy exact-name upsert is gone.
+ * `update` replaces the complete record addressed by `id`, refusing an id that
+ * is not present rather than appending a phantom row.
+ * `remove` physically deletes exactly one row by `id` (Q-D07a-3 = (b)).
+ *
+ * This is a LIABILITY capability only. The transaction write surface is
+ * unchanged and still has no delete: D9-A stands.
+ */
 export interface LiabilityRepository {
   findAll(): Promise<Liability[]>;
   findAllSync(): Liability[];
   add(liability: Liability): Promise<void>;
+  update(liability: Liability): Promise<void>;
+  remove(id: string): Promise<void>;
 }
 
 export interface SnapshotRepository {

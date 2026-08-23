@@ -27,10 +27,23 @@
  *   §6  persistence failure & READFAIL
  *   §7  derived figures are numerically unchanged
  *   §8  scope boundary
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WP-FB-DATA-07a AMENDMENT
+ *
+ * 07a shipped Edit and Delete against the stable id, so the legacy exact-name
+ * upsert this file used to guard (§3) is GONE — Q-D07a-4 = (b), create always
+ * appends, and a duplicate name is refused (Q-D07a-2 = (b)). The assertions
+ * that pinned the old create-path behaviour, and the two §8 assertions that
+ * asserted "no edit/delete exists yet", are narrowed here to the authorised
+ * names. Everything about IDENTITY — generation, stability, migration,
+ * verify-or-abort, no-figure-moves — is unchanged and still asserted.
+ * The 07a behaviour itself is covered in `LiabilityLifecycle.test.ts`.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { LiabilityIdentityService } from '../services/LiabilityIdentityService';
+import { LiabilityLifecycleService } from '../services/LiabilityLifecycleService';
 import { AssetIdentityService } from '../services/AssetIdentityService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { PrismaLiabilityRepository } from '../repositories/PrismaRepository';
@@ -77,10 +90,11 @@ describe('WP-FB-DATA-07 — liability identity', () => {
     });
 
     it('the id is stable across subsequent updates', async () => {
+      // 07a: the correction is now an explicit Edit, not a re-add.
       S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 500000, type: 'Vehicle Loan' });
       await drain();
       const first = libs()[0].id;
-      S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 350000, type: 'Vehicle Loan' });
+      await S().updateLiability({ id: first, name: 'Car Loan', amount: 350000, type: 'Vehicle Loan' });
       await drain();
       expect(libs()[0].id).toBe(first);
       expect(libs()[0].amount).toBe(350000);
@@ -204,41 +218,51 @@ describe('WP-FB-DATA-07 — liability identity', () => {
   });
 
   /* ═════════════════ §3 create path UNCHANGED ════════════════════════════ */
-  describe('§3 the name-upsert is preserved (AC-4)', () => {
-    /* THE LOAD-BEARING TEST. There is no liability edit UI; re-adding under the
-       same name is the only correction mechanism the product has. If this ever
-       starts appending, a paydown becomes a duplicate debt. */
-    it('AC-4 re-adding the same name UPDATES in place — one row', async () => {
-      S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 500000, type: 'Vehicle Loan' });
+  describe('§3 the name-upsert is GONE — superseded by WP-FB-DATA-07a', () => {
+    /* This section used to be THE load-bearing guard: with no edit UI, re-adding
+       under the same name was the only correction mechanism. 07a shipped Edit,
+       so Q-D07a-4 = (b) retired the silent upsert. The financial outcome the old
+       guard protected — a paydown must not become a second debt — is preserved,
+       it is just reached through an explicit Edit now. */
+    it('re-adding the same name is REFUSED and points at Edit', async () => {
+      await S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 500000, type: 'Vehicle Loan' });
       await drain();
-      S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 350000, type: 'Vehicle Loan' });
-      await drain();
+      const r = await attempt(() =>
+        S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 350000, type: 'Vehicle Loan' })
+      );
+      expect(r.ok).toBe(false);
+      expect(r.error.code).toBe('DUPLICATE_NAME');
+      expect(r.error.message).toContain('Edit');
+      // Nothing moved: the original figure is intact and there is still one row.
       expect(libs()).toHaveLength(1);
-      expect(libs()[0].amount).toBe(350000);
-      expect(totalDebt()).toBe(350000);
+      expect(totalDebt()).toBe(500000);
     });
 
-    it('AC-4 the measured 07-gate scenario: debt is 350,000, not 850,000', async () => {
-      S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 500000, type: 'Vehicle Loan' });
+    it('the 07-gate money outcome still holds via Edit: 350,000, not 850,000', async () => {
+      await S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 500000, type: 'Vehicle Loan' });
       await drain();
-      S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 350000, type: 'Vehicle Loan' });
+      await S().updateLiability({
+        id: libs()[0].id, name: 'Car Loan', amount: 350000, type: 'Vehicle Loan'
+      });
       await drain();
+      expect(libs()).toHaveLength(1);
       expect(totalDebt()).toBe(350000);
       expect(totalDebt()).not.toBe(850000);
     });
 
-    it('the upsert replaces metadata too, not just the amount', async () => {
-      S().addLiabilityWithMetadata({ name: 'Loan', amount: 100, type: 'Personal Loan', currency: 'INR' });
+    it('Edit replaces metadata too, not just the amount', async () => {
+      await S().addLiabilityWithMetadata({ name: 'Loan', amount: 100, type: 'Personal Loan', currency: 'INR' });
       await drain();
-      S().addLiabilityWithMetadata({ name: 'Loan', amount: 200, type: 'Gold Loan' });
+      await S().updateLiability({ id: libs()[0].id, name: 'Loan', amount: 200, type: 'Gold Loan' });
       await drain();
       expect(libs()).toHaveLength(1);
       expect(libs()[0].type).toBe('Gold Loan');
+      expect(libs()[0].amount).toBe(200);
     });
 
     it('different names still create separate rows', async () => {
-      S().addLiabilityWithMetadata({ name: 'Home Loan', amount: 100, type: 'Home Loan' });
-      S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 200, type: 'Vehicle Loan' });
+      await S().addLiabilityWithMetadata({ name: 'Home Loan', amount: 100, type: 'Home Loan' });
+      await S().addLiabilityWithMetadata({ name: 'Car Loan', amount: 200, type: 'Vehicle Loan' });
       await drain();
       expect(libs()).toHaveLength(2);
       expect(totalDebt()).toBe(300);
@@ -247,12 +271,12 @@ describe('WP-FB-DATA-07 — liability identity', () => {
 
   /* ═════════════════ §4 identity-addressable updates ═════════════════════ */
   describe('§4 id addresses a record regardless of name (AC-5)', () => {
-    it('AC-5 adding with an existing id updates THAT row even under a new name', async () => {
-      S().addLiabilityWithMetadata({ name: 'Home Loan', amount: 2500000, type: 'Home Loan' });
+    it('AC-5 updating by id changes THAT row even under a new name', async () => {
+      await S().addLiabilityWithMetadata({ name: 'Home Loan', amount: 2500000, type: 'Home Loan' });
       await drain();
       const id = libs()[0].id!;
 
-      await repository.liabilities.add({ id, name: 'Home Loan (ICICI)', amount: 2400000, type: 'Home Loan' });
+      await repository.liabilities.update({ id, name: 'Home Loan (ICICI)', amount: 2400000, type: 'Home Loan' });
       await drain();
 
       expect(libs()).toHaveLength(1);
@@ -262,23 +286,28 @@ describe('WP-FB-DATA-07 — liability identity', () => {
     });
 
     it('a rename via id does not create a second row', async () => {
-      S().addLiabilityWithMetadata({ name: 'Old Name', amount: 100, type: 'Other' });
+      await S().addLiabilityWithMetadata({ name: 'Old Name', amount: 100, type: 'Other' });
       await drain();
       const id = libs()[0].id!;
-      await repository.liabilities.add({ id, name: 'New Name', amount: 100, type: 'Other' });
+      await repository.liabilities.update({ id, name: 'New Name', amount: 100, type: 'Other' });
       await drain();
       expect(libs()).toHaveLength(1);
       expect(byName('Old Name')).toHaveLength(0);
       expect(byName('New Name')).toHaveLength(1);
     });
 
-    it('an UNKNOWN id falls through to the name path rather than being lost', async () => {
-      S().addLiabilityWithMetadata({ name: 'Home Loan', amount: 100, type: 'Home Loan' });
+    it('07a: an UNKNOWN id is REFUSED on edit, never appended (closes N9)', async () => {
+      // Measured at the 07a gate against 07 behaviour: a stale id fell through to
+      // the name path and CREATED a row, taking debt 100 -> 10,099.
+      await S().addLiabilityWithMetadata({ name: 'Home Loan', amount: 100, type: 'Home Loan' });
       await drain();
-      await repository.liabilities.add({ id: 'lia-not-present', name: 'Brand New', amount: 50 });
-      await drain();
-      expect(libs()).toHaveLength(2);
-      expect(byName('Brand New')).toHaveLength(1);
+      const r = await attempt(() =>
+        repository.liabilities.update({ id: 'lia-not-present', name: 'Brand New', amount: 9999 })
+      );
+      expect(r.ok).toBe(false);
+      expect(r.error.code).toBe('LIABILITY_NOT_FOUND');
+      expect(libs()).toHaveLength(1);
+      expect(totalDebt()).toBe(100);
     });
 
     it('a record added with no id is assigned one', async () => {
@@ -294,8 +323,14 @@ describe('WP-FB-DATA-07 — liability identity', () => {
        truth — two lenders can both be a "Personal Loan". The store must be
        able to hold both; today only the create-path upsert prevents it. */
     it('AC-6 two liabilities differing only by id can coexist', async () => {
-      await repository.liabilities.add({ id: 'lia-a', name: 'Personal Loan', amount: 100000 });
-      await repository.liabilities.add({ id: 'lia-b', name: 'Personal Loan', amount: 250000 });
+      // 07a refuses duplicate names at the CREATE PATH as a UX policy, so this
+      // seeds storage directly — the storage layer itself is still capable, and
+      // legacy duplicates carried in by migration must remain workable.
+      repo.liabilitiesData = [
+        { id: 'lia-a', name: 'Personal Loan', amount: 100000 },
+        { id: 'lia-b', name: 'Personal Loan', amount: 250000 }
+      ];
+      repo.syncStore();
       await drain();
       expect(libs()).toHaveLength(2);
       expect(byName('Personal Loan')).toHaveLength(2);
@@ -304,17 +339,21 @@ describe('WP-FB-DATA-07 — liability identity', () => {
     });
 
     it('the constraint lives in the CREATE PATH, not in storage', async () => {
-      // via the create path -> upsert, one row
-      S().addLiabilityWithMetadata({ name: 'Dup', amount: 100, type: 'Other' });
-      S().addLiabilityWithMetadata({ name: 'Dup', amount: 200, type: 'Other' });
+      // via the create path -> refused, one row, first figure intact
+      await S().addLiabilityWithMetadata({ name: 'Dup', amount: 100, type: 'Other' });
+      await attempt(() => S().addLiabilityWithMetadata({ name: 'Dup', amount: 200, type: 'Other' }));
       await drain();
       expect(libs()).toHaveLength(1);
-      // with explicit distinct ids -> two rows
+      expect(libs()[0].amount).toBe(100);
+      // storage itself still holds two distinct records perfectly well
       reset();
-      await repository.liabilities.add({ id: 'lia-1', name: 'Dup', amount: 100 });
-      await repository.liabilities.add({ id: 'lia-2', name: 'Dup', amount: 200 });
-      await drain();
+      repo.liabilitiesData = [
+        { id: 'lia-1', name: 'Dup', amount: 100 },
+        { id: 'lia-2', name: 'Dup', amount: 200 }
+      ];
+      repo.syncStore();
       expect(libs()).toHaveLength(2);
+      expect(totalDebt()).toBe(300);
     });
   });
 
@@ -366,11 +405,12 @@ describe('WP-FB-DATA-07 — liability identity', () => {
     });
 
     it('AC-7 amounts survive an add/update cycle exactly', async () => {
-      S().addLiabilityWithMetadata({ name: 'Home Loan', amount: 2500000, type: 'Home Loan' });
-      S().addLiabilityWithMetadata({ name: 'Card', amount: 50000, type: 'Credit Card' });
+      await S().addLiabilityWithMetadata({ name: 'Home Loan', amount: 2500000, type: 'Home Loan' });
+      await S().addLiabilityWithMetadata({ name: 'Card', amount: 50000, type: 'Credit Card' });
       await drain();
       expect(totalDebt()).toBe(2550000);
-      S().addLiabilityWithMetadata({ name: 'Card', amount: 40000, type: 'Credit Card' });
+      const cardId = libs().find(l => l.name === 'Card')!.id;
+      await S().updateLiability({ id: cardId, name: 'Card', amount: 40000, type: 'Credit Card' });
       await drain();
       expect(totalDebt()).toBe(2540000);
     });
@@ -391,18 +431,31 @@ describe('WP-FB-DATA-07 — liability identity', () => {
      unreachable guard with no coverage is dead code the next maintainer
      deletes — so each is exercised directly. */
   describe('§7b defensive branches (M1, M24)', () => {
-    it('M1 a stored record with NO id gains one when updated by name', async () => {
-      // A record that predates 07 and reached memory without going through add().
+    it('M1 a stored record with NO id can never be silently overwritten', async () => {
+      // A record that predates 07 and reached memory without going through add()
+      // — 07's migration back-fills ids on load, so this is the belt-and-braces
+      // case. 07a must not let it be hit by accident from any direction.
       repo.liabilitiesData = [{ name: 'Legacy Loan', amount: 100 } as Liability];
       repo.syncStore();
       expect(libs()[0].id).toBeUndefined();
 
-      await repository.liabilities.add({ name: 'Legacy Loan', amount: 250 });
-      await drain();
+      // create under the same name -> refused, the stored figure is untouched
+      const created = await attempt(() => repository.liabilities.add({ name: 'Legacy Loan', amount: 250 }));
+      expect(created.ok).toBe(false);
+      expect(created.error.code).toBe('DUPLICATE_NAME');
+
+      // edit / delete without an identity -> refused, not "index 0"
+      const edited = await attempt(() =>
+        repository.liabilities.update({ id: undefined as any, name: 'Legacy Loan', amount: 250 })
+      );
+      expect(edited.ok).toBe(false);
+      expect(edited.error.code).toBe('EMPTY_ID');
+      const deleted = await attempt(() => repository.liabilities.remove('' as any));
+      expect(deleted.ok).toBe(false);
+      expect(deleted.error.code).toBe('EMPTY_ID');
 
       expect(libs()).toHaveLength(1);
-      expect(libs()[0].amount).toBe(250);
-      expect(LiabilityIdentityService.isValidId(libs()[0].id)).toBe(true);
+      expect(totalDebt()).toBe(100);
     });
 
     it('M24 ensureId assigns when absent and preserves when present', () => {
@@ -589,18 +642,22 @@ describe('WP-FB-DATA-07 — liability identity', () => {
 
   /* ═════════════════ §8 scope boundary ═══════════════════════════════════ */
   describe('§8 scope boundary — identity only', () => {
-    it('AC-9 no liability deletion was added to the port', () => {
+    it('07a: the port declares exactly add / update / remove', () => {
       const port = repository.liabilities as any;
-      // the concrete class retains an off-port remove(); it is NOT a capability
-      const declared = ['findAll', 'findAllSync', 'add'];
+      const declared = ['findAll', 'findAllSync', 'add', 'update', 'remove'];
       for (const m of declared) expect(typeof port[m]).toBe('function');
-      expect(typeof S().removeLiability).toBe('undefined');
+      // Delete is authorised for LIABILITIES only (Q-D07a-3 = (b)).
+      expect(typeof S().removeLiability).toBe('function');
+      // and only under that one authorised name
       expect(typeof S().deleteLiability).toBe('undefined');
     });
 
-    it('AC-9 the off-port remove is now id-addressable, not name-addressable', async () => {
-      await repository.liabilities.add({ id: 'lia-a', name: 'Same', amount: 100 });
-      await repository.liabilities.add({ id: 'lia-b', name: 'Same', amount: 200 });
+    it('AC-9 remove is id-addressable, not name-addressable', async () => {
+      repo.liabilitiesData = [
+        { id: 'lia-a', name: 'Same', amount: 100 },
+        { id: 'lia-b', name: 'Same', amount: 200 }
+      ];
+      repo.syncStore();
       await drain();
       await (repository.liabilities as any).remove('lia-a');
       await drain();
@@ -609,20 +666,26 @@ describe('WP-FB-DATA-07 — liability identity', () => {
       expect(libs()[0].amount).toBe(200);
     });
 
-    it('no edit UI or duplicate-name refusal was introduced (that is 07a)', () => {
+    it('07a exposes exactly the authorised liability store surface', () => {
       const s = S();
-      for (const k of ['editLiability', 'updateLiability', 'renameLiability']) {
+      // Only ONE edit name exists — no editLiability/renameLiability synonyms
+      // for the same intent, which is how UI and write path drift apart.
+      expect(typeof s.updateLiability).toBe('function');
+      for (const k of ['editLiability', 'renameLiability', 'archiveLiability', 'excludeLiability']) {
         expect(typeof s[k]).toBe('undefined');
       }
       expect(Object.keys(s).filter(k => /iabilit/i.test(k)).sort())
-        .toEqual(['addLiability', 'addLiabilityWithMetadata', 'liabilities']);
+        .toEqual(['addLiability', 'addLiabilityWithMetadata', 'liabilities', 'removeLiability', 'updateLiability']);
     });
 
-    it('the Prisma adapter mirrors identity', async () => {
+    it('the Prisma adapter mirrors the lifecycle policy, not just identity', async () => {
       const p = new PrismaLiabilityRepository();
-      const spy = vi.spyOn(LiabilityIdentityService, 'ensureId');
+      const spy = vi.spyOn(LiabilityLifecycleService, 'planCreate');
       await p.add({ name: 'Home Loan', amount: 100 });
       expect(spy).toHaveBeenCalled();
+      // and the produced record carries a generated identity
+      expect(LiabilityIdentityService.isValidId(spy.mock.results[0].value.liability.id)).toBe(true);
+      spy.mockRestore();
     });
 
     it('LiabilityIdentityService mirrors the AssetIdentityService contract', () => {

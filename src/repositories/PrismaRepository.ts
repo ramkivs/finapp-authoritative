@@ -8,7 +8,7 @@ import {
   AmendmentRequestShape, AmendmentResultShape
 } from '../domain/types';
 import { TransferIntegrityService } from '../services/TransferIntegrityService';
-import { LiabilityIdentityService } from '../services/LiabilityIdentityService';
+import { LiabilityLifecycleService } from '../services/LiabilityLifecycleService';
 import { TransactionIdentityService } from '../services/TransactionIdentityService';
 import {
   ImportBatchRollbackService, BatchRollbackError, BatchRestoreError
@@ -209,25 +209,34 @@ export class PrismaLiabilityRepository implements LiabilityRepository {
   }
 
   /**
-   * WP-FB-DATA-07: identity is mirrored here for the same reason every other
-   * guard in this adapter is — a rule enforced in one of two implementations
-   * is not a rule, it is a coincidence of which adapter happens to be wired.
-   *
-   * A real Prisma implementation must upsert on the `id` primary key, and must
-   * keep the exact-name fallback until WP-FB-DATA-07a replaces it with an Edit
-   * affordance — otherwise a paydown re-entered under the same name appends a
-   * second debt instead of updating the first.
+   * WP-FB-DATA-07a: the lifecycle POLICY is mirrored here for the same reason
+   * every other guard in this adapter is — a rule enforced in one of two
+   * implementations is not a rule, it is a coincidence of which adapter happens
+   * to be wired. Create appends and refuses a duplicate name; the legacy
+   * exact-name upsert is gone (Q-D07a-2/4 = (b)).
    */
   async add(liability: Liability): Promise<void> {
-    const identified = LiabilityIdentityService.ensureId(liability);
-    void identified;
+    const plan = LiabilityLifecycleService.planCreate(liability as any, this.findAllSync());
+    void plan;
     // Production implementation:
-    //   await prisma.liability.upsert({
-    //     where: { id: identified.id }, update: { ...identified }, create: { ...identified } });
+    //   await prisma.liability.create({ data: { ...plan.liability } });
   }
 
-  /** Id-addressable, and deliberately still off the LiabilityRepository port. */
-  async remove(_id: string): Promise<void> {}
+  /** Id-addressed full-record replace; refuses an id that is not present. */
+  async update(liability: Liability): Promise<void> {
+    const plan = LiabilityLifecycleService.planUpdate(liability as any, this.findAllSync());
+    void plan;
+    // Production implementation:
+    //   await prisma.liability.update({ where: { id: plan.liability.id }, data: { ...plan.liability } });
+  }
+
+  /** Physical delete by id (Q-D07a-3 = (b)); refuses an id that is not present. */
+  async remove(id: string): Promise<void> {
+    const plan = LiabilityLifecycleService.planDelete(id, this.findAllSync());
+    void plan;
+    // Production implementation:
+    //   await prisma.liability.delete({ where: { id: plan.id } });
+  }
 }
 
 export class PrismaSnapshotRepository implements SnapshotRepository {

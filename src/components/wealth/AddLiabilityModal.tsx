@@ -6,6 +6,8 @@ import { X, ArrowLeft } from 'lucide-react';
 interface Props {
   isOpen: boolean;
   onClose: () => void;
+  /** WP-FB-DATA-07a: lets the workspace report the outcome next to the table. */
+  onSaved?: (message: string) => void;
 }
 
 const LOAN_CATEGORIES: Array<{ type: LiabilityType; desc: string }> = [
@@ -20,12 +22,14 @@ const LOAN_CATEGORIES: Array<{ type: LiabilityType; desc: string }> = [
   { type: 'Other', desc: 'Other institutional debt' }
 ];
 
-export const AddLiabilityModal: React.FC<Props> = ({ isOpen, onClose }) => {
+export const AddLiabilityModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   const [step, setStep] = useState<1 | 2>(1);
   const [selectedType, setSelectedType] = useState<LiabilityType>('Home Loan');
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('INR');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const { addLiabilityWithMetadata } = useCanonicalLedger();
 
@@ -36,19 +40,36 @@ export const AddLiabilityModal: React.FC<Props> = ({ isOpen, onClose }) => {
     setStep(2);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  /**
+   * WP-FB-DATA-07a: the write is AWAITED.
+   *
+   * Previously this called and closed. A duplicate name now REFUSES
+   * (Q-D07a-2 = (b)) and a persistence failure rolls storage back — in both
+   * cases the modal must stay open and say why, instead of closing over a write
+   * that never happened.
+   */
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !amount) return;
-    addLiabilityWithMetadata({
-      name,
-      amount: Number(amount),
-      type: selectedType,
-      currency: currency || undefined
-    });
-    setName('');
-    setAmount('');
-    setStep(1);
-    onClose();
+    if (!name || !amount || busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await addLiabilityWithMetadata({
+        name: name.trim(),
+        amount: Number(amount),
+        type: selectedType,
+        currency: currency || undefined
+      });
+      onSaved?.(`Added "${name.trim()}".`);
+      setName('');
+      setAmount('');
+      setStep(1);
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || 'The liability could not be saved.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -122,6 +143,17 @@ export const AddLiabilityModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
             </div>
 
+            {error && (
+              <div
+                id="add-liability-error"
+                data-liability-kind="error"
+                role="alert"
+                className="rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-3.5 py-2.5 text-xs font-semibold text-rose-800 dark:text-rose-300"
+              >
+                {error}
+              </div>
+            )}
+
             <div className="flex items-center justify-between pt-3 border-t border-gray-200 dark:border-gray-800 mt-6">
               <button
                 type="button"
@@ -133,10 +165,12 @@ export const AddLiabilityModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </button>
 
               <button
+                id="add-liability-submit"
                 type="submit"
-                className="px-5 py-2.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs transition shadow-sm"
+                disabled={busy}
+                className="px-5 py-2.5 rounded-xl bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white font-bold text-xs transition shadow-sm"
               >
-                Save Liability
+                {busy ? 'Saving…' : 'Save Liability'}
               </button>
             </div>
           </form>

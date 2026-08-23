@@ -76,9 +76,16 @@ interface LedgerState {
    */
   addTransfer: (source: string, destination: string, amount: number) => Promise<void>;
   addAsset: (name: string, amount: number) => void;
-  addLiability: (name: string, amount: number) => void;
+  /**
+   * WP-FB-DATA-07a — liability lifecycle. All four RETURN their promise so the
+   * UI can render a refusal or a persistence failure instead of closing a modal
+   * over a write that never happened.
+   */
+  addLiability: (name: string, amount: number) => Promise<void>;
   addAssetWithMetadata: (params: { name: string; amount: number; type?: any; tag?: string; currency?: string; geography?: any }) => void;
-  addLiabilityWithMetadata: (params: { name: string; amount: number; type?: any; currency?: string }) => void;
+  addLiabilityWithMetadata: (params: { name: string; amount: number; type?: any; currency?: string }) => Promise<void>;
+  updateLiability: (params: { id: string; name: string; amount: number; type?: any; currency?: string }) => Promise<void>;
+  removeLiability: (id: string) => Promise<void>;
   addPastSnapshot: (params: { dateStr: string; totalAssets: number; totalLiabilities: number; label?: string }) => void;
   captureSnapshot: (label?: string) => void;
   commitImportedRows: (validRows?: Transaction[]) => {
@@ -283,7 +290,10 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   addLiability: (name, amount) => {
-    repository.liabilities.add({ name, amount });
+    // WP-FB-DATA-07a: the OverviewPage quick-add path. It bypasses
+    // FinancialCommands, which is precisely why the duplicate-name policy is
+    // enforced at the repository boundary rather than in a modal.
+    return repository.liabilities.add({ name, amount });
   },
 
   addAssetWithMetadata: (params) => {
@@ -291,7 +301,15 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   addLiabilityWithMetadata: (params) => {
-    FinancialCommands.recordLiabilityWithMetadata(params);
+    return FinancialCommands.recordLiabilityWithMetadata(params);
+  },
+
+  updateLiability: (params) => {
+    return FinancialCommands.updateLiability(params);
+  },
+
+  removeLiability: (id) => {
+    return FinancialCommands.removeLiability(id);
   },
 
   addPastSnapshot: (params) => {

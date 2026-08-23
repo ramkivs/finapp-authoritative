@@ -28,7 +28,7 @@ import { DateRangeService, formatDisplayDate, getEffectiveAsOfDate } from '../se
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransactionSignService } from '../services/TransactionSignService';
 import { AssetIdentityService } from '../services/AssetIdentityService';
-import { LiabilityIdentityService } from '../services/LiabilityIdentityService';
+import { LiabilityLifecycleService } from '../services/LiabilityLifecycleService';
 import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
 import { TransferIntegrityService, TransferValidation } from '../services/TransferIntegrityService';
 import { TransactionIdentityService, DuplicateIdGroup } from '../services/TransactionIdentityService';
@@ -506,88 +506,65 @@ export class MemoryLiabilityRepository implements LiabilityRepository {
   }
 
   /**
-   * WP-FB-DATA-07 — identity-aware upsert.
+   * WP-FB-DATA-07a — CREATE. Always appends.
    *
-   * Resolution order, mirroring `MemoryAssetRepository.add` exactly:
+   * The legacy exact-name upsert that WP-FB-DATA-07 deliberately preserved is
+   * GONE (Q-D07a-4 = (b)). It existed only because re-adding under the same
+   * name was the product's only correction mechanism; 07a ships Edit, so the
+   * silent upsert would now be a second, different mutation semantics for one
+   * user intent — and the 07a gate measured it destroying ₹25,00,000 when the
+   * user meant to record a second loan.
    *
-   *   1. a VALID `id` addresses that record, whatever its name is now
-   *      (this is what makes a future rename safe);
-   *   2. otherwise, exact-name match updates in place.
-   *
-   * ⚠️ STEP 2 IS DELIBERATE AND MUST NOT BE REMOVED IN THIS PACKAGE.
-   * There is no liability edit UI, no delete UI and no `removeLiability` store
-   * action: re-adding under the same name is the product's ONLY correction
-   * mechanism. The 07 gate measured the alternative — a paydown re-entered as
-   * `Car Loan 350,000` would append instead of update, taking total debt from
-   * 350,000 to 850,000 and understating net worth by 500,000.
-   *
-   * Decision Q-D07-1 = (c) delivers this in two steps. WP-FB-DATA-07a adds
-   * Edit/Delete against the stable id and only then refuses duplicate names.
-   * Until that exists, appending would break the user's only way to correct a
-   * balance.
+   * A duplicate name is refused with a message pointing at Edit
+   * (Q-D07a-2 = (b)). The policy lives in `LiabilityLifecycleService`, not in a
+   * modal, because there are TWO create paths and OverviewPage:89 does not go
+   * through the modal.
    */
   async add(liability: Liability): Promise<void> {
-    const previous = this.parent.liabilitiesData;
-
-    const byId = LiabilityIdentityService.isValidId(liability.id)
-      ? previous.findIndex(l => l.id === liability.id)
-      : -1;
-
-    let next: Liability[];
-
-    if (byId >= 0) {
-      next = [...previous];
-      next[byId] = { ...liability, id: previous[byId].id };
-    } else {
-      // Legacy create path: exact-name match preserves prior upsert behaviour.
-      const byName = LiabilityIdentityService.isValidId(liability.id)
-        ? -1
-        : previous.findIndex(l => l.name === liability.name);
-      if (byName >= 0) {
-        next = [...previous];
-        next[byName] = {
-          ...liability,
-          id: previous[byName].id || LiabilityIdentityService.generateId()
-        };
-      } else {
-        next = [...previous, {
-          ...liability,
-          id: liability.id || LiabilityIdentityService.generateId()
-        }];
-      }
-    }
-    this.parent.liabilitiesData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: next,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.liabilitiesData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+    const plan = LiabilityLifecycleService.planCreate(
+      liability as any,
+      this.parent.liabilitiesData
+    );
+    await this.commit(plan.next);
   }
 
   /**
-   * ⚠️ NOT ON THE `LiabilityRepository` PORT AND NOT CALLED ANYWHERE.
+   * WP-FB-DATA-07a — EDIT. Id-addressed full-record replace, one atomic write.
    *
-   * The 07 discovery gate found this as dead code keyed on `name`. It is now
-   * id-addressable so that it cannot be wired up later against a mutable
-   * display string, but it remains deliberately off the port: no liability
-   * deletion capability is authorised until WP-FB-DATA-07a decides one.
+   * Refuses an id that is not present instead of appending (the N9 hazard
+   * measured at the gate: debt 100 -> 10,099 from a stale id).
+   */
+  async update(liability: Liability): Promise<void> {
+    const plan = LiabilityLifecycleService.planUpdate(
+      liability as any,
+      this.parent.liabilitiesData
+    );
+    await this.commit(plan.next);
+  }
+
+  /**
+   * WP-FB-DATA-07a — DELETE (Q-D07a-3 = (b)). On the port now, and id-addressed.
+   *
+   * This is the product's first irreversible destructive operation and it is
+   * scoped to liabilities ONLY: they are user-entered figures, not a financial
+   * ledger. D9-A still prohibits transaction deletion, and no soft-exclusion
+   * vocabulary is imported onto `Liability`.
    */
   async remove(id: string): Promise<void> {
+    const plan = LiabilityLifecycleService.planDelete(id, this.parent.liabilitiesData);
+    await this.commit(plan.next);
+  }
+
+  /**
+   * ONE atomic `saveAll`, with exact memory rollback on failure.
+   *
+   * Every liability mutation goes through here so that create, edit and delete
+   * cannot drift in their failure behaviour. The promise is RETURNED to the
+   * caller: a rejection means the user's money was not recorded and they must
+   * be told (F-06b-2).
+   */
+  private async commit(next: Liability[]): Promise<void> {
     const previous = this.parent.liabilitiesData;
-    const next = previous.filter(l => l.id !== id);
     this.parent.liabilitiesData = next;
     this.parent.syncStore();
     try {
