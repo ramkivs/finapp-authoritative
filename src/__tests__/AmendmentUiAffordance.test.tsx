@@ -356,8 +356,8 @@ describe('WP-FB-DATA-06c-2a — amendment UI affordance', () => {
       const A = acct('A', 10000);
       const v1 = await income(A, 5000);
       const seen: number[] = [];
-      const save = vi.spyOn(IndexedDBStorageService, 'saveAll')
-        .mockImplementation(async (st: any) => {
+      const save = vi.spyOn(IndexedDBStorageService, 'persist')
+        .mockImplementation(async (_lease: any, st: any) => {
           seen.push(LedgerExclusionService.forDerivation(st.transactions).length);
         });
       const { onClose } = openModal(byId(v1.id));
@@ -415,7 +415,7 @@ describe('WP-FB-DATA-06c-2a — amendment UI affordance', () => {
     it('a READFAIL refusal reaches the user verbatim', async () => {
       const A = acct('A', 10000);
       const v1 = await income(A, 5000);
-      vi.spyOn(IndexedDBStorageService, 'saveAll').mockRejectedValueOnce(
+      vi.spyOn(IndexedDBStorageService, 'persist').mockRejectedValueOnce(
         new Error('Refusing to persist: the last IndexedDB load failed, so the in-memory ledger may be empty or partial and writing it would destroy stored data.')
       );
       const { onClose } = openModal(byId(v1.id));

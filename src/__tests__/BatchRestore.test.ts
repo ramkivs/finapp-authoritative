@@ -382,7 +382,7 @@ describe('WP-FB-DATA-06c-2b — import batch restore', () => {
     it('ACCEPTANCE 17 — a refused restore persists nothing at all', async () => {
       const A = acct('A', 10000);
       await seedBatch(A, 'bx', [1000]);
-      const save = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const save = vi.spyOn(IndexedDBStorageService, 'persist');
       await attempt(() => repository.transactions.restoreBatch('bx'));       // NOT_ROLLED_BACK
       await attempt(() => repository.transactions.restoreBatch('nope'));     // BATCH_NOT_FOUND
       await attempt(() => repository.transactions.restoreBatch(''));         // EMPTY_BATCH_ID
@@ -495,7 +495,7 @@ describe('WP-FB-DATA-06c-2b — import batch restore', () => {
       await seedBatch(A, 'bx', [1000, 2000]);
       await repository.transactions.rollbackBatch('bx');
       const before = JSON.parse(JSON.stringify(rows()));
-      const save = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const save = vi.spyOn(IndexedDBStorageService, 'persist');
 
       vi.spyOn(ImportBatchRollbackService, 'structuralIntegrityUnchanged')
         .mockReturnValueOnce(false);
@@ -597,7 +597,7 @@ describe('WP-FB-DATA-06c-2b — import batch restore', () => {
       const A = acct('A', 10000);
       await seedBatch(A, 'bx', [1000, 2000]);
       await repository.transactions.rollbackBatch('bx');
-      const save = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const save = vi.spyOn(IndexedDBStorageService, 'persist');
       await repository.transactions.restoreBatch('bx');
       expect(save).toHaveBeenCalledTimes(1);
     });
@@ -607,7 +607,7 @@ describe('WP-FB-DATA-06c-2b — import batch restore', () => {
       await seedBatch(A, 'bx', [1000, 2000]);
       await repository.transactions.rollbackBatch('bx');
       const seen: number[] = [];
-      vi.spyOn(IndexedDBStorageService, 'saveAll').mockImplementation(async (st: any) => {
+      vi.spyOn(IndexedDBStorageService, 'persist').mockImplementation(async (_lease: any, st: any) => {
         seen.push(LedgerExclusionService.forDerivation(st.transactions).length);
       });
       await repository.transactions.restoreBatch('bx');
@@ -637,7 +637,7 @@ describe('WP-FB-DATA-06c-2b — import batch restore', () => {
       await repository.transactions.rollbackBatch('bx');
       const before = JSON.parse(JSON.stringify(rows()));
 
-      vi.spyOn(IndexedDBStorageService, 'saveAll').mockRejectedValueOnce(
+      vi.spyOn(IndexedDBStorageService, 'persist').mockRejectedValueOnce(
         new Error('Refusing to persist: the last IndexedDB load failed, so the in-memory ledger ' +
                   'may be empty or partial and writing it would destroy stored data.')
       );

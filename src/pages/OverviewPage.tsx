@@ -463,13 +463,31 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
             title="Asset Allocation"
             badgeText={assets.length > 0 ? `${assets.length} Holdings` : undefined}
             action={
-              <button
-                onClick={() => setShowAssetForm(true)}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0D1117] hover:bg-[#21262D] border border-[#21262D] text-[11px] font-bold text-[#23C55E] transition cursor-pointer"
-              >
-                <Plus size={12} />
-                <span>Add</span>
-              </button>
+              /* WP-FB-DATA-07c / F-07a-1 — the liability trigger is BACK.
+                 The v2.11.2 baseline rendered "Asset" and "Liability" quick-add
+                 buttons side by side. WP-21 Phase 21C kept the asset one (twice)
+                 and dropped the liability one, leaving `showLiabForm` permanently
+                 false: the form below, its handler and its policy guard were all
+                 correct and completely unreachable. This restores the pair. */
+              <div className="flex items-center gap-1.5">
+                <button
+                  id="overview-add-asset"
+                  onClick={() => setShowAssetForm(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0D1117] hover:bg-[#21262D] border border-[#21262D] text-[11px] font-bold text-[#23C55E] transition cursor-pointer"
+                >
+                  <Plus size={12} />
+                  <span>Add</span>
+                </button>
+                <button
+                  id="overview-add-liability"
+                  onClick={() => setShowLiabForm(true)}
+                  title="Add Liability"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0D1117] hover:bg-[#21262D] border border-[#21262D] text-[11px] font-bold text-rose-400 transition cursor-pointer"
+                >
+                  <Plus size={12} />
+                  <span>Liability</span>
+                </button>
+              </div>
             }
           >
             {renderAssetAllocationDonut()}
@@ -694,7 +712,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
       )}
 
       {showLiabForm && (
-        <form onSubmit={handleAddLiab} className="bg-[#161B22] p-5 rounded-2xl border border-[#21262D] shadow-xl flex flex-col md:flex-row gap-3.5 items-end">
+        <form id="overview-liability-form" onSubmit={handleAddLiab} className="bg-[#161B22] p-5 rounded-2xl border border-[#21262D] shadow-xl flex flex-col md:flex-row gap-3.5 items-end">
           <div className="flex-1 w-full">
             <label className="block text-xs font-bold text-[#8B949E] mb-1">Liability Name</label>
             <input

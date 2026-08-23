@@ -377,7 +377,7 @@ describe('WP-FB-DATA-07 — liability identity', () => {
       await drain();
       const before = JSON.parse(JSON.stringify(libs()));
 
-      vi.spyOn(IndexedDBStorageService, 'saveAll').mockRejectedValueOnce(
+      vi.spyOn(IndexedDBStorageService, 'persist').mockRejectedValueOnce(
         new Error('Refusing to persist: the last IndexedDB load failed, so the in-memory ledger ' +
                   'may be empty or partial and writing it would destroy stored data.')
       );

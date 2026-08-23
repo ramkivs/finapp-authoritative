@@ -5,11 +5,15 @@ import { Pencil, Trash2 } from 'lucide-react';
 
 interface LiabilityTableProps {
   liabilities: Liability[];
+  /** WP-FB-DATA-07c / F-07b-2: the row whose delete is currently in flight. */
+  deleteBusyId?: string | null;
   onEdit?: (liability: Liability) => void;
   onDelete?: (liability: Liability) => void;
 }
 
-export const LiabilityTable: React.FC<LiabilityTableProps> = ({ liabilities, onEdit, onDelete }) => {
+export const LiabilityTable: React.FC<LiabilityTableProps> = ({
+  liabilities, deleteBusyId, onEdit, onDelete
+}) => {
   if (liabilities.length === 0) return null;
 
   const showActions = Boolean(onEdit || onDelete);
@@ -57,24 +61,36 @@ export const LiabilityTable: React.FC<LiabilityTableProps> = ({ liabilities, onE
                         <button
                           type="button"
                           data-liability-edit={l.id}
+                          disabled={deleteBusyId === l.id}
                           onClick={() => onEdit(l)}
                           title={`Edit ${l.name}`}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold transition"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 dark:text-gray-200 text-xs font-bold transition"
                         >
                           <Pencil size={13} />
                           <span>Edit</span>
                         </button>
                       )}
                       {onDelete && (
+                        /* WP-FB-DATA-07c / F-07b-2 — disabled while ANY delete is
+                           in flight, and labelled so the user can see why. A live
+                           control during a pending write was the most reachable
+                           way to start the overlapping writes that the rollback
+                           race turned into silent data loss. */
                         <button
                           type="button"
                           data-liability-delete={l.id}
+                          data-liability-delete-busy={deleteBusyId === l.id ? 'true' : 'false'}
+                          /* Only the row actually being deleted is disabled. Another
+                             row's Delete stays live and is refused by the handler,
+                             with a notice — a control that silently does nothing is
+                             the WP-21 defect all over again. */
+                          disabled={deleteBusyId === l.id}
                           onClick={() => onDelete(l)}
-                          title={`Delete ${l.name}`}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/40 text-rose-700 dark:text-rose-400 text-xs font-bold transition"
+                          title={deleteBusyId === l.id ? `Deleting ${l.name}…` : `Delete ${l.name}`}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/40 disabled:opacity-40 disabled:cursor-not-allowed text-rose-700 dark:text-rose-400 text-xs font-bold transition"
                         >
                           <Trash2 size={13} />
-                          <span>Delete</span>
+                          <span>{deleteBusyId === l.id ? 'Deleting…' : 'Delete'}</span>
                         </button>
                       )}
                     </div>

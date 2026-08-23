@@ -90,66 +90,34 @@ export class MemoryTransactionRepository implements TransactionRepository {
   }
 
   async append(tx: Transaction): Promise<void> {
-    const previous = this.parent.transactionsData;
-    // WP-FB-DATA-06c-0 (P-1). Id uniqueness is checked FIRST: a duplicate id
-    // makes every later group/pair judgement unsound, because two different
-    // rows would answer to the same name.
-    TransactionIdentityService.assertUniqueIds([tx], previous);
-    // WP-FB-DATA-06b admission gate. Throws before anything is mutated or
-    // persisted, so an invalid transfer never reaches memory OR storage.
-    TransferIntegrityService.assertAdmissible([tx], previous);
-    const next = [tx, ...previous];
-    this.parent.transactionsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: next,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.transactionsData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+    return this.parent.write(() => {
+      const previous = this.parent.transactionsData;
+      // WP-FB-DATA-06c-0 (P-1). Id uniqueness is checked FIRST: a duplicate id
+      // makes every later group/pair judgement unsound, because two different
+      // rows would answer to the same name.
+      TransactionIdentityService.assertUniqueIds([tx], previous);
+      // WP-FB-DATA-06b admission gate. Throws before anything is mutated or
+      // persisted, so an invalid transfer never reaches memory OR storage.
+      TransferIntegrityService.assertAdmissible([tx], previous);
+      const next = [tx, ...previous];
+      this.parent.transactionsData = next;
+    });
   }
 
   async appendMany(txs: Transaction[]): Promise<void> {
-    const previous = this.parent.transactionsData;
-    // WP-FB-DATA-06c-0 (P-1). Covers BOTH collision scopes: duplicates within
-    // this batch and duplicates against stored rows. Throws before any mutation,
-    // so a rejected batch persists nothing at all.
-    TransactionIdentityService.assertUniqueIds(txs, previous);
-    // WP-FB-DATA-06b admission gate. Both legs of a transfer arrive here
-    // together, so the whole pair is validated as one economic operation
-    // before any of it is admitted.
-    TransferIntegrityService.assertAdmissible(txs, previous);
-    const next = [...txs, ...previous];
-    this.parent.transactionsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: next,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.transactionsData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+    return this.parent.write(() => {
+      const previous = this.parent.transactionsData;
+      // WP-FB-DATA-06c-0 (P-1). Covers BOTH collision scopes: duplicates within
+      // this batch and duplicates against stored rows. Throws before any mutation,
+      // so a rejected batch persists nothing at all.
+      TransactionIdentityService.assertUniqueIds(txs, previous);
+      // WP-FB-DATA-06b admission gate. Both legs of a transfer arrive here
+      // together, so the whole pair is validated as one economic operation
+      // before any of it is admitted.
+      TransferIntegrityService.assertAdmissible(txs, previous);
+      const next = [...txs, ...previous];
+      this.parent.transactionsData = next;
+    });
   }
 
   async findAll(): Promise<Transaction[]> {
@@ -173,50 +141,38 @@ export class MemoryTransactionRepository implements TransactionRepository {
    * mirror, and roll memory back if persistence fails.
    */
   async rollbackBatch(importBatchId: string): Promise<BatchRollbackResultShape> {
-    const previous = this.parent.transactionsData;
+    // WP-FB-DATA-07c: the plan is produced inside the mutation so it is judged
+    // against the state that is actually mutated, and read out afterwards for
+    // the caller's result.
+    let plan!: ReturnType<typeof ImportBatchRollbackService.plan>;
+    await this.parent.write(() => {
+      const previous = this.parent.transactionsData;
 
-    const plan = ImportBatchRollbackService.plan(importBatchId, previous);
-    if (plan.status !== 'ADMISSIBLE') throw new BatchRollbackError(plan);
+      plan = ImportBatchRollbackService.plan(importBatchId, previous);
+      if (plan.status !== 'ADMISSIBLE') throw new BatchRollbackError(plan);
 
-    const next = ImportBatchRollbackService.apply(plan, previous, new Date().toISOString());
+      const next = ImportBatchRollbackService.apply(plan, previous, new Date().toISOString());
 
-    // WP-FB-DATA-06c-1a / Decision D8 — WHOLE-TRANSFER GATE.
-    //
-    // The rollback planner already refuses a batch that would split a transfer,
-    // but that guard reasons about BATCH MEMBERSHIP. This one reasons about the
-    // resulting EXCLUSION STATE, so it holds no matter how the rows were
-    // selected. Defence in depth: every future lifecycle primitive routes
-    // through here, and structural validation cannot see partial exclusion.
-    TransferIntegrityService.assertWholeTransferLifecycle(previous, next);
+      // WP-FB-DATA-06c-1a / Decision D8 — WHOLE-TRANSFER GATE.
+      //
+      // The rollback planner already refuses a batch that would split a transfer,
+      // but that guard reasons about BATCH MEMBERSHIP. This one reasons about the
+      // resulting EXCLUSION STATE, so it holds no matter how the rows were
+      // selected. Defence in depth: every future lifecycle primitive routes
+      // through here, and structural validation cannot see partial exclusion.
+      TransferIntegrityService.assertWholeTransferLifecycle(previous, next);
 
-    // Exclusion adds no rows and removes none, so DATA-06b structural
-    // invariants cannot change. Asserted rather than assumed.
-    if (!ImportBatchRollbackService.structuralIntegrityUnchanged(previous, next)) {
-      throw new Error(
-        'Import batch rollback aborted: transfer structural integrity would change. ' +
-        'This should be impossible for an exclusion-only operation.'
-      );
-    }
+      // Exclusion adds no rows and removes none, so DATA-06b structural
+      // invariants cannot change. Asserted rather than assumed.
+      if (!ImportBatchRollbackService.structuralIntegrityUnchanged(previous, next)) {
+        throw new Error(
+          'Import batch rollback aborted: transfer structural integrity would change. ' +
+          'This should be impossible for an exclusion-only operation.'
+        );
+      }
 
-    this.parent.transactionsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: next,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.transactionsData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+      this.parent.transactionsData = next;
+    });
 
     return {
       batchId: plan.batchId,
@@ -254,46 +210,33 @@ export class MemoryTransactionRepository implements TransactionRepository {
    * absence of any removal path is load-bearing.
    */
   async restoreBatch(importBatchId: string): Promise<BatchRestoreResultShape> {
-    const previous = this.parent.transactionsData;
+    // WP-FB-DATA-07c: planned inside the mutation, read out for the result.
+    let plan!: ReturnType<typeof ImportBatchRollbackService.planRestore>;
+    let restoredAt = '';
+    await this.parent.write(() => {
+      const previous = this.parent.transactionsData;
 
-    const plan = ImportBatchRollbackService.planRestore(importBatchId, previous);
-    if (plan.status !== 'ADMISSIBLE') throw new BatchRestoreError(plan);
+      plan = ImportBatchRollbackService.planRestore(importBatchId, previous);
+      if (plan.status !== 'ADMISSIBLE') throw new BatchRestoreError(plan);
 
-    const restoredAt = new Date().toISOString();
-    const next = ImportBatchRollbackService.applyRestore(plan, previous, restoredAt);
+      restoredAt = new Date().toISOString();
+      const next = ImportBatchRollbackService.applyRestore(plan, previous, restoredAt);
 
-    // WP-FB-DATA-06c-1a / D8 — whole-transfer gate. Un-excluding one leg is
-    // the same defect class as excluding one leg.
-    TransferIntegrityService.assertWholeTransferLifecycle(previous, next);
+      // WP-FB-DATA-06c-1a / D8 — whole-transfer gate. Un-excluding one leg is
+      // the same defect class as excluding one leg.
+      TransferIntegrityService.assertWholeTransferLifecycle(previous, next);
 
-    // Restore adds and removes no rows, so DATA-06b structural invariants
-    // cannot change. Asserted rather than assumed.
-    if (!ImportBatchRollbackService.structuralIntegrityUnchanged(previous, next)) {
-      throw new Error(
-        'Import batch restore aborted: transfer structural integrity would change. ' +
-        'This should be impossible for an exclusion-only operation.'
-      );
-    }
+      // Restore adds and removes no rows, so DATA-06b structural invariants
+      // cannot change. Asserted rather than assumed.
+      if (!ImportBatchRollbackService.structuralIntegrityUnchanged(previous, next)) {
+        throw new Error(
+          'Import batch restore aborted: transfer structural integrity would change. ' +
+          'This should be impossible for an exclusion-only operation.'
+        );
+      }
 
-    this.parent.transactionsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: next,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.transactionsData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+      this.parent.transactionsData = next;
+    });
 
     return {
       batchId: plan.batchId,
@@ -350,40 +293,28 @@ export class MemoryTransactionRepository implements TransactionRepository {
    * and rollbackBatch do.
    */
   async supersede(requests: AmendmentRequestShape[]): Promise<AmendmentResultShape> {
-    const previous = this.parent.transactionsData;
+    // WP-FB-DATA-07c: planned and applied inside the mutation; the caller's
+    // result is read out afterwards.
+    let result!: AmendmentResultShape;
+    await this.parent.write(() => {
+      const previous = this.parent.transactionsData;
 
-    const plan = TransactionAmendmentService.plan(requests as AmendmentRequest[], previous);
-    if (plan.status !== 'ADMISSIBLE') throw new AmendmentRefusedError(plan);
+      const plan = TransactionAmendmentService.plan(requests as AmendmentRequest[], previous);
+      if (plan.status !== 'ADMISSIBLE') throw new AmendmentRefusedError(plan);
 
-    const { next, corrections, result } = TransactionAmendmentService.apply(
-      plan,
-      previous,
-      new Date().toISOString()
-    );
+      const { next, corrections, result: applied } = TransactionAmendmentService.apply(
+        plan,
+        previous,
+        new Date().toISOString()
+      );
 
-    TransactionIdentityService.assertUniqueIds(corrections, previous);
-    TransferIntegrityService.assertAdmissible(corrections, previous);
-    TransferIntegrityService.assertWholeTransferLifecycle(previous, next);
+      TransactionIdentityService.assertUniqueIds(corrections, previous);
+      TransferIntegrityService.assertAdmissible(corrections, previous);
+      TransferIntegrityService.assertWholeTransferLifecycle(previous, next);
 
-    this.parent.transactionsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: next,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.transactionsData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+      this.parent.transactionsData = next;
+      result = applied;
+    });
 
     return result;
   }
@@ -416,81 +347,48 @@ export class MemoryAssetRepository implements AssetRepository {
    * user deliberately created as distinct.
    */
   async add(asset: Asset): Promise<void> {
-    const previous = this.parent.assetsData;
-    let next: Asset[];
+    return this.parent.write(() => {
+      const previous = this.parent.assetsData;
+      let next: Asset[];
 
-    const byId = AssetIdentityService.isValidId(asset.id)
-      ? previous.findIndex(a => a.id === asset.id)
-      : -1;
+      const byId = AssetIdentityService.isValidId(asset.id)
+        ? previous.findIndex(a => a.id === asset.id)
+        : -1;
 
-    if (byId >= 0) {
-      next = [...previous];
-      next[byId] = { ...asset, id: previous[byId].id };
-    } else {
-      // Legacy create path: exact-name match preserves prior upsert behaviour.
-      const byName = AssetIdentityService.isValidId(asset.id)
-        ? -1
-        : previous.findIndex(a => a.name === asset.name);
-      if (byName >= 0) {
+      if (byId >= 0) {
         next = [...previous];
-        next[byName] = { ...asset, id: previous[byName].id || AssetIdentityService.generateId() };
+        next[byId] = { ...asset, id: previous[byId].id };
       } else {
-        next = [...previous, { ...asset, id: asset.id || AssetIdentityService.generateId() }];
+        // Legacy create path: exact-name match preserves prior upsert behaviour.
+        const byName = AssetIdentityService.isValidId(asset.id)
+          ? -1
+          : previous.findIndex(a => a.name === asset.name);
+        if (byName >= 0) {
+          next = [...previous];
+          next[byName] = { ...asset, id: previous[byName].id || AssetIdentityService.generateId() };
+        } else {
+          next = [...previous, { ...asset, id: asset.id || AssetIdentityService.generateId() }];
+        }
       }
-    }
 
-    this.parent.assetsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: next,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.assetsData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+      this.parent.assetsData = next;
+    });
   }
 
   /** Removes by authoritative id (WP-FB-DATA-04c-1); never by display name. */
   async remove(id: string): Promise<void> {
-    const previous = this.parent.assetsData;
-    const previousAccounts = this.parent.accountsData;
-    const next = previous.filter(a => a.id !== id);
+    return this.parent.write(() => {
+      const previous = this.parent.assetsData;
+      const previousAccounts = this.parent.accountsData;
+      const next = previous.filter(a => a.id !== id);
 
-    // WP-FB-DATA-04c-2: no account may be left holding a dangling reference.
-    // The account, its transactions and its balance are untouched.
-    this.parent.accountsData =
-      AccountAssetLinkService.clearLinksToAsset(id, this.parent.accountsData).accounts;
+      // WP-FB-DATA-04c-2: no account may be left holding a dangling reference.
+      // The account, its transactions and its balance are untouched.
+      this.parent.accountsData =
+        AccountAssetLinkService.clearLinksToAsset(id, this.parent.accountsData).accounts;
 
-    this.parent.assetsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: next,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.assetsData = previous;
-      this.parent.accountsData = previousAccounts;
-      this.parent.syncStore();
-      throw e;
-    }
+      this.parent.assetsData = next;
+    });
   }
 }
 
@@ -564,26 +462,10 @@ export class MemoryLiabilityRepository implements LiabilityRepository {
    * be told (F-06b-2).
    */
   private async commit(next: Liability[]): Promise<void> {
-    const previous = this.parent.liabilitiesData;
-    this.parent.liabilitiesData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: next,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.liabilitiesData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+    return this.parent.write(() => {
+      const previous = this.parent.liabilitiesData;
+      this.parent.liabilitiesData = next;
+    });
   }
 }
 
@@ -599,53 +481,36 @@ export class MemorySnapshotRepository implements SnapshotRepository {
   }
 
   async create(snapshot?: NetWorthSnapshot): Promise<void> {
-    const prev = this.parent.snapshotsData;
-    let next: NetWorthSnapshot[];
+    return this.parent.write(() => {
+      const prev = this.parent.snapshotsData;
+      let next: NetWorthSnapshot[];
 
-    if (snapshot) {
-      const existingIdx = prev.findIndex(s => s.dateStr === snapshot.dateStr);
-      if (existingIdx >= 0) {
-        next = [...prev];
-        next[existingIdx] = { ...snapshot };
+      if (snapshot) {
+        const existingIdx = prev.findIndex(s => s.dateStr === snapshot.dateStr);
+        if (existingIdx >= 0) {
+          next = [...prev];
+          next[existingIdx] = { ...snapshot };
+        } else {
+          next = [snapshot, ...prev];
+        }
       } else {
-        next = [snapshot, ...prev];
+        const totAssets = this.parent.assetsData.reduce((sum, a) => sum + a.amount, 0);
+        const totLiabs = this.parent.liabilitiesData.reduce((sum, l) => sum + l.amount, 0);
+        const netWorth = totAssets - totLiabs;
+
+        const newSnap: NetWorthSnapshot = {
+          id: 'snap-' + Date.now(),
+          dateStr: formatDisplayDate(getEffectiveAsOfDate()) + ' (Today)',
+          totalAssets: totAssets,
+          totalLiabilities: totLiabs,
+          netWorth,
+          status: 'Anchored Permanent'
+        };
+        next = [newSnap, ...prev];
       }
-    } else {
-      const totAssets = this.parent.assetsData.reduce((sum, a) => sum + a.amount, 0);
-      const totLiabs = this.parent.liabilitiesData.reduce((sum, l) => sum + l.amount, 0);
-      const netWorth = totAssets - totLiabs;
 
-      const newSnap: NetWorthSnapshot = {
-        id: 'snap-' + Date.now(),
-        dateStr: formatDisplayDate(getEffectiveAsOfDate()) + ' (Today)',
-        totalAssets: totAssets,
-        totalLiabilities: totLiabs,
-        netWorth,
-        status: 'Anchored Permanent'
-      };
-      next = [newSnap, ...prev];
-    }
-
-    this.parent.snapshotsData = next;
-    this.parent.syncStore();
-
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: next,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (err) {
-      this.parent.snapshotsData = prev;
-      this.parent.syncStore();
-      throw err;
-    }
+      this.parent.snapshotsData = next;
+    });
   }
 
   async add(snapshot: NetWorthSnapshot): Promise<void> {
@@ -665,77 +530,44 @@ export class MemoryAccountRepository implements AccountRepository {
   }
 
   async add(account: Account): Promise<void> {
-    const existing = this.parent.accountsData.find(
-      a => a.name.trim().toLowerCase() === account.name.trim().toLowerCase() && a.id !== account.id
-    );
-    if (existing) {
-      throw new Error(`Account name "${account.name}" already exists. Account names must be unique.`);
-    }
+    return this.parent.write(() => {
+      const existing = this.parent.accountsData.find(
+        a => a.name.trim().toLowerCase() === account.name.trim().toLowerCase() && a.id !== account.id
+      );
+      if (existing) {
+        throw new Error(`Account name "${account.name}" already exists. Account names must be unique.`);
+      }
 
-    const previous = this.parent.accountsData;
-    const idx = previous.findIndex(a => a.id === account.id);
-    let next: Account[];
-    if (idx >= 0) {
-      next = [...previous];
-      next[idx] = { ...account };
-    } else {
-      next = [...previous, { ...account }];
-    }
-    this.parent.accountsData = next;
-    // WP-FB-DATA-04: a newly registered (or renamed) account may resolve rows
-    // that were previously unmapped. Already-valid references are untouched.
-    this.parent.remapAccounts();
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: next,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.accountsData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+      const previous = this.parent.accountsData;
+      const idx = previous.findIndex(a => a.id === account.id);
+      let next: Account[];
+      if (idx >= 0) {
+        next = [...previous];
+        next[idx] = { ...account };
+      } else {
+        next = [...previous, { ...account }];
+      }
+      this.parent.accountsData = next;
+      // WP-FB-DATA-04: a newly registered (or renamed) account may resolve rows
+      // that were previously unmapped. Already-valid references are untouched.
+      this.parent.remapAccounts();
+    });
   }
 
   async remove(id: string): Promise<void> {
-    const previous = this.parent.accountsData;
-    const previousTransactions = this.parent.transactionsData;
-    const next = previous.filter(a => a.id !== id);
+    return this.parent.write(() => {
+      const previous = this.parent.accountsData;
+      const previousTransactions = this.parent.transactionsData;
+      const next = previous.filter(a => a.id !== id);
 
-    // WP-FB-DATA-04: transactions are NEVER silently orphaned. Any row pointing
-    // at the removed account is explicitly transitioned to the unmapped state
-    // (accountId = null). The rows themselves - and every financial value on
-    // them - are preserved and remain visible in the canonical Ledger.
-    this.parent.unmapAccount(id);
+      // WP-FB-DATA-04: transactions are NEVER silently orphaned. Any row pointing
+      // at the removed account is explicitly transitioned to the unmapped state
+      // (accountId = null). The rows themselves - and every financial value on
+      // them - are preserved and remain visible in the canonical Ledger.
+      this.parent.unmapAccount(id);
 
-    this.parent.accountsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: next,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.accountsData = previous;
-      this.parent.transactionsData = previousTransactions;
-      this.parent.syncStore();
-      throw e;
-    }
+      this.parent.accountsData = next;
+    });
   }
 }
 
@@ -760,34 +592,18 @@ export class MemoryBudgetRepository implements BudgetRepository {
   }
 
   async save(budget: MonthlyBudget): Promise<void> {
-    const previous = this.parent.budgetsData;
-    const idx = previous.findIndex(b => b.monthStr === budget.monthStr);
-    let next: MonthlyBudget[];
-    if (idx >= 0) {
-      next = [...previous];
-      next[idx] = { ...budget };
-    } else {
-      next = [...previous, { ...budget }];
-    }
-    this.parent.budgetsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: next,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.budgetsData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+    return this.parent.write(() => {
+      const previous = this.parent.budgetsData;
+      const idx = previous.findIndex(b => b.monthStr === budget.monthStr);
+      let next: MonthlyBudget[];
+      if (idx >= 0) {
+        next = [...previous];
+        next[idx] = { ...budget };
+      } else {
+        next = [...previous, { ...budget }];
+      }
+      this.parent.budgetsData = next;
+    });
   }
 }
 
@@ -803,58 +619,26 @@ export class MemoryPolicyRepository implements PolicyRepository {
   }
 
   async add(policy: InsurancePolicy): Promise<void> {
-    const previous = this.parent.policiesData;
-    const idx = previous.findIndex(p => p.id === policy.id);
-    let next: InsurancePolicy[];
-    if (idx >= 0) {
-      next = [...previous];
-      next[idx] = { ...policy };
-    } else {
-      next = [...previous, { ...policy }];
-    }
-    this.parent.policiesData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: next,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.policiesData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+    return this.parent.write(() => {
+      const previous = this.parent.policiesData;
+      const idx = previous.findIndex(p => p.id === policy.id);
+      let next: InsurancePolicy[];
+      if (idx >= 0) {
+        next = [...previous];
+        next[idx] = { ...policy };
+      } else {
+        next = [...previous, { ...policy }];
+      }
+      this.parent.policiesData = next;
+    });
   }
 
   async remove(id: string): Promise<void> {
-    const previous = this.parent.policiesData;
-    const next = previous.filter(p => p.id !== id);
-    this.parent.policiesData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: next,
-        goals: this.parent.goalsData,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.policiesData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+    return this.parent.write(() => {
+      const previous = this.parent.policiesData;
+      const next = previous.filter(p => p.id !== id);
+      this.parent.policiesData = next;
+    });
   }
 }
 
@@ -870,58 +654,26 @@ export class MemoryGoalRepository implements GoalRepository {
   }
 
   async add(goal: FinancialGoal): Promise<void> {
-    const previous = this.parent.goalsData;
-    const idx = previous.findIndex(g => g.id === goal.id);
-    let next: FinancialGoal[];
-    if (idx >= 0) {
-      next = [...previous];
-      next[idx] = { ...goal };
-    } else {
-      next = [...previous, { ...goal }];
-    }
-    this.parent.goalsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: next,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.goalsData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+    return this.parent.write(() => {
+      const previous = this.parent.goalsData;
+      const idx = previous.findIndex(g => g.id === goal.id);
+      let next: FinancialGoal[];
+      if (idx >= 0) {
+        next = [...previous];
+        next[idx] = { ...goal };
+      } else {
+        next = [...previous, { ...goal }];
+      }
+      this.parent.goalsData = next;
+    });
   }
 
   async remove(id: string): Promise<void> {
-    const previous = this.parent.goalsData;
-    const next = previous.filter(g => g.id !== id);
-    this.parent.goalsData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: next,
-        profile: this.parent.profileData
-      });
-    } catch (e) {
-      this.parent.goalsData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+    return this.parent.write(() => {
+      const previous = this.parent.goalsData;
+      const next = previous.filter(g => g.id !== id);
+      this.parent.goalsData = next;
+    });
   }
 }
 
@@ -937,28 +689,25 @@ export class MemoryProfileRepository implements ProfileRepository {
   }
 
   async save(profile: FinancialProfile): Promise<void> {
-    const previous = this.parent.profileData;
-    const next = { ...profile };
-    this.parent.profileData = next;
-    this.parent.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.parent.transactionsData,
-        assets: this.parent.assetsData,
-        liabilities: this.parent.liabilitiesData,
-        snapshots: this.parent.snapshotsData,
-        accounts: this.parent.accountsData,
-        budgets: this.parent.budgetsData,
-        policies: this.parent.policiesData,
-        goals: this.parent.goalsData,
-        profile: next
-      });
-    } catch (e) {
-      this.parent.profileData = previous;
-      this.parent.syncStore();
-      throw e;
-    }
+    return this.parent.write(() => {
+      const previous = this.parent.profileData;
+      const next = { ...profile };
+      this.parent.profileData = next;
+    });
   }
+}
+
+/** WP-FB-DATA-07c: one operation's view of the whole ledger. */
+interface LedgerSnapshot {
+  transactions: Transaction[];
+  assets: Asset[];
+  liabilities: Liability[];
+  snapshots: NetWorthSnapshot[];
+  accounts: Account[];
+  budgets: MonthlyBudget[];
+  policies: InsurancePolicy[];
+  goals: FinancialGoal[];
+  profile: FinancialProfile | null;
 }
 
 export class MemoryRepository implements FinancialRepositoryPort {
@@ -996,6 +745,184 @@ export class MemoryRepository implements FinancialRepositoryPort {
   public policies: PolicyRepository = new MemoryPolicyRepository(this);
   public goals: GoalRepository = new MemoryGoalRepository(this);
   public profile: ProfileRepository = new MemoryProfileRepository(this);
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * WP-FB-DATA-07c — THE WRITE BOUNDARY
+   *
+   * THE DEFECT THIS CLOSES (measured in real Chromium against live IndexedDB)
+   *
+   * Every repository mutation used to be written as:
+   *
+   *     const previous = this.parent.xData;   // whole-collection snapshot
+   *     this.parent.xData = next;             // optimistic, synchronous
+   *     try { await saveAll(...) }
+   *     catch { this.parent.xData = previous; throw }   // whole-collection restore
+   *
+   * `saveAll` was serialised; the memory mutation and the rollback were not.
+   * Two overlapping writes therefore interleaved:
+   *
+   *     op1  snapshot [X,Y,Z]   memory := [Y,Z]
+   *     op2  snapshot [Y,Z]     memory := [Z]
+   *     op1  save FAILS  -> memory := [X,Y,Z]      op2's success ERASED
+   *     op2  save OK     -> storage := [Z]         op1's "failed" delete PERSISTED
+   *
+   *   measured:  memory [X,Y,Z]   storage [Z]   after reload: [Z]
+   *
+   * The user was told one delete failed and one succeeded, saw neither happen,
+   * and after a reload found both had. Reproduced identically for TRANSACTIONS
+   * (`append` t1 rejected + t2 ok -> memory [], storage [t2, t1]).
+   *
+   * THE FIX — operation-scoped revert, not snapshot restore
+   *
+   *   1. The optimistic synchronous mutation is KEPT. It is what makes the UI
+   *      respond immediately, and 400+ existing tests assert it.
+   *   2. The save runs inside the existing write lock and persists the LIVE
+   *      ledger, so it can never write a stale, precomputed array.
+   *   3. On failure the collection is not restored wholesale. Only THIS
+   *      operation's delta is undone, against the state as it is at that
+   *      moment, so a concurrent success is left standing.
+   *   4. Where no overlap happened — the overwhelmingly common case — the
+   *      revert is byte-exact: it restores the captured arrays unchanged, so
+   *      ordering and object identity behave exactly as before this package.
+   *
+   * WHAT THIS IS NOT: no event log, no undo system, no audit fields, no schema
+   * change, and no new transaction capability. It is persistence ordering and
+   * in-memory consistency only.
+   * ══════════════════════════════════════════════════════════════════════ */
+
+  /** Shallow copy of every collection — one operation's "before" picture. */
+  private captureLedger(): LedgerSnapshot {
+    return {
+      transactions: this.transactionsData,
+      assets: this.assetsData,
+      liabilities: this.liabilitiesData,
+      snapshots: this.snapshotsData,
+      accounts: this.accountsData,
+      budgets: this.budgetsData,
+      policies: this.policiesData,
+      goals: this.goalsData,
+      profile: this.profileData
+    };
+  }
+
+  /** The live ledger, as the persistence layer must see it at save time. */
+  public currentLedger(): LedgerSnapshot {
+    return this.captureLedger();
+  }
+
+  private restoreLedger(snapshot: LedgerSnapshot): void {
+    this.transactionsData = snapshot.transactions as Transaction[];
+    this.assetsData = snapshot.assets as Asset[];
+    this.liabilitiesData = snapshot.liabilities as Liability[];
+    this.snapshotsData = snapshot.snapshots as NetWorthSnapshot[];
+    this.accountsData = snapshot.accounts as Account[];
+    this.budgetsData = snapshot.budgets as MonthlyBudget[];
+    this.policiesData = snapshot.policies as InsurancePolicy[];
+    this.goalsData = snapshot.goals as FinancialGoal[];
+    this.profileData = snapshot.profile as FinancialProfile | null;
+  }
+
+  /**
+   * Undo one operation's delta against the CURRENT state.
+   *
+   * `before` and `after` bracket the operation. `current` may already contain
+   * later operations' work, which must survive. Rules, per collection:
+   *
+   *   - a record this operation ADDED is dropped, unless someone has changed
+   *     it since (then it is somebody else's record now, and is left alone);
+   *   - a record this operation MODIFIED is restored to its earlier value,
+   *     unless it has changed again since;
+   *   - a record this operation REMOVED is put back, unless it has already
+   *     been re-added.
+   *
+   * Records this operation never touched are never touched here either.
+   */
+  private revertDelta(before: LedgerSnapshot, after: LedgerSnapshot): void {
+    const keyOf = (r: any): string =>
+      String(r?.id ?? r?.monthStr ?? r?.dateStr ?? JSON.stringify(r));
+    const same = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
+
+    const revertOne = (beforeRows: any[], afterRows: any[], currentRows: any[]): any[] => {
+      // Fast path: nothing else touched this collection, so restore exactly —
+      // same order, same object identities, indistinguishable from the old
+      // snapshot rollback.
+      if (same(currentRows, afterRows)) return beforeRows;
+
+      const beforeMap = new Map(beforeRows.map(r => [keyOf(r), r]));
+      const afterMap = new Map(afterRows.map(r => [keyOf(r), r]));
+      const currentKeys = new Set(currentRows.map(r => keyOf(r)));
+
+      const merged: any[] = [];
+      for (const row of currentRows) {
+        const k = keyOf(row);
+        const mine = afterMap.get(k);
+        const original = beforeMap.get(k);
+        if (mine !== undefined && !same(row, mine)) {
+          merged.push(row);          // changed since my write — not mine to undo
+        } else if (mine !== undefined && original === undefined) {
+          continue;                  // I added it, untouched since — drop it
+        } else if (mine !== undefined && original !== undefined && !same(mine, original)) {
+          merged.push(original);     // I modified it, untouched since — restore
+        } else {
+          merged.push(row);
+        }
+      }
+      for (const [k, original] of beforeMap) {
+        // I removed it and nobody re-added it — put it back.
+        if (!afterMap.has(k) && !currentKeys.has(k)) merged.push(original);
+      }
+      return merged;
+    };
+
+    this.transactionsData = revertOne(before.transactions, after.transactions, this.transactionsData);
+    this.assetsData = revertOne(before.assets, after.assets, this.assetsData);
+    this.liabilitiesData = revertOne(before.liabilities, after.liabilities, this.liabilitiesData);
+    this.snapshotsData = revertOne(before.snapshots, after.snapshots, this.snapshotsData);
+    this.accountsData = revertOne(before.accounts, after.accounts, this.accountsData);
+    this.budgetsData = revertOne(before.budgets, after.budgets, this.budgetsData);
+    this.policiesData = revertOne(before.policies, after.policies, this.policiesData);
+    this.goalsData = revertOne(before.goals, after.goals, this.goalsData);
+    // Profile is a single record, not a collection: restore it only if it still
+    // holds exactly what this operation left there.
+    if (same(this.profileData, after.profile)) this.profileData = before.profile as FinancialProfile | null;
+  }
+
+  /**
+   * Run one repository mutation.
+   *
+   * `mutate` runs SYNCHRONOUSLY and optimistically, exactly as before. The
+   * save is then serialised through the existing write lock, and a failure
+   * undoes only this operation (see `revertDelta`) before a compensating save
+   * reconciles storage with the corrected memory.
+   */
+  public async write(mutate: () => void): Promise<void> {
+    const before = this.captureLedger();
+    mutate();
+    const after = this.captureLedger();
+    this.syncStore();
+
+    return IndexedDBStorageService.runExclusive(async (lease) => {
+      try {
+        // The LIVE ledger, never a precomputed array: a save that runs after a
+        // concurrent revert must persist the corrected state, not a stale one.
+        await IndexedDBStorageService.persist(lease, this.currentLedger());
+      } catch (e) {
+        this.revertDelta(before, after);
+        this.syncStore();
+        try {
+          // Reconcile storage with the reverted memory. Without this, a failed
+          // write whose delta a concurrent save already persisted would leave
+          // memory and storage disagreeing — the very defect being closed.
+          await IndexedDBStorageService.persist(lease, this.currentLedger());
+        } catch {
+          // The compensating write failed too. Memory is correct; storage is
+          // not, and we say so by rethrowing the original failure below rather
+          // than reporting a success that did not happen.
+        }
+        throw e;
+      }
+    });
+  }
 
   public syncStore() {
     useCanonicalLedger.getState().syncWithRepository({
@@ -1118,26 +1045,10 @@ export class MemoryRepository implements FinancialRepositoryPort {
    * previous accounts are restored so the link never silently half-applies.
    */
   async applyAccountsUpdate(accounts: Account[]): Promise<void> {
-    const previous = this.accountsData;
-    this.accountsData = accounts;
-    this.syncStore();
-    try {
-      await IndexedDBStorageService.saveAll({
-        transactions: this.transactionsData,
-        assets: this.assetsData,
-        liabilities: this.liabilitiesData,
-        snapshots: this.snapshotsData,
-        accounts: this.accountsData,
-        budgets: this.budgetsData,
-        policies: this.policiesData,
-        goals: this.goalsData,
-        profile: this.profileData
-      });
-    } catch (e) {
-      this.accountsData = previous;
-      this.syncStore();
-      throw e;
-    }
+    return this.write(() => {
+      const previous = this.accountsData;
+      this.accountsData = accounts;
+    });
   }
 
   remapAccounts(): void {

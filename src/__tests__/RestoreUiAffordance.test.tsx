@@ -228,7 +228,7 @@ describe('WP-FB-DATA-06c-2c — restore UI affordance', () => {
       await seed(A, 'bx', [1000]);
       await repository.transactions.rollbackBatch('bx');
       const before = JSON.parse(JSON.stringify(rows()));
-      const save = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const save = vi.spyOn(IndexedDBStorageService, 'persist');
       const spy = vi.spyOn(repository.transactions, 'restoreBatch');
       stubConfirm(false);
 
@@ -279,7 +279,7 @@ describe('WP-FB-DATA-06c-2c — restore UI affordance', () => {
       const A = acct('A', 10000);
       await seed(A, 'bx', [1000, 2000]);
       await repository.transactions.rollbackBatch('bx');
-      const save = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const save = vi.spyOn(IndexedDBStorageService, 'persist');
       stubConfirm(true);
       renderImport();
       fireEvent.click(restoreBtn('bx'));
@@ -393,7 +393,7 @@ describe('WP-FB-DATA-06c-2c — restore UI affordance', () => {
       const A = acct('A', 10000);
       await seed(A, 'bx', [1000]);
       await repository.transactions.rollbackBatch('bx');
-      vi.spyOn(IndexedDBStorageService, 'saveAll').mockRejectedValueOnce(
+      vi.spyOn(IndexedDBStorageService, 'persist').mockRejectedValueOnce(
         new Error('Refusing to persist: the last IndexedDB load failed, so the in-memory ledger ' +
                   'may be empty or partial and writing it would destroy stored data.')
       );

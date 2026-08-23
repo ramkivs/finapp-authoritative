@@ -34,6 +34,32 @@ export interface StoredLedgerState {
   hasLoadedOnce: boolean;
 }
 
+/**
+ * WP-FB-DATA-07c — proof that the holder is running inside the write lock.
+ *
+ * `runExclusive` mints one lease per critical section and passes it to the
+ * task. `persist` accepts a save ONLY from the lease that is currently active,
+ * which makes "I am inside the lock" a checkable fact rather than a convention
+ * a future edit can quietly break. It is deliberately opaque: nothing outside
+ * this module can construct one.
+ */
+export interface WriteLease {
+  readonly id: number;
+}
+
+/** The whole ledger, as written in one atomic IndexedDB transaction. */
+export interface LedgerWriteState {
+  transactions: Transaction[];
+  assets: Asset[];
+  liabilities: Liability[];
+  snapshots: NetWorthSnapshot[];
+  accounts?: Account[];
+  budgets?: MonthlyBudget[];
+  policies?: InsurancePolicy[];
+  goals?: FinancialGoal[];
+  profile?: FinancialProfile | null;
+}
+
 export class IndexedDBStorageService {
   private static nodeFallbackStore: StoredLedgerState = {
     transactions: [],
@@ -49,6 +75,26 @@ export class IndexedDBStorageService {
   };
 
   private static mutex: Promise<any> = Promise.resolve();
+
+  /* WP-FB-DATA-07c — the write lock.
+   *
+   * `mutex` already serialised the IndexedDB transaction itself. What it did
+   * NOT serialise was the in-memory mutation that each repository performed
+   * BEFORE enqueuing its save, nor the rollback it performed afterwards. Two
+   * overlapping writes therefore interleaved like this:
+   *
+   *   op1  snapshot = [X,Y,Z]        memory := [Y,Z]        enqueue save
+   *   op2  snapshot = [Y,Z]          memory := [Z]          enqueue save
+   *   op1  save FAILS  -> memory := [X,Y,Z]   (op2's success erased)
+   *   op2  save OK     -> storage  := [Z]     (both deletions persisted)
+   *
+   * Measured in real Chromium: memory [X,Y,Z], storage [Z]. The user was told
+   * one delete failed and one succeeded, saw neither, and after a reload had
+   * both. `runExclusive` closes the window by putting the WHOLE operation —
+   * snapshot, mutation, save and rollback — inside the one existing lock.
+   */
+  private static activeLease: WriteLease | null = null;
+  private static leaseCounter = 0;
   public static simulateFailureOnce: boolean = false;
   /** WP-FB-DATA-06c-READFAIL: injects a genuine read-path failure, for tests. */
   public static simulateReadFailureOnce: boolean = false;
@@ -73,6 +119,49 @@ export class IndexedDBStorageService {
     const resultPromise = this.mutex.then(() => task());
     this.mutex = resultPromise.then(() => {}).catch(() => {});
     return resultPromise;
+  }
+
+  /**
+   * WP-FB-DATA-07c — run a complete write operation inside the write lock.
+   *
+   * Everything the caller does inside `task` is serialised against every other
+   * exclusive write: reading current state, mutating memory, persisting, and
+   * rolling memory back on failure. Because no other write can interleave, a
+   * snapshot taken inside the task CANNOT be stale by the time it is restored.
+   *
+   * ⚠️ NEVER call `saveAll` from inside a task — it takes the same lock and
+   * would deadlock. Use `persist(lease, state)`; the lease makes that a
+   * runtime-checked rule rather than a comment.
+   *
+   * ⚠️ Tasks must not nest. `MemorySnapshotRepository.add` therefore delegates
+   * to `create` WITHOUT wrapping again.
+   */
+  static runExclusive<T>(task: (lease: WriteLease) => Promise<T>): Promise<T> {
+    return this.enqueueSave(async () => {
+      const lease: WriteLease = { id: ++this.leaseCounter };
+      this.activeLease = lease;
+      try {
+        return await task(lease);
+      } finally {
+        if (this.activeLease === lease) this.activeLease = null;
+      }
+    });
+  }
+
+  /**
+   * Persist from inside an exclusive write. Refuses a lease that is not the
+   * one currently running, which is what a stray `persist` call outside the
+   * lock — or a leaked lease from an earlier operation — would look like.
+   */
+  static async persist(lease: WriteLease, state: LedgerWriteState): Promise<void> {
+    if (!lease || this.activeLease !== lease) {
+      throw new Error(
+        'IndexedDBStorageService.persist was called outside its write lease. ' +
+        'Repository writes must run inside runExclusive(); use saveAll() for a ' +
+        'standalone write.'
+      );
+    }
+    return this.performSave(state);
   }
 
   private static getDB(): Promise<IDBDatabase> {
@@ -373,18 +462,18 @@ export class IndexedDBStorageService {
     });
   }
 
-  static async saveAll(state: {
-    transactions: Transaction[];
-    assets: Asset[];
-    liabilities: Liability[];
-    snapshots: NetWorthSnapshot[];
-    accounts?: Account[];
-    budgets?: MonthlyBudget[];
-    policies?: InsurancePolicy[];
-    goals?: FinancialGoal[];
-    profile?: FinancialProfile | null;
-  }): Promise<void> {
-    return this.enqueueSave(async () => {
+  /**
+   * Standalone write: takes the write lock itself. Repository operations use
+   * `runExclusive` + `persist` instead, so that their in-memory mutation and
+   * rollback are inside the same lock as the save (WP-FB-DATA-07c).
+   */
+  static async saveAll(state: LedgerWriteState): Promise<void> {
+    return this.runExclusive(lease => this.persist(lease, state));
+  }
+
+  /** The actual save. Callers reach it through `saveAll` or `persist`. */
+  private static async performSave(state: LedgerWriteState): Promise<void> {
+    {
       if (this.simulateFailureOnce) {
         this.simulateFailureOnce = false;
         throw new Error('Simulated IndexedDB persistence failure');
@@ -497,7 +586,7 @@ export class IndexedDBStorageService {
           ? e
           : new Error(`IndexedDB persistence failed: ${String(e)}`);
       }
-    });
+    }
   }
 
   static async clearAll(): Promise<void> {

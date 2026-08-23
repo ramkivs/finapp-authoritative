@@ -643,7 +643,7 @@ describe('WP-FB-DATA-06c-2 — amendment / supersession', () => {
       const A = acct('A', 10000);
       const v1 = await seedIncome(A, 5000);
 
-      const save = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const save = vi.spyOn(IndexedDBStorageService, 'persist');
       await amend(v1.id, { amount: 5500 });
       expect(save).toHaveBeenCalledTimes(1);
     });
@@ -653,8 +653,8 @@ describe('WP-FB-DATA-06c-2 — amendment / supersession', () => {
       const v1 = await seedIncome(A, 5000);
 
       const seen: number[] = [];
-      const save = vi.spyOn(IndexedDBStorageService, 'saveAll')
-        .mockImplementation(async (state: any) => {
+      const save = vi.spyOn(IndexedDBStorageService, 'persist')
+        .mockImplementation(async (_lease: any, state: any) => {
           // the ONLY state ever handed to persistence
           seen.push(LedgerExclusionService.forDerivation(state.transactions).length);
         });
@@ -686,7 +686,7 @@ describe('WP-FB-DATA-06c-2 — amendment / supersession', () => {
       const v1 = await seedIncome(A, 5000);
       const before = JSON.parse(JSON.stringify(rows()));
 
-      vi.spyOn(IndexedDBStorageService, 'saveAll').mockRejectedValueOnce(
+      vi.spyOn(IndexedDBStorageService, 'persist').mockRejectedValueOnce(
         new Error('Refusing to persist: the last IndexedDB load failed, so the in-memory ledger ' +
                   'may be empty or partial and writing it would destroy stored data.')
       );
@@ -992,7 +992,7 @@ describe('WP-FB-DATA-06c-2 — amendment / supersession', () => {
     it('nothing is persisted when a gate refuses', async () => {
       const A = acct('A', 10000);
       const v1 = await seedIncome(A, 5000);
-      const save = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const save = vi.spyOn(IndexedDBStorageService, 'persist');
       await attempt(() => amend(v1.id, { amount: 5000 }));   // NO_EFFECTIVE_CHANGE
       await attempt(() => amend('nope', { amount: 1 }));      // TARGET_NOT_FOUND
       expect(save).not.toHaveBeenCalled();

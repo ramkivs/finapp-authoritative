@@ -286,7 +286,7 @@ describe('WP-FB-DATA-07a — liability lifecycle', () => {
 
     it('a refused create performs NO write at all', async () => {
       await S().addLiabilityWithMetadata({ name: 'Home Loan', amount: 100 });
-      const spy = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const spy = vi.spyOn(IndexedDBStorageService, 'persist');
       await attempt(() => S().addLiabilityWithMetadata({ name: 'Home Loan', amount: 200 }));
       expect(spy).not.toHaveBeenCalled();
     });
@@ -372,7 +372,7 @@ describe('WP-FB-DATA-07a — liability lifecycle', () => {
     it('AC-9/AC-14 an edit is exactly ONE saveAll', async () => {
       await S().addLiabilityWithMetadata({ name: 'A', amount: 1 });
       await drain();
-      const spy = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const spy = vi.spyOn(IndexedDBStorageService, 'persist');
       await S().updateLiability({ id: libs()[0].id, name: 'A', amount: 2 });
       await drain();
       expect(spy).toHaveBeenCalledTimes(1);
@@ -406,12 +406,13 @@ describe('WP-FB-DATA-07a — liability lifecycle', () => {
     it('a delete is exactly ONE saveAll and touches no other collection', async () => {
       force([{ id: 'lia-A', name: 'A', amount: 1 }, { id: 'lia-B', name: 'B', amount: 2 }]);
       repo.assetsData = [{ id: 'ast-1', name: 'Cash', amount: 500 }];
-      const spy = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const spy = vi.spyOn(IndexedDBStorageService, 'persist');
       await S().removeLiability('lia-A');
       await drain();
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.calls[0][0].assets).toEqual([{ id: 'ast-1', name: 'Cash', amount: 500 }]);
-      expect(spy.mock.calls[0][0].liabilities).toHaveLength(1);
+      // [0] is the write lease, [1] is the ledger state (WP-FB-DATA-07c).
+      expect(spy.mock.calls[0][1].assets).toEqual([{ id: 'ast-1', name: 'Cash', amount: 500 }]);
+      expect(spy.mock.calls[0][1].liabilities).toHaveLength(1);
     });
   });
 
@@ -553,7 +554,7 @@ describe('WP-FB-DATA-07a — liability lifecycle', () => {
     it('AC-8 declining the confirmation writes NOTHING', async () => {
       force([{ id: 'lia-A', name: 'Home Loan', amount: 2500000 }]);
       stubConfirm(false);
-      const spy = vi.spyOn(IndexedDBStorageService, 'saveAll');
+      const spy = vi.spyOn(IndexedDBStorageService, 'persist');
       renderWorkspace();
       fireEvent.click(delBtn('lia-A'));
       await drain();
