@@ -26,13 +26,20 @@ import {
 import { ParsedCsvRow, StatementInput } from './ImportTypes';
 import { ZerodhaHoldingsAdapter } from './adapters/ZerodhaHoldingsAdapter';
 import { GrowwHoldingsAdapter } from './adapters/GrowwHoldingsAdapter';
+import { DhanHoldingsAdapter } from './adapters/DhanHoldingsAdapter';
 
 export class BrokerFormatDetector {
+  // Registry order matters when two adapters' structural
+  // detection can both match the same input. Dhan's XLSX
+  // detection uses the same `Scheme Name` header marker as
+  // Groww's MF detection (Groww's detection only checks the
+  // marker, not the full column sequence), so Dhan must be
+  // registered before Groww to ensure Dhan XLSX files route
+  // to the Dhan adapter.
   private static adapters: BrokerAdapter[] = [
     new ZerodhaHoldingsAdapter(),
+    new DhanHoldingsAdapter(),
     new GrowwHoldingsAdapter(),
-    // Future registrations:
-    //   new DhanHoldingsAdapter(),         // WP-05
   ];
 
   /**
