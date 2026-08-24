@@ -5,6 +5,7 @@ import {
   Asset,
   Liability,
   Holding,
+  HoldingDeletionLogEntry,
   NetWorthSnapshot,
   Account,
   ControlledAccountType,
@@ -27,6 +28,7 @@ import { AccountResolutionService } from '../services/AccountResolutionService';
 import { AccountAssetLinkService, LinkResult } from '../services/AccountAssetLinkService';
 import { TransactionSignService } from '../services/TransactionSignService';
 import { BrokerImportService } from '../services/BrokerImportService';
+import { HoldingDeletionService } from '../services/HoldingDeletionService';
 import { repository } from '../repositories';
 
 /**
@@ -68,6 +70,8 @@ interface LedgerState {
   assets: Asset[];
   liabilities: Liability[];
   holdings: Holding[];
+  /** WP-FB-IMPORT-BROKER-01 / D-06: audit log for permanent holding deletions. */
+  holdingDeletionLog: HoldingDeletionLogEntry[];
   snapshots: NetWorthSnapshot[];
   accounts: Account[];
   budgets: MonthlyBudget[];
@@ -93,6 +97,8 @@ interface LedgerState {
     assets: Asset[];
     liabilities: Liability[];
     holdings?: Holding[];
+    /** WP-FB-IMPORT-BROKER-01 / D-06: audit log for permanent holding deletions. */
+    holdingDeletionLog?: HoldingDeletionLogEntry[];
     snapshots: NetWorthSnapshot[];
     accounts?: Account[];
     budgets?: MonthlyBudget[];
@@ -177,6 +183,35 @@ interface LedgerState {
    * with a `persisted` promise for the caller to await.
    */
   commitImportedHoldings: (parsed: Holding[]) => ImportCommitOutcome;
+
+  /**
+   * WP-FB-IMPORT-BROKER-01 — D-06 closed_absent permanent deletion.
+   *
+   * Composes the holding removal and the audit-record creation inside ONE
+   * `MemoryRepository.write` boundary via `HoldingDeletionService`. Both
+   * succeed or both roll back together (D-06 atomicity contract).
+   *
+   * Pre-conditions enforced by `HoldingDeletionService.planDelete`:
+   *   - `id` is a non-empty string (else `INVALID_ID`).
+   *   - The Holding exists (else `HOLDING_NOT_FOUND`).
+   *   - The Holding's `status` is `closed_absent` (else `HOLDING_NOT_CLOSED`).
+   *     Only `closed_absent` Holdings may be permanently deleted via D-06.
+   *
+   * On any of these pre-validation failures, the call throws
+   * `HoldingDeletionError` synchronously. No memory or IndexedDB mutation
+   * has occurred.
+   *
+   * On persistence failure, the existing `MemoryRepository.write`
+   * `revertDelta` mechanism restores both the pre-deletion `holdingsData`
+   * and the pre-deletion `holdingDeletionLogData` from the captured
+   * snapshot. The returned `persisted` promise REJECTS with the failure.
+   *
+   * The result is shaped like `HoldingDeletionOutcome`: synchronous counts
+   * with a `persisted` promise for the caller to await.
+   *
+   * D-06 is irreversible. There is no `undoHoldingDeletion` action.
+   */
+  commitHoldingDeletion: (id: string) => HoldingDeletionOutcome;
 
   // Account & Budget Actions (WP-18)
   /**
@@ -332,11 +367,34 @@ export interface ImportCommitOutcome {
   persisted?: Promise<void>;
 }
 
+/**
+ * WP-FB-IMPORT-BROKER-01 — D-06 closed_absent permanent deletion outcome.
+ *
+ * The synchronous fields are the ADMISSION decision: the holding id, the
+ * generated audit entry id, and the deletion timestamp. All of that is
+ * computed before anything is written (by `HoldingDeletionService.planDelete`).
+ *
+ * `persisted` is the separate question of whether the deletion reached
+ * storage. It is present only when a write was attempted; pre-validation
+ * failures throw synchronously and produce no `persisted` promise.
+ */
+export interface HoldingDeletionOutcome {
+  /** The deleted Holding's id. */
+  holdingId: string;
+  /** The generated audit entry's id (distinct from `holdingId`). */
+  auditEntryId: string;
+  /** ISO 8601 timestamp of the deletion event. */
+  deletedAt: string;
+  /** Resolves when the deletion is stored; rejects with the failure. */
+  persisted?: Promise<void>;
+}
+
 export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   transactions: [],
   assets: [],
   liabilities: [],
   holdings: [],
+  holdingDeletionLog: [],
   snapshots: [],
   accounts: [],
   budgets: [],
@@ -373,6 +431,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       assets: state.assets,
       liabilities: state.liabilities,
       holdings: state.holdings || [],
+      holdingDeletionLog: state.holdingDeletionLog || [],
       snapshots: state.snapshots,
       accounts: state.accounts || [],
       budgets: state.budgets || [],
@@ -706,6 +765,51 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
 
   rollbackImportBatch: (importBatchId) => {
     return repository.transactions.rollbackBatch(importBatchId);
+  },
+
+  /**
+   * WP-FB-IMPORT-BROKER-01 / D-06 — permanent deletion of a single
+   * `closed_absent` Holding, with mandatory audit-record creation.
+   *
+   * Composes the holding removal and the audit-record creation inside ONE
+   * `MemoryRepository.write` boundary. Both succeed or both roll back.
+   *
+   * Pre-validation (synchronous, throws `HoldingDeletionError` on any
+   * failure): id is non-empty, holding exists, holding's status is
+   * `closed_absent`. Only `closed_absent` Holdings may be permanently
+   * deleted via D-06.
+   *
+   * On persistence failure, the existing `revertDelta` mechanism restores
+   * both `holdingsData` and `holdingDeletionLogData` from the captured
+   * snapshot; the returned `persisted` promise REJECTS with the failure.
+   * The caller (UI) surfaces the error and keeps the data unchanged.
+   *
+   * D-06 is irreversible. There is no `undoHoldingDeletion` action.
+   */
+  commitHoldingDeletion: (id) => {
+    const { holdings, holdingDeletionLog } = get();
+    const asOf = new Date().toISOString();
+    // planDelete is pure and synchronous; it throws HoldingDeletionError on
+    // any pre-validation failure (INVALID_ID, HOLDING_NOT_FOUND,
+    // HOLDING_NOT_CLOSED, DUPLICATE_AUDIT_ID). On success, `plan` is the
+    // pre-computed next state — both arrays are ready, and the audit entry
+    // is already shaped. We can therefore return the audit entry id
+    // synchronously alongside the persisted promise.
+    const plan = HoldingDeletionService.planDelete(id, asOf, holdings, holdingDeletionLog);
+    const auditEntryId = plan.auditEntry.id;
+    // The D-06 path composes both writes into a single atomic block by
+    // attaching the live `repository` to the plan, then passing the
+    // closure to MemoryRepository.write — which provides captureLedger,
+    // revertDelta, and the IndexedDB readwrite transaction. The plan
+    // is pre-validated: any failure here throws synchronously and the
+    // closure is never built. The closure's `memoryRepo` cast is the
+    // pattern used by BrokerImportService.buildAtomicMutation.
+    (plan as any).__memoryRepo = repository as any;
+    const persisted = (repository as any).write(
+      HoldingDeletionService.buildAtomicMutation(plan),
+    );
+    persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
+    return { holdingId: id, auditEntryId, deletedAt: asOf, persisted };
   },
 
   restoreImportBatch: (importBatchId) => {

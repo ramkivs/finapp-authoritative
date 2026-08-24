@@ -743,11 +743,84 @@ export interface HoldingRepository {
   saveMany(holdings: Holding[]): Promise<void>;
 
   /**
-   * Removes by authoritative id. DESTRUCTIVE: the UI / import pipeline
-   * must obtain explicit user confirmation before calling. WP-07 does
-   * not provide auto-delete logic.
+   * Removes by authoritative id.
+   *
+   * ⚠️ NON-ATOMIC DIRECT-SPLICE PATH. This is a port-level primitive that
+   * does NOT route through `MemoryRepository.write` and is therefore not
+   * inside the atomic write boundary. The existing test at
+   * `HoldingRepository.test.ts:84-93` documents this direct-splice shape.
+   *
+   * The D-06 closed_absent permanent deletion path does NOT use this method.
+   * D-06 composes the holding removal and the audit-record creation inside
+   * ONE `MemoryRepository.write` boundary via `HoldingDeletionService` and
+   * `commitHoldingDeletion`. The V1 contract is that this `remove(id)` is
+   * preserved for port completeness and is not the production deletion path.
+   *
+   * Refuses an id that is not present (`NOT_FOUND`).
    */
   remove(id: string): Promise<void>;
+}
+
+/* =========================================================================
+ * WP-FB-IMPORT-BROKER-01 — D-06 closed_absent permanent deletion audit log.
+ *
+ * The D-06 product authority (`WP-FB-IMPORT-BROKER-01-D-06-PRODUCT-AUTHORITY.md`)
+ * mandates an audit record for every permanent deletion of a `closed_absent`
+ * Holding. The audit record is persisted in its own IndexedDB object store
+ * (`holdingDeletionLog`, keyPath `id`) and is written in the SAME atomic
+ * `MemoryRepository.write` boundary as the holding removal itself — the two
+ * succeed or fail together.
+ *
+ * The audit entry `id` is distinct from the deleted `holdingId`. This means
+ * the same `holdingId` (which is no longer in the canonical collection) can
+ * never reappear as a key in this collection, and a fresh audit entry can
+ * never accidentally collide with a deleted holding's id.
+ *
+ * The 10 minimum conceptual fields are recorded by the D-06 product
+ * authority. The interface preserves them exactly, with the addition of
+ * `id` (the audit entry's own storage key).
+ * ========================================================================= */
+
+export interface HoldingDeletionLogEntry {
+  /** Audit entry id, distinct from `holdingId`. Prefix `hdl-`. Storage key. */
+  id: string;
+  /** The deleted Holding's id. */
+  holdingId: string;
+  /** From the deleted Holding. */
+  broker: string;
+  /** From the deleted Holding; undefined if not present. */
+  account?: string;
+  /** From the deleted Holding. */
+  instrumentName: string;
+  /** From the deleted Holding; undefined if not present. */
+  isin?: string;
+  /** From the deleted Holding; undefined if not present. */
+  ticker?: string;
+  /** From the deleted Holding, at the moment of deletion. */
+  currentValueAtDeletion: number;
+  /** From the deleted Holding. */
+  sourceFile: string;
+  /** From the deleted Holding. */
+  importedAt: string;
+  /** ISO 8601 timestamp of the deletion event. */
+  deletedAt: string;
+}
+
+export interface HoldingDeletionLogRepository {
+  findAll(): Promise<HoldingDeletionLogEntry[]>;
+  findAllSync(): HoldingDeletionLogEntry[];
+  /** Finds by authoritative audit entry id. */
+  findByIdSync(id: string): HoldingDeletionLogEntry | null;
+  /**
+   * Appends a new audit entry. Refuses a duplicate id (`DUPLICATE_AUDIT_ID`).
+   *
+   * The D-06 implementation does NOT call this directly; the D-06 path
+   * composes the entry into the atomic `MemoryRepository.write` boundary
+   * via `HoldingDeletionService.buildAtomicMutation` and
+   * `commitHoldingDeletion`. This method is provided for port completeness
+   * and for any future single-record audit operations.
+   */
+  add(entry: HoldingDeletionLogEntry): Promise<void>;
 }
 
 export interface SnapshotRepository {
@@ -798,6 +871,8 @@ export interface FinancialRepositoryPort {
   assets: AssetRepository;
   liabilities: LiabilityRepository;
   holdings: HoldingRepository;
+  /** WP-FB-IMPORT-BROKER-01 / D-06: audit log for permanent holding deletions. */
+  holdingDeletionLog: HoldingDeletionLogRepository;
   snapshots: SnapshotRepository;
   accounts: AccountRepository;
   budgets: BudgetRepository;

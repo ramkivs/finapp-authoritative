@@ -25,13 +25,21 @@ const DB_NAME = 'finboom_db';
 // is purely a schema extension. The single-line `createObjectStore` is
 // verify-or-abort by virtue of running inside the IndexedDB upgrade
 // transaction.
-const DB_VERSION = 6;
+// WP-FB-IMPORT-BROKER-01 / D-06: 6 -> 7 adds the `holdingDeletionLog` object
+// store. The D-06 closed_absent permanent deletion path writes an audit
+// entry into this store atomically with the holding removal. No data
+// transformation is required (the new store starts empty).
+const DB_VERSION = 7;
+
+import { HoldingDeletionLogEntry } from '../domain/types';
 
 export interface StoredLedgerState {
   transactions: Transaction[];
   assets: Asset[];
   liabilities: Liability[];
   holdings: Holding[];
+  /** WP-FB-IMPORT-BROKER-01 / D-06: audit log for permanent holding deletions. */
+  holdingDeletionLog: HoldingDeletionLogEntry[];
   snapshots: NetWorthSnapshot[];
   accounts: Account[];
   budgets: MonthlyBudget[];
@@ -60,6 +68,8 @@ export interface LedgerWriteState {
   assets: Asset[];
   liabilities: Liability[];
   holdings?: Holding[];
+  /** WP-FB-IMPORT-BROKER-01 / D-06: audit log for permanent holding deletions. */
+  holdingDeletionLog?: HoldingDeletionLogEntry[];
   snapshots: NetWorthSnapshot[];
   accounts?: Account[];
   budgets?: MonthlyBudget[];
@@ -74,6 +84,7 @@ export class IndexedDBStorageService {
     assets: [],
     liabilities: [],
     holdings: [],
+    holdingDeletionLog: [],
     snapshots: [],
     accounts: [],
     budgets: [],
@@ -125,6 +136,7 @@ export class IndexedDBStorageService {
     assets: 'id',
     liabilities: 'id',
     holdings: 'id',
+    holdingDeletionLog: 'id',
     snapshots: 'id',
     accounts: 'id',
     budgets: 'id',
@@ -258,6 +270,12 @@ export class IndexedDBStorageService {
         if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('liabilities')) db.createObjectStore('liabilities', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('holdings')) db.createObjectStore('holdings', { keyPath: 'id' });
+        // WP-FB-IMPORT-BROKER-01 / D-06: audit log for permanent holding
+        // deletions. Added in DB_VERSION 6 -> 7. No data transformation is
+        // required: the new store starts empty and the existing 10 stores
+        // are untouched. The audit entry id is the storage key (distinct
+        // from the deleted holdingId, which is recorded as a field).
+        if (!db.objectStoreNames.contains('holdingDeletionLog')) db.createObjectStore('holdingDeletionLog', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('snapshots')) db.createObjectStore('snapshots', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('accounts')) db.createObjectStore('accounts', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('budgets')) db.createObjectStore('budgets', { keyPath: 'id' });
@@ -426,6 +444,7 @@ export class IndexedDBStorageService {
           assets: [...this.nodeFallbackStore.assets],
           liabilities: [...this.nodeFallbackStore.liabilities],
           holdings: [...this.nodeFallbackStore.holdings],
+          holdingDeletionLog: [...this.nodeFallbackStore.holdingDeletionLog],
           snapshots: [...this.nodeFallbackStore.snapshots],
           accounts: [...this.nodeFallbackStore.accounts],
           budgets: [...this.nodeFallbackStore.budgets],
@@ -438,7 +457,7 @@ export class IndexedDBStorageService {
 
       try {
         const db = await this.getDB();
-        const storeNames = ['transactions', 'assets', 'liabilities', 'holdings', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
+        const storeNames = ['transactions', 'assets', 'liabilities', 'holdings', 'holdingDeletionLog', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
           .filter(name => db.objectStoreNames.contains(name));
 
         const tx = db.transaction(storeNames, 'readonly');
@@ -462,6 +481,7 @@ export class IndexedDBStorageService {
           assets,
           liabilities,
           holdings,
+          holdingDeletionLog,
           snapshots,
           accounts,
           budgets,
@@ -474,6 +494,7 @@ export class IndexedDBStorageService {
           getStore('assets'),
           getStore('liabilities'),
           getStore('holdings'),
+          getStore('holdingDeletionLog'),
           getStore('snapshots'),
           getStore('accounts'),
           getStore('budgets'),
@@ -494,6 +515,7 @@ export class IndexedDBStorageService {
           assets: assets as Asset[],
           liabilities: liabilities as Liability[],
           holdings: (holdings as Holding[]) ?? [],
+          holdingDeletionLog: (holdingDeletionLog as HoldingDeletionLogEntry[]) ?? [],
           snapshots: snapshots as NetWorthSnapshot[],
           accounts: accounts as Account[],
           budgets: budgets as MonthlyBudget[],
@@ -609,6 +631,7 @@ export class IndexedDBStorageService {
           assets: [...state.assets],
           liabilities: [...state.liabilities],
           holdings: [...(state.holdings ?? [])],
+          holdingDeletionLog: [...(state.holdingDeletionLog ?? [])],
           snapshots: [...state.snapshots],
           accounts: [...accounts],
           budgets: [...budgets],
@@ -623,7 +646,7 @@ export class IndexedDBStorageService {
       let db: IDBDatabase | undefined;
       try {
         db = await this.getDB();
-        const storeNames = ['transactions', 'assets', 'liabilities', 'holdings', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
+        const storeNames = ['transactions', 'assets', 'liabilities', 'holdings', 'holdingDeletionLog', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
           .filter(name => db!.objectStoreNames.contains(name));
 
         const activeTx = db.transaction(storeNames, 'readwrite');
@@ -651,6 +674,7 @@ export class IndexedDBStorageService {
             ['assets', state.assets],
             ['liabilities', state.liabilities],
             ['holdings', state.holdings ?? []],
+            ['holdingDeletionLog', state.holdingDeletionLog ?? []],
             ['snapshots', state.snapshots],
             ['accounts', accounts],
             ['budgets', budgets],
@@ -745,6 +769,7 @@ export class IndexedDBStorageService {
           assets: [],
           liabilities: [],
           holdings: [],
+          holdingDeletionLog: [],
           snapshots: [],
           accounts: [],
           budgets: [],
@@ -759,7 +784,7 @@ export class IndexedDBStorageService {
       let db: IDBDatabase | undefined;
       try {
         db = await this.getDB();
-        const storeNames = ['transactions', 'assets', 'liabilities', 'holdings', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
+        const storeNames = ['transactions', 'assets', 'liabilities', 'holdings', 'holdingDeletionLog', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
           .filter(name => db!.objectStoreNames.contains(name));
 
         const tx = db.transaction(storeNames, 'readwrite');

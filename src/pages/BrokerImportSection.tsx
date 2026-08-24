@@ -19,7 +19,7 @@
  */
 
 import React, { useRef, useState } from 'react';
-import { Upload, CheckCircle2, AlertTriangle, XCircle, FileText, ChevronDown, ChevronUp, ShieldAlert } from 'lucide-react';
+import { Upload, CheckCircle2, AlertTriangle, XCircle, FileText, ChevronDown, ChevronUp, ShieldAlert, Trash2 } from 'lucide-react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { BrokerImportService, BrokerImportPreview, BrokerImportPreviewEntry, BrokerImportPreviewClosure } from '../services/BrokerImportService';
 import { ImportRowIssue, StatementInput } from '../services/import/ImportTypes';
@@ -430,6 +430,10 @@ const EntryTable: React.FC<{ title: string; entries: BrokerImportPreviewEntry[] 
 
 const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosure[] }> = ({ title, closures }) => {
   const [open, setOpen] = useState(true);
+  // WP-FB-IMPORT-BROKER-01 / D-06: modal state for the closed_absent
+  // permanent deletion flow. `deletionTarget` is the holding whose delete
+  // the user has clicked; the modal renders only when it is set.
+  const [deletionTarget, setDeletionTarget] = useState<Holding | null>(null);
   return (
     <div className="mt-4">
       <button
@@ -446,7 +450,9 @@ const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosu
             The following existing holdings are absent from the new parse. They
             will be RETAINED in the ledger but their status will be transitioned
             to <code className="text-red-300">closed_absent</code>. The record is
-            not removed.
+            not removed. WP-FB-IMPORT-BROKER-01 / D-06: a <code className="text-red-300">closed_absent</code> row
+            may be PERMANENTLY DELETED via the per-row &quot;Delete permanently&quot; button. The
+            deletion is irreversible and writes an audit record.
           </p>
           <div className="max-h-48 overflow-y-auto rounded border border-[#30363D] bg-[#0D1117]">
             <table className="w-full text-xs">
@@ -455,6 +461,7 @@ const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosu
                   <th className="text-left p-1.5">Instrument</th>
                   <th className="text-right p-1.5">Qty</th>
                   <th className="text-right p-1.5">Last Current Value</th>
+                  <th className="text-right p-1.5">D-06</th>
                 </tr>
               </thead>
               <tbody>
@@ -463,13 +470,192 @@ const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosu
                     <td className="p-1.5">{c.existing.instrumentName}</td>
                     <td className="p-1.5 text-right font-mono">{c.existing.quantity}</td>
                     <td className="p-1.5 text-right font-mono">{c.existing.currentValue.toFixed(2)}</td>
+                    <td className="p-1.5 text-right">
+                      {/* D-06: only `closed_absent` rows carry the delete affordance.
+                          The `ClosureTable` only renders `closed_absent` rows
+                          (per the broker import flow), so the affordance is
+                          always shown here. The defensive `status === 'closed_absent'`
+                          guard below is the authoritative source of truth. */}
+                      <button
+                        type="button"
+                        data-testid={`delete-holding-button-${c.existing.id}`}
+                        onClick={() => setDeletionTarget(c.existing)}
+                        disabled={c.existing.status !== 'closed_absent'}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-900/40 text-red-200 border border-red-800/60 hover:bg-red-800/60 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Permanently delete this closed_absent holding (D-06)"
+                      >
+                        <Trash2 className="w-3 h-3" /> Delete permanently
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {deletionTarget && (
+            <DeleteHoldingModal
+              holding={deletionTarget}
+              onClose={() => setDeletionTarget(null)}
+              onDeleted={() => {
+                // On successful deletion, the closure table is a snapshot
+                // of the pre-confirm preview; the deleted holding remains in
+                // the snapshot until the user closes / re-opens the import
+                // (which re-runs the preview). Closing the modal here is
+                // sufficient; the data is already committed atomically.
+                setDeletionTarget(null);
+              }}
+            />
+          )}
         </div>
       )}
+    </div>
+  );
+};
+
+/**
+ * WP-FB-IMPORT-BROKER-01 / D-06 — modal that asks the user to confirm
+ * permanent deletion of a single `closed_absent` Holding.
+ *
+ * The modal renders the 5 mandatory fields from D-06-12:
+ *   1. Holding identity (instrument, ISIN, ticker)
+ *   2. Broker / account
+ *   3. Current value
+ *   4. Irreversible-action warning
+ *   5. Audit-record notice
+ *
+ * On confirm, the modal calls
+ * `useCanonicalLedger.getState().commitHoldingDeletion(id)` which composes
+ * the holding removal and the audit-record creation inside ONE atomic
+ * `MemoryRepository.write` boundary (D-06 atomicity contract).
+ *
+ * The confirm button is `disabled` while the in-flight promise has not
+ * settled (the `busy` state). On persistence failure, the data is
+ * unchanged and a "Deletion failed" message is surfaced; no auto-retry
+ * is attempted.
+ *
+ * D-06 is irreversible. There is no undo affordance.
+ */
+const DeleteHoldingModal: React.FC<{
+  holding: Holding;
+  onClose: () => void;
+  onDeleted: () => void;
+}> = ({ holding, onClose, onDeleted }) => {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Defensive re-validation: the affordance is rendered only for
+  // closed_absent rows, but the modal also re-checks before invoking
+  // commitHoldingDeletion. The store-side `planDelete` is the source
+  // of truth and will throw `HOLDING_NOT_CLOSED` if the status changed.
+  const isEligible = holding.status === 'closed_absent';
+
+  const handleConfirm = () => {
+    if (!isEligible) {
+      setError('Only closed_absent holdings may be permanently deleted via D-06.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const outcome = useCanonicalLedger.getState().commitHoldingDeletion(holding.id);
+      if (outcome.persisted) {
+        outcome.persisted
+          .then(() => {
+            setBusy(false);
+            onDeleted();
+          })
+          .catch((e: unknown) => {
+            setBusy(false);
+            setError(`Deletion failed; your data is unchanged. ${e instanceof Error ? e.message : String(e)}`);
+          });
+      } else {
+        setBusy(false);
+        setError('No persistence was attempted.');
+      }
+    } catch (e) {
+      setBusy(false);
+      // Pre-validation failure (HOLDING_NOT_FOUND / HOLDING_NOT_CLOSED /
+      // INVALID_ID) — surface a clear message; the data is unchanged.
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      data-testid="delete-holding-modal"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="w-full max-w-lg rounded-lg border border-red-800 bg-[#161B22] p-5">
+        <h3 className="text-lg font-semibold text-[#F0F6FC] flex items-center gap-2">
+          <Trash2 className="w-4 h-4 text-red-400" /> Permanently delete this holding?
+        </h3>
+        <p className="mt-2 text-sm text-[#F0F6FC]">
+          This action <strong className="text-red-300">cannot be undone</strong>.
+          The holding&apos;s history will be recorded in an audit log.
+        </p>
+
+        <div className="mt-4 space-y-2 text-sm">
+          <div className="rounded border border-[#30363D] bg-[#0D1117] p-3">
+            <div className="text-xs text-[#8B949E] uppercase tracking-wide">Holding identity</div>
+            <div className="mt-1 text-[#F0F6FC] font-mono" data-testid="delete-modal-instrument">
+              {holding.instrumentName}
+              {holding.isin ? ` (ISIN: ${holding.isin})` : ''}
+              {holding.ticker ? ` (Ticker: ${holding.ticker})` : ''}
+            </div>
+          </div>
+          <div className="rounded border border-[#30363D] bg-[#0D1117] p-3">
+            <div className="text-xs text-[#8B949E] uppercase tracking-wide">Broker / Account</div>
+            <div className="mt-1 text-[#F0F6FC] font-mono" data-testid="delete-modal-broker">
+              {holding.broker}
+              {holding.account ? ` / Account: ${holding.account}` : ''}
+            </div>
+          </div>
+          <div className="rounded border border-[#30363D] bg-[#0D1117] p-3">
+            <div className="text-xs text-[#8B949E] uppercase tracking-wide">Current value</div>
+            <div className="mt-1 text-[#F0F6FC] font-mono" data-testid="delete-modal-value">
+              {holding.currentValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+          </div>
+        </div>
+
+        {!isEligible && (
+          <div className="mt-3 rounded border border-amber-700 bg-amber-900/30 p-3 text-xs text-amber-200">
+            This holding is not closed_absent and cannot be deleted via D-06.
+          </div>
+        )}
+
+        {error && (
+          <div
+            className="mt-3 rounded border border-red-700 bg-red-900/30 p-3 text-xs text-red-200"
+            data-testid="delete-modal-error"
+          >
+            {error}
+          </div>
+        )}
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="px-4 py-1.5 rounded bg-[#21262D] text-[#F0F6FC] text-sm font-medium hover:bg-[#30363D] disabled:opacity-50"
+            data-testid="delete-modal-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirm}
+            disabled={!isEligible || busy}
+            className="px-4 py-1.5 rounded bg-red-700 text-white text-sm font-medium hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+            data-testid="delete-modal-confirm"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Delete permanently
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

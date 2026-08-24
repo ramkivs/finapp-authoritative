@@ -1,7 +1,9 @@
 import {
-  Transaction, Asset, Liability, Holding, NetWorthSnapshot,
+  Transaction, Asset, Liability, Holding, HoldingDeletionLogEntry,
+  HoldingDeletionLogRepository, NetWorthSnapshot,
   TransactionQuery, TransactionRepository, AssetRepository,
-  LiabilityRepository, HoldingRepository, SnapshotRepository, FinancialRepositoryPort,
+  LiabilityRepository, HoldingRepository,
+  SnapshotRepository, FinancialRepositoryPort,
   Account, AccountRepository, MonthlyBudget, BudgetRepository,
   InsurancePolicy, PolicyRepository, FinancialGoal, GoalRepository,
   FinancialProfile, ProfileRepository, BatchRollbackResultShape, BatchRestoreResultShape,
@@ -371,11 +373,25 @@ class PrismaHoldingRepository implements HoldingRepository {
   async remove(_id: string): Promise<void> { throw new Error('PrismaHoldingRepository not implemented'); }
 }
 
+/**
+ * WP-FB-IMPORT-BROKER-01 / D-06 — minimum Prisma port-contract stub for the
+ * `holdingDeletionLog` collection. The full Prisma implementation is out of
+ * D-06 scope; this stub provides the compile-time member so the port
+ * contract remains satisfied.
+ */
+class PrismaHoldingDeletionLogRepository implements HoldingDeletionLogRepository {
+  async findAll(): Promise<HoldingDeletionLogEntry[]> { throw new Error('PrismaHoldingDeletionLogRepository not implemented'); }
+  findAllSync(): HoldingDeletionLogEntry[] { throw new Error('PrismaHoldingDeletionLogRepository not implemented'); }
+  findByIdSync(_id: string): HoldingDeletionLogEntry | null { throw new Error('PrismaHoldingDeletionLogRepository not implemented'); }
+  async add(_entry: HoldingDeletionLogEntry): Promise<void> { throw new Error('PrismaHoldingDeletionLogRepository not implemented'); }
+}
+
 export class PrismaRepository implements FinancialRepositoryPort {
   public transactions = new PrismaTransactionRepository();
   public assets = new PrismaAssetRepository();
   public liabilities = new PrismaLiabilityRepository();
   public holdings = new PrismaHoldingRepository();
+  public holdingDeletionLog = new PrismaHoldingDeletionLogRepository();
   public snapshots = new PrismaSnapshotRepository();
   public accounts = new PrismaAccountRepository();
   public budgets = new PrismaBudgetRepository();

@@ -551,12 +551,14 @@ describe('WP-FB-DATA-07 — liability identity', () => {
       return state;
     }
 
-    it('M19 the database is opened at version 6 (5->6 adds holdings store)', async () => {
+    it('M19 the database is opened at version 7 (6->7 adds holdingDeletionLog store)', async () => {
       const s = await runUpgrade({ existing: [] });
-      // WP-FB-IMPORT-BROKER-01: DB_VERSION 5 -> 6 adds the `holdings` object
-      // store. The existing migration tests (M20+) still apply on the v5->v6
-      // upgrade path; only the requested version is now 6.
-      expect(s.requestedVersion).toBe(6);
+      // WP-FB-IMPORT-BROKER-01 / D-06: DB_VERSION 6 -> 7 adds the
+      // `holdingDeletionLog` object store (audit log for permanent
+      // closed_absent Holding deletions). The v5->v6 holdings-store
+      // migration is still authoritative for that earlier bump; only the
+      // requested version has been incremented to 7 by the D-06 work.
+      expect(s.requestedVersion).toBe(7);
     });
 
     it('M20 + M21 a legacy name-keyed store is migrated and recreated on id', async () => {
