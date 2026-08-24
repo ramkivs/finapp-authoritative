@@ -112,31 +112,27 @@ describe('A. Detection', () => {
     expect(parsed.holdings).toHaveLength(6);
   });
 
-  it('A.3 [RECONCILIATION] Groww MF XLSX — detector orders Dhan first; Dhan canHandle matches the marker but the full column sequence does not match the Dhan schema, so the parse produces 0 holdings and a BROKER_HEADER_MISSING issue', () => {
-    // The Groww MF XLSX has `Scheme Name` as its first header cell. With
-    // Dhan registered before Groww, Dhan's canHandle is called first; it
-    // finds the marker and returns matched: true (Dhan's decodeXlsx does
-    // NOT validate the full column sequence at the canHandle stage — this
-    // is a pre-existing design pattern in both Dhan and Groww adapters,
-    // documented in the WP-05 promotion report §5 as a [RECONCILIATION]).
-    // The actual parse then discovers that the Groww column sequence
-    // (`AMC`, `Category`, ...) does not match the Dhan column sequence
-    // (`MF Type`, `Units`, `NAV`, ...) and emits BROKER_HEADER_MISSING.
-    //
-    // This test documents the ACTUAL pre-existing behavior. The
-    // workaround is for the user to re-export the Groww MF file with the
-    // Dhan-compatible columns, OR to fix the adapter canHandle to
-    // validate the full column sequence (out of WP-08 scope).
+  it('A.3 Groww MF XLSX — WP-09 fix: Dhan decodeXlsx now requires the full Dhan MF column sequence, so the Groww MF XLSX (which has a different column sequence) falls through to Groww, which correctly claims it with 3 holdings and account=7395930735', () => {
+    // WP-09: the pre-existing cross-detection hole (WP-05 promotion
+    // report §5 [RECONCILIATION]) is now closed. Both Dhan and
+    // Groww decodeXlsx validate the full column sequence at the
+    // canHandle stage in the binary path, not just the first-cell
+    // marker. A Groww MF XLSX has a different column sequence
+    // (Scheme Name, AMC, Category, ...) than the Dhan MF XLSX
+    // (Scheme Name, MF Type, Units, NAV, ...). Dhan's canHandle
+    // now correctly rejects it. Groww's canHandle accepts it.
     const parsed = BrokerImportService.detectAndParse(
       asBinaryInput(loadBytes(SAMPLE_GROWW_MF), 'Groww_Mutual_Funds_6995348108_24-08-2026.xlsx'),
     );
-    // The broker is reported as Dhan (Dhan matched first).
-    expect(parsed.broker).toBe('Dhan');
-    // But the parse produces 0 holdings because the column sequence
-    // doesn't match the Dhan MF schema. A BROKER_HEADER_MISSING issue
-    // is emitted.
-    expect(parsed.holdings).toHaveLength(0);
-    expect(parsed.issues.some((i) => i.code === 'BROKER_HEADER_MISSING')).toBe(true);
+    // The broker is reported as Groww (Groww's full-column
+    // signature matches; Dhan's was rejected).
+    expect(parsed.broker).toBe('Groww');
+    // The account is extracted from the preamble (Mobile Number row).
+    expect(parsed.account).toBe('7395930735');
+    // The parse produces 3 holdings (the real sample's data).
+    expect(parsed.holdings).toHaveLength(3);
+    // No BROKER_HEADER_MISSING issue: detection succeeded.
+    expect(parsed.issues.some((i) => i.code === 'BROKER_HEADER_MISSING')).toBe(false);
   });
 
   it('A.4 Dhan Equity CSV is detected', () => {
@@ -191,10 +187,18 @@ describe('B. Parsing (already covered by section A; spot-check fields)', () => {
     }
   });
 
-  it('B.9 [RECONCILIATION] Groww MF parse — see A.3; parse produces 0 holdings and a header-mismatch issue', () => {
+  it('B.9 Groww MF parse — WP-09 fix: the parse produces 3 holdings, not 0 (see A.3); the cross-detection hole is closed', () => {
     const parsed = BrokerImportService.detectAndParse(asBinaryInput(loadBytes(SAMPLE_GROWW_MF), 'x.xlsx'));
-    expect(parsed.holdings).toHaveLength(0);
-    expect(parsed.issues.some((i) => i.code === 'BROKER_HEADER_MISSING')).toBe(true);
+    expect(parsed.holdings).toHaveLength(3);
+    // Each holding has the canonical fields populated.
+    for (const h of parsed.holdings) {
+      expect(h.broker).toBe('Groww');
+      expect(h.account).toBe('7395930735');
+      expect(h.status).toBe('active');
+      expect(h.instrumentName).not.toBe('');
+      expect(Number.isFinite(h.quantity)).toBe(true);
+      expect(Number.isFinite(h.currentValue)).toBe(true);
+    }
   });
 
   it('B.10 Dhan Equity parse — 66 holdings (564 → 66 aggregated)', () => {

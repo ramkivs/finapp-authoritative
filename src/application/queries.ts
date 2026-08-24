@@ -166,29 +166,42 @@ export class FinancialQueries {
     const assets = repository.assets.findAllSync();
     const liabilities = repository.liabilities.findAllSync();
     const snapshots = repository.snapshots.findAllSync();
+    // WP-FB-IMPORT-BROKER-01 D-04: imported Holdings contribute their
+    // currentValue to net worth via HoldingWealthBridge. Threaded
+    // through the queries layer so the live displayed wealth
+    // includes broker-imported positions.
+    const holdings = repository.holdings.findAllSync();
     return WealthIntelligenceService.getHealthSummary(
       assets,
       liabilities,
       snapshots,
       repository.accounts.findAllSync(),
-      repository.transactions.findAllSync()
+      repository.transactions.findAllSync(),
+      holdings,
     );
   }
 
   static getAssetConcentration(): AssetConcentrationAnalysis {
     const assets = repository.assets.findAllSync();
-    return WealthIntelligenceService.getAssetConcentration(assets);
+    // WP-FB-IMPORT-BROKER-01 D-04: thread holdings for concentration totals.
+    const holdings = repository.holdings.findAllSync();
+    return WealthIntelligenceService.getAssetConcentration(assets, holdings);
   }
 
   static getAllocationDiagnostics(): AllocationDiagnostics {
     const assets = repository.assets.findAllSync();
-    return WealthIntelligenceService.getAllocationDiagnostics(assets);
+    // WP-FB-IMPORT-BROKER-01 D-04: thread holdings for allocation totals.
+    const holdings = repository.holdings.findAllSync();
+    return WealthIntelligenceService.getAllocationDiagnostics(assets, holdings);
   }
 
   static getLiabilityDiagnostics(): LiabilityDiagnostics {
     const assets = repository.assets.findAllSync();
     const liabilities = repository.liabilities.findAllSync();
-    return WealthIntelligenceService.getLiabilityDiagnostics(assets, liabilities);
+    // WP-FB-IMPORT-BROKER-01 D-04: thread holdings for totalAssets in
+    // debt-to-asset diagnostics.
+    const holdings = repository.holdings.findAllSync();
+    return WealthIntelligenceService.getLiabilityDiagnostics(assets, liabilities, holdings);
   }
 
   static getTrendIntelligence(): NetWorthTrendIntelligence {

@@ -1,18 +1,26 @@
 import React from 'react';
-import { Asset } from '../../domain/types';
+import { Asset, Holding } from '../../domain/types';
 import { WealthIntelligenceService } from '../../services/WealthIntelligenceService';
 import { CurrencyValue } from '../CurrencyValue';
 import { PieChart, AlertTriangle } from 'lucide-react';
 
 interface Props {
   assets: Asset[];
+  // WP-FB-IMPORT-BROKER-01 D-04: imported Holdings contribute
+  // currentValue to the concentration denominator.
+  holdings?: Holding[];
 }
 
-export const AssetConcentrationCard: React.FC<Props> = ({ assets }) => {
-  const concentration = WealthIntelligenceService.getAssetConcentration(assets);
-  const total = assets.reduce((s, a) => s + a.amount, 0);
+export const AssetConcentrationCard: React.FC<Props> = ({ assets, holdings = [] }) => {
+  // WP-FB-IMPORT-BROKER-01 D-04: thread holdings into the
+  // service-layer call so the concentration percentages include
+  // the broker-imported currentValue.
+  const concentration = WealthIntelligenceService.getAssetConcentration(assets, holdings);
+  // Total includes both Assets AND Imported Holdings (currentValue).
+  const holdingsValue = holdings.reduce((s, h) => s + (Number(h.currentValue) || 0), 0);
+  const total = assets.reduce((s, a) => s + a.amount, 0) + holdingsValue;
 
-  if (assets.length === 0 || total === 0) {
+  if (total === 0) {
     return null;
   }
 

@@ -689,3 +689,46 @@ describe('Regression: WP-04 Zerodha still works after Groww registration', () =>
     expect(out.holdings).toHaveLength(82);
   });
 });
+
+// ---------------------------------------------------------------------------
+// WP-09: detection-tightening regression tests
+// ---------------------------------------------------------------------------
+
+describe('WP-09 detection tightening — full-column validation in binary path', () => {
+  it('WP-09.G.1 Groww MF XLSX (real sample) is detected via the full-column validator, not just the first-cell marker', () => {
+    // This is the canonical proof that the WP-09 fix works at the
+    // Groww adapter level: the real Groww MF XLSX (which has Scheme
+    // Name as its first cell AND the full Groww MF column sequence)
+    // is claimed with confidence HIGH. The canHandle message
+    // references the Mutual Funds variant.
+    const adapter = new GrowwHoldingsAdapter();
+    const det = adapter.canHandle(
+      asBinaryInput(loadBytes(SAMPLE_MF_PATH), 'Groww_Mutual_Funds_6995348108_24-08-2026.xlsx'),
+    );
+    expect(det.matched).toBe(true);
+    expect(det.confidence).toBe('HIGH');
+    expect(det.formatId).toBe('groww');
+    expect(det.reason).toMatch(/Mutual Funds/);
+  });
+
+  it('WP-09.G.2 Groww parseHoldings on the real Groww MF XLSX produces 3 holdings with account=7395930735', () => {
+    const adapter = new GrowwHoldingsAdapter();
+    const out = adapter.parseHoldings(
+      asBinaryInput(loadBytes(SAMPLE_MF_PATH), 'Groww_Mutual_Funds_6995348108_24-08-2026.xlsx'),
+    );
+    expect(out.broker).toBe('Groww');
+    expect(out.account).toBe('7395930735');
+    expect(out.holdings).toHaveLength(3);
+    // Every holding has a Category preserved as securityClassification.
+    for (const h of out.holdings) {
+      expect(h.broker).toBe('Groww');
+      expect(h.account).toBe('7395930735');
+      expect(h.securityClassification).toBeDefined();
+      expect(h.status).toBe('active');
+      // XIRR is parsed where the source supplies it.
+      expect(h.xirrPercent).toBeDefined();
+      expect(Number.isFinite(h.quantity)).toBe(true);
+      expect(Number.isFinite(h.currentValue)).toBe(true);
+    }
+  });
+});

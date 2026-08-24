@@ -871,3 +871,64 @@ describe('Decoded-rows path (BrokerFormatDetector.detectFromRows integration)', 
     expect(h.xirrPercent).toBe(5);
   });
 });
+
+// ---------------------------------------------------------------------------
+// WP-09: detection-tightening regression tests
+// ---------------------------------------------------------------------------
+
+describe('WP-09 detection tightening — Dhan full-column validation in binary path', () => {
+  it('WP-09.D.1 Real Dhan MF XLSX (Sample 5) is still detected via the full-column validator', async () => {
+    // WP-09 tightening must NOT regress the real Dhan MF sample.
+    // The Dhan MF XLSX has the full Dhan MF column sequence
+    // (Scheme Name, MF Type, Units, NAV, Investment, Current Value,
+    // P&L, P&L%, XIRR %), so matchesMfHeader returns true and the
+    // detection succeeds.
+    const adapter = new DhanHoldingsAdapter();
+    const fs = await import('node:fs');
+    const path = '/home/user/uploads/Dhan_MF_Report_23-08-2026.xlsx';
+    const bytes = new Uint8Array(fs.readFileSync(path));
+    const det = adapter.canHandle({ kind: 'binary', content: bytes, fileName: 'Dhan_MF_Report_23-08-2026.xlsx' });
+    expect(det.matched).toBe(true);
+    expect(det.confidence).toBe('HIGH');
+    expect(det.formatId).toBe('dhan');
+    expect(det.reason).toMatch(/Mutual Fund XLSX/);
+  });
+
+  it('WP-09.D.2 Real Dhan MF XLSX parse still produces 6 holdings, account=IQCX28849K', async () => {
+    const adapter = new DhanHoldingsAdapter();
+    const fs = await import('node:fs');
+    const path = '/home/user/uploads/Dhan_MF_Report_23-08-2026.xlsx';
+    const bytes = new Uint8Array(fs.readFileSync(path));
+    const out = adapter.parseHoldings({ kind: 'binary', content: bytes, fileName: 'Dhan_MF_Report_23-08-2026.xlsx' });
+    expect(out.broker).toBe('Dhan');
+    expect(out.account).toBe('IQCX28849K');
+    expect(out.holdings).toHaveLength(6);
+  });
+
+  it('WP-09.D.3 Dhan MF CSV (text path) is unaffected by the WP-09 binary-path tightening', () => {
+    // The WP-09 fix is in the binary path (decodeXlsx). The text
+    // path (parseFromText) is unchanged. The Dhan MF CSV must
+    // still be detected and produce 6 holdings.
+    const adapter = new DhanHoldingsAdapter();
+    const fs = require('node:fs') as typeof import('node:fs');
+    const path = '/home/user/uploads/Dhan_MF_Report_23-08-2026.csv';
+    const csv = fs.readFileSync(path, 'utf8');
+    const out = adapter.parseHoldings({ kind: 'text', content: csv, fileName: 'Dhan_MF_Report_23-08-2026.csv' });
+    expect(out.broker).toBe('Dhan');
+    expect(out.account).toBe('IQCX28849K');
+    expect(out.holdings).toHaveLength(6);
+  });
+
+  it('WP-09.D.4 Dhan Equity CSV is unaffected by the WP-09 fix', () => {
+    // The Dhan Equity CSV is unaffected. The detector order
+    // (Zerodha → Dhan → Groww) is unchanged, and the Equity CSV
+    // path is text-based (parseFromText), not binary.
+    const adapter = new DhanHoldingsAdapter();
+    const fs = require('node:fs') as typeof import('node:fs');
+    const path = '/home/user/uploads/dhan holdings _capstewengine.csv';
+    const csv = fs.readFileSync(path, 'utf8');
+    const out = adapter.parseHoldings({ kind: 'text', content: csv, fileName: 'dhan equity.csv' });
+    expect(out.broker).toBe('Dhan');
+    expect(out.holdings.length).toBeGreaterThan(0);
+  });
+});

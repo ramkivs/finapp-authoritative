@@ -401,14 +401,29 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
         raw: false,
       }) as string[][];
       if (aoa.length === 0) continue;
-      // Look for the header marker in the first 15 rows.
+      // WP-09 detection tightening: the first-cell marker alone is
+      // not sufficient to claim the file as a particular Groww
+      // variant. After finding the marker, validate the full
+      // column sequence against the binding Groww schema
+      // (matchesStocksHeader / matchesMfHeader). If only the
+      // marker matches but the full column sequence does not,
+      // continue scanning. This closes the cross-detection hole
+      // where a Dhan MF XLSX (which also uses 'Scheme Name' as
+      // its first cell) could be falsely claimed by Groww MF.
       for (let r = 0; r < Math.min(15, aoa.length); r++) {
         const first: string = String(aoa[r]?.[0] ?? '').trim();
+        const headerFields = (aoa[r] ?? []).map((f) => String(f ?? '').trim());
         if (first === STOCKS_HEADER_MARKER) {
-          return { rows: aoa, sheetName: sn, variant: 'stocks' };
+          if (this.matchesStocksHeader(headerFields)) {
+            return { rows: aoa, sheetName: sn, variant: 'stocks' };
+          }
+          // Marker found but full schema does not match; continue.
         }
         if (first === MF_HEADER_MARKER) {
-          return { rows: aoa, sheetName: sn, variant: 'mf' };
+          if (this.matchesMfHeader(headerFields)) {
+            return { rows: aoa, sheetName: sn, variant: 'mf' };
+          }
+          // Marker found but full schema does not match; continue.
         }
       }
     }

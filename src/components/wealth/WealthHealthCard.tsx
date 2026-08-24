@@ -1,5 +1,5 @@
 import React from 'react';
-import { Asset, Liability, NetWorthSnapshot } from '../../domain/types';
+import { Asset, Holding, Liability, NetWorthSnapshot } from '../../domain/types';
 import { WealthIntelligenceService } from '../../services/WealthIntelligenceService';
 import { CurrencyValue } from '../CurrencyValue';
 import { Activity } from 'lucide-react';
@@ -8,11 +8,18 @@ interface Props {
   assets: Asset[];
   liabilities: Liability[];
   snapshots: NetWorthSnapshot[];
+  // WP-FB-IMPORT-BROKER-01 D-04: imported Holdings contribute
+  // currentValue to wealth; threaded through to the service layer
+  // so the displayed net worth includes broker-imported positions.
+  holdings?: Holding[];
 }
 
-export const WealthHealthCard: React.FC<Props> = ({ assets, liabilities, snapshots }) => {
-  const health = WealthIntelligenceService.getHealthSummary(assets, liabilities, snapshots);
-  const liabDiag = WealthIntelligenceService.getLiabilityDiagnostics(assets, liabilities);
+export const WealthHealthCard: React.FC<Props> = ({ assets, liabilities, snapshots, holdings = [] }) => {
+  // WP-FB-IMPORT-BROKER-01 D-04: thread holdings into the service
+  // calls so the displayed Debt-to-Asset Ratio and related metrics
+  // include the imported currentValue.
+  const health = WealthIntelligenceService.getHealthSummary(assets, liabilities, snapshots, [], [], holdings);
+  const liabDiag = WealthIntelligenceService.getLiabilityDiagnostics(assets, liabilities, holdings);
   const dataQuality = WealthIntelligenceService.getDataQuality(assets, liabilities, snapshots);
 
   if (health.status === 'NOT_CONFIGURED') {

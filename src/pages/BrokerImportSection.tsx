@@ -379,18 +379,42 @@ const EntryTable: React.FC<{ title: string; entries: BrokerImportPreviewEntry[] 
               </tr>
             </thead>
             <tbody>
-              {rows.map((e, idx) => (
-                <tr key={idx} className="border-t border-[#21262D]">
-                  <td className="p-1.5 font-mono">{e.classification}</td>
-                  <td className="p-1.5">{e.candidate.instrumentName}</td>
-                  <td className="p-1.5 text-right font-mono">{e.candidate.quantity}</td>
-                  <td className="p-1.5 text-right font-mono">{e.candidate.investedValue.toFixed(2)}</td>
-                  <td className="p-1.5 text-right font-mono">{e.candidate.currentValue.toFixed(2)}</td>
-                  <td className={`p-1.5 text-right font-mono ${e.candidate.unrealisedPnL < 0 ? 'text-red-400' : ''}`}>
-                    {e.candidate.unrealisedPnL.toFixed(2)}
-                  </td>
-                </tr>
-              ))}
+              {rows.map((e, idx) => {
+                // WP-FB-IMPORT-BROKER-01 / WP-09: reactivation UI disclosure.
+                // When a previously closed_absent holding reappears in the
+                // parse, it is classified as UPDATED (because its
+                // status differs from the parsed candidate's status).
+                // The UI surfaces this as a small "REACTIVATED" badge
+                // so the user can see the lifecycle transition.
+                // The data condition is purely from existing preview
+                // fields; no service or lifecycle change.
+                const isReactivation =
+                  e.existing?.status === 'closed_absent' &&
+                  e.classification === 'UPDATED';
+                return (
+                  <tr key={idx} className="border-t border-[#21262D]">
+                    <td className="p-1.5 font-mono">
+                      {e.classification}
+                      {isReactivation && (
+                        <span
+                          data-testid="reactivation-badge"
+                          className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-cyan-950/40 text-cyan-300 border border-cyan-800/40"
+                          title="This holding was previously marked closed_absent; re-importing it reactivates it to active."
+                        >
+                          REACTIVATED
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-1.5">{e.candidate.instrumentName}</td>
+                    <td className="p-1.5 text-right font-mono">{e.candidate.quantity}</td>
+                    <td className="p-1.5 text-right font-mono">{e.candidate.investedValue.toFixed(2)}</td>
+                    <td className="p-1.5 text-right font-mono">{e.candidate.currentValue.toFixed(2)}</td>
+                    <td className={`p-1.5 text-right font-mono ${e.candidate.unrealisedPnL < 0 ? 'text-red-400' : ''}`}>
+                      {e.candidate.unrealisedPnL.toFixed(2)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {truncated && (

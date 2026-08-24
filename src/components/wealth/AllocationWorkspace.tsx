@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Asset } from '../../domain/types';
+import { Asset, Holding } from '../../domain/types';
 import { CurrencyValue } from '../CurrencyValue';
 import { queries } from '../../application';
 import { WealthIntelligenceService, REFERENCE_ALLOCATION_BENCHMARK } from '../../services/WealthIntelligenceService';
@@ -7,15 +7,27 @@ import { PieChart, Globe, Repeat, AlertTriangle, Compass } from 'lucide-react';
 
 interface Props {
   assets: Asset[];
+  // WP-FB-IMPORT-BROKER-01 D-04: imported Holdings contribute
+  // currentValue to allocation totals. Threaded through to the
+  // service layer so the displayed allocation percentages
+  // include broker-imported positions in the denominator.
+  holdings?: Holding[];
 }
 
-export const AllocationWorkspace: React.FC<Props> = ({ assets }) => {
+export const AllocationWorkspace: React.FC<Props> = ({ assets, holdings = [] }) => {
   const [allocTab, setAllocTab] = useState<'class' | 'geography' | 'sip' | 'diagnostics'>('class');
 
-  const totAssets = assets.reduce((sum, a) => sum + a.amount, 0);
+  // WP-FB-IMPORT-BROKER-01 D-04: include holdings' currentValue in the
+  // total-assets sum so allocation percentages reflect the
+  // complete portfolio (Assets + Imported Holdings).
+  const holdingsValue = holdings.reduce((sum, h) => sum + (Number(h.currentValue) || 0), 0);
+  const totAssets = assets.reduce((sum, a) => sum + a.amount, 0) + holdingsValue;
   const sipMetric = queries.getMetric('SIP_COMMITMENT_MONTHLY');
-  const diagnostics = WealthIntelligenceService.getAllocationDiagnostics(assets);
-  const concentration = WealthIntelligenceService.getAssetConcentration(assets);
+  // Thread holdings into the service-layer diagnostics and
+  // concentration calls so the percentages include the broker-
+  // imported currentValue.
+  const diagnostics = WealthIntelligenceService.getAllocationDiagnostics(assets, holdings);
+  const concentration = WealthIntelligenceService.getAssetConcentration(assets, holdings);
 
   // Authoritative class allocation from intelligence service
   const classBreakdown = concentration.byType;

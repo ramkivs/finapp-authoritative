@@ -1602,10 +1602,24 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
         raw: false,
       }) as string[][];
       if (aoa.length === 0) continue;
+      // WP-09 detection tightening: the marker 'Scheme Name' alone
+      // is not sufficient to claim the file as Dhan. The full column
+      // sequence at the marker row must match the Dhan MF schema
+      // (matchesMfHeader). If only the marker matches but the full
+      // column sequence does not, continue scanning. This closes
+      // the cross-detection hole where a Groww MF XLSX (which also
+      // has 'Scheme Name' as its first cell) was falsely claimed by
+      // Dhan.
       for (let r = 0; r < Math.min(15, aoa.length); r++) {
         const first: string = String(aoa[r]?.[0] ?? '').trim();
         if (first === 'Scheme Name') {
-          return { matched: true, sheetName: sn, rows: aoa };
+          const headerFields = (aoa[r] ?? []).map((f) => String(f ?? '').trim());
+          if (this.matchesMfHeader(headerFields)) {
+            return { matched: true, sheetName: sn, rows: aoa };
+          }
+          // Marker found but full schema does not match; do not
+          // claim this workbook. Continue scanning for a later row
+          // that might be a genuine Dhan header.
         }
       }
     }

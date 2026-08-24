@@ -29,7 +29,7 @@ import {
 
 export const WealthPage: React.FC = () => {
   const [subTab, setSubTab] = useState<'assets' | 'liabilities' | 'networth' | 'allocation'>('assets');
-  const { transactions, assets, liabilities, snapshots } = useCanonicalLedger();
+  const { transactions, assets, liabilities, snapshots, holdings } = useCanonicalLedger();
 
   // Canonical queries & derived metrics (Strictly Read-Only)
   const nwMetric = FinancialMetricService.getMetric('NET_WORTH', transactions, assets, liabilities, snapshots);
@@ -44,7 +44,12 @@ export const WealthPage: React.FC = () => {
   const buckets = histogramSeries?.points || [];
   const maxAmt = Math.max(...buckets.map(b => b.amount), 100);
 
-  const totAssets = assets.reduce((s, a) => s + a.amount, 0);
+  // WP-FB-IMPORT-BROKER-01 D-04: imported Holdings contribute their
+  // currentValue to the total-assets sum (the canonical D-04 rule
+  // is Σ Asset.amount + Σ Holding.currentValue). investedValue is
+  // intentionally NOT included.
+  const holdingsValue = holdings.reduce((s, h) => s + (Number(h.currentValue) || 0), 0);
+  const totAssets = assets.reduce((s, a) => s + a.amount, 0) + holdingsValue;
   const totLiabs = liabilities.reduce((s, l) => s + l.amount, 0);
   const currentNetWorth = totAssets - totLiabs;
 
@@ -577,9 +582,10 @@ export const WealthPage: React.FC = () => {
               snapshots={snapshots}
               totalAssets={totAssets}
               totalLiabilities={totLiabs}
+              holdings={holdings}
             />
           )}
-          {subTab === 'allocation' && <AllocationWorkspace assets={assets} />}
+          {subTab === 'allocation' && <AllocationWorkspace assets={assets} holdings={holdings} />}
         </div>
       </div>
 
@@ -597,13 +603,13 @@ export const WealthPage: React.FC = () => {
         </div>
 
         {/* Wealth Health Diagnostics Bar */}
-        <WealthHealthCard assets={assets} liabilities={liabilities} snapshots={snapshots} />
+        <WealthHealthCard assets={assets} liabilities={liabilities} snapshots={snapshots} holdings={holdings} />
 
         {/* Action Queue & Insights */}
         <WealthInsightsCard assets={assets} liabilities={liabilities} snapshots={snapshots} />
 
         {/* Portfolio Concentration Analytics (if assets exist) */}
-        {assets.length > 0 && <AssetConcentrationCard assets={assets} />}
+        {assets.length > 0 && <AssetConcentrationCard assets={assets} holdings={holdings} />}
       </div>
 
       {/* =========================================================================

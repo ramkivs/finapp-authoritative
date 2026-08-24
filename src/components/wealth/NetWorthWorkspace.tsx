@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { NetWorthSnapshot } from '../../domain/types';
+import { Holding, NetWorthSnapshot } from '../../domain/types';
 import { TakeSnapshotModal } from './TakeSnapshotModal';
 import { AddPastEntryModal } from './AddPastEntryModal';
 import { CurrencyValue } from '../CurrencyValue';
@@ -10,6 +10,12 @@ interface Props {
   snapshots: NetWorthSnapshot[];
   totalAssets: number;
   totalLiabilities: number;
+  // WP-FB-IMPORT-BROKER-01 D-04: imported Holdings are already
+  // included in the `totalAssets` prop (the page-level calc adds
+  // holdings' currentValue to assets). The component itself does
+  // not need to thread holdings into trend/CAGR (which are
+  // snapshot-based metrics, not net-worth-sum metrics).
+  holdings?: Holding[];
 }
 
 export const NetWorthWorkspace: React.FC<Props> = ({ snapshots, totalAssets, totalLiabilities }) => {
