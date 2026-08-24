@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { ImportBatchRollbackService, ImportBatchSummary } from '../services/ImportBatchRollbackService';
 import { ImportPipelineService, CSVImportResult } from '../services/ImportPipelineService';
+import { BrokerImportSection } from './BrokerImportSection';
 import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 
 /** Returns true if the filename has a native binary spreadsheet extension */
@@ -258,6 +259,10 @@ export const ImportPage: React.FC = () => {
 
   return (
     <div className="space-y-8">
+      {/* WP-FB-IMPORT-BROKER-01 — WP-08 broker-import section.
+          Sits above the bank-import flow. Self-contained: file upload →
+          detect → parse → preview → confirm / cancel. */}
+      <BrokerImportSection />
       <div>
         <h1 className="text-3xl font-bold text-gray-900 dark:text-white tracking-tight">
           5-Stage Bulk Import Engine
