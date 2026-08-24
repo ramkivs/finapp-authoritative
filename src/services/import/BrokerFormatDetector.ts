@@ -25,13 +25,14 @@ import {
 } from './BrokerAdapter';
 import { ParsedCsvRow, StatementInput } from './ImportTypes';
 import { ZerodhaHoldingsAdapter } from './adapters/ZerodhaHoldingsAdapter';
+import { GrowwHoldingsAdapter } from './adapters/GrowwHoldingsAdapter';
 
 export class BrokerFormatDetector {
   private static adapters: BrokerAdapter[] = [
     new ZerodhaHoldingsAdapter(),
+    new GrowwHoldingsAdapter(),
     // Future registrations:
     //   new DhanHoldingsAdapter(),         // WP-05
-    //   new GrowwHoldingsAdapter(),        // WP-06
   ];
 
   /**
