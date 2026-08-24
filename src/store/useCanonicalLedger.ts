@@ -4,6 +4,7 @@ import {
   Transaction,
   Asset,
   Liability,
+  Holding,
   NetWorthSnapshot,
   Account,
   ControlledAccountType,
@@ -65,6 +66,7 @@ interface LedgerState {
   transactions: Transaction[];
   assets: Asset[];
   liabilities: Liability[];
+  holdings: Holding[];
   snapshots: NetWorthSnapshot[];
   accounts: Account[];
   budgets: MonthlyBudget[];
@@ -89,6 +91,7 @@ interface LedgerState {
     transactions: Transaction[];
     assets: Asset[];
     liabilities: Liability[];
+    holdings?: Holding[];
     snapshots: NetWorthSnapshot[];
     accounts?: Account[];
     budgets?: MonthlyBudget[];
@@ -305,6 +308,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   transactions: [],
   assets: [],
   liabilities: [],
+  holdings: [],
   snapshots: [],
   accounts: [],
   budgets: [],
@@ -340,6 +344,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       transactions: state.transactions,
       assets: state.assets,
       liabilities: state.liabilities,
+      holdings: state.holdings || [],
       snapshots: state.snapshots,
       accounts: state.accounts || [],
       budgets: state.budgets || [],
@@ -687,8 +692,9 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   },
 
   getNetWorth: () => {
-    const { assets, liabilities } = get();
-    const totAssets = assets.reduce((sum, a) => sum + a.amount, 0);
+    const { assets, liabilities, holdings } = get();
+    const totAssets = assets.reduce((sum, a) => sum + a.amount, 0)
+      + holdings.reduce((sum, h) => sum + (h.currentValue || 0), 0);
     const totLiabs = liabilities.reduce((sum, l) => sum + l.amount, 0);
     return totAssets - totLiabs;
   }

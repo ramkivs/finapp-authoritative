@@ -57,6 +57,7 @@ const drain = () => new Promise(r => setTimeout(r, 40));
 
 function reset() {
   repo.transactionsData = []; repo.assetsData = []; repo.liabilitiesData = [];
+  repo.holdingsData = [];
   repo.snapshotsData = []; repo.accountsData = []; repo.budgetsData = [];
   repo.policiesData = []; repo.goalsData = []; repo.profileData = null;
   repo.syncStore();

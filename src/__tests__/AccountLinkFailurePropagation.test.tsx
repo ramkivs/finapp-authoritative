@@ -54,6 +54,7 @@ const settled = (p: any) => Promise.resolve(p).then(() => 'ok' as const).catch((
 
 function reset() {
   repo.transactionsData = []; repo.assetsData = []; repo.liabilitiesData = [];
+  repo.holdingsData = [];
   repo.snapshotsData = []; repo.accountsData = []; repo.budgetsData = [];
   repo.policiesData = []; repo.goalsData = []; repo.profileData = null;
   repo.syncStore();

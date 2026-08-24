@@ -38,6 +38,7 @@ const repo = repository as unknown as {
   accountsData: Account[];
   assetsData: any[];
   liabilitiesData: any[];
+  holdingsData: any[];
   syncStore: () => void;
 };
 
@@ -46,6 +47,7 @@ function reset() {
   repo.accountsData = [];
   repo.assetsData = [];
   repo.liabilitiesData = [];
+  repo.holdingsData = [];
   repo.syncStore();
   useCanonicalLedger.setState({
     transactions: [], accounts: [], assets: [], liabilities: [],

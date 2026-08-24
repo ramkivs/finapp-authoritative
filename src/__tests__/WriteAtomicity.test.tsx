@@ -60,20 +60,22 @@ const settle = (p: any) =>
 
 function reset() {
   repo.transactionsData = []; repo.assetsData = []; repo.liabilitiesData = [];
+  repo.holdingsData = [];
   repo.snapshotsData = []; repo.accountsData = []; repo.budgetsData = [];
   repo.policiesData = []; repo.goalsData = []; repo.profileData = null;
   repo.syncStore();
   useCanonicalLedger.setState({
-    transactions: [], assets: [], liabilities: [], snapshots: [], accounts: [],
+    transactions: [], assets: [], liabilities: [], holdings: [], snapshots: [], accounts: [],
     budgets: [], policies: [], goals: [], profile: null
   } as any);
 }
 async function persistAll() {
   await IndexedDBStorageService.saveAll({
     transactions: repo.transactionsData, assets: repo.assetsData, liabilities: repo.liabilitiesData,
+    holdings: repo.holdingsData,
     snapshots: repo.snapshotsData, accounts: repo.accountsData, budgets: repo.budgetsData,
     policies: repo.policiesData, goals: repo.goalsData, profile: repo.profileData
-  });
+  } as any);
 }
 const storedCount = async (k: string) => {
   const st = (await IndexedDBStorageService.loadAll()) as any;

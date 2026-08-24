@@ -60,7 +60,8 @@ const totalDebt = () => libs().reduce((s, l) => s + l.amount, 0);
 const drain = () => new Promise(r => setTimeout(r, 30));
 
 function reset() {
-  repo.liabilitiesData = []; repo.assetsData = []; repo.snapshotsData = []; repo.syncStore();
+  repo.liabilitiesData = [];
+  repo.holdingsData = []; repo.assetsData = []; repo.snapshotsData = []; repo.syncStore();
   useCanonicalLedger.setState({ liabilities: [], assets: [], snapshots: [] } as any);
 }
 async function attempt(fn: () => Promise<any>) {
@@ -550,9 +551,12 @@ describe('WP-FB-DATA-07 — liability identity', () => {
       return state;
     }
 
-    it('M19 the database is opened at version 5', async () => {
+    it('M19 the database is opened at version 6 (5->6 adds holdings store)', async () => {
       const s = await runUpgrade({ existing: [] });
-      expect(s.requestedVersion).toBe(5);
+      // WP-FB-IMPORT-BROKER-01: DB_VERSION 5 -> 6 adds the `holdings` object
+      // store. The existing migration tests (M20+) still apply on the v5->v6
+      // upgrade path; only the requested version is now 6.
+      expect(s.requestedVersion).toBe(6);
     });
 
     it('M20 + M21 a legacy name-keyed store is migrated and recreated on id', async () => {

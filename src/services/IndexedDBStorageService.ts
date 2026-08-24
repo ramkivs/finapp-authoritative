@@ -2,6 +2,7 @@ import {
   Transaction,
   Asset,
   Liability,
+  Holding,
   NetWorthSnapshot,
   Account,
   MonthlyBudget,
@@ -19,12 +20,18 @@ const DB_NAME = 'finboom_db';
 // WP-FB-DATA-07: 4 -> 5 migrates `liabilities` from a 'name' keyPath to 'id',
 // the last store still keyed on a mutable display string.
 // See migrateLiabilitiesToIdKeyPath() below.
-const DB_VERSION = 5;
+// WP-FB-IMPORT-BROKER-01: 5 -> 6 adds the `holdings` object store. The
+// existing 9 stores are untouched. No data transformation: the migration
+// is purely a schema extension. The single-line `createObjectStore` is
+// verify-or-abort by virtue of running inside the IndexedDB upgrade
+// transaction.
+const DB_VERSION = 6;
 
 export interface StoredLedgerState {
   transactions: Transaction[];
   assets: Asset[];
   liabilities: Liability[];
+  holdings: Holding[];
   snapshots: NetWorthSnapshot[];
   accounts: Account[];
   budgets: MonthlyBudget[];
@@ -52,6 +59,7 @@ export interface LedgerWriteState {
   transactions: Transaction[];
   assets: Asset[];
   liabilities: Liability[];
+  holdings?: Holding[];
   snapshots: NetWorthSnapshot[];
   accounts?: Account[];
   budgets?: MonthlyBudget[];
@@ -65,6 +73,7 @@ export class IndexedDBStorageService {
     transactions: [],
     assets: [],
     liabilities: [],
+    holdings: [],
     snapshots: [],
     accounts: [],
     budgets: [],
@@ -115,6 +124,7 @@ export class IndexedDBStorageService {
     transactions: 'id',
     assets: 'id',
     liabilities: 'id',
+    holdings: 'id',
     snapshots: 'id',
     accounts: 'id',
     budgets: 'id',
@@ -247,6 +257,7 @@ export class IndexedDBStorageService {
         if (!db.objectStoreNames.contains('transactions')) db.createObjectStore('transactions', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('liabilities')) db.createObjectStore('liabilities', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('holdings')) db.createObjectStore('holdings', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('snapshots')) db.createObjectStore('snapshots', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('accounts')) db.createObjectStore('accounts', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('budgets')) db.createObjectStore('budgets', { keyPath: 'id' });
@@ -414,6 +425,7 @@ export class IndexedDBStorageService {
           transactions: [...this.nodeFallbackStore.transactions],
           assets: [...this.nodeFallbackStore.assets],
           liabilities: [...this.nodeFallbackStore.liabilities],
+          holdings: [...this.nodeFallbackStore.holdings],
           snapshots: [...this.nodeFallbackStore.snapshots],
           accounts: [...this.nodeFallbackStore.accounts],
           budgets: [...this.nodeFallbackStore.budgets],
@@ -426,7 +438,7 @@ export class IndexedDBStorageService {
 
       try {
         const db = await this.getDB();
-        const storeNames = ['transactions', 'assets', 'liabilities', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
+        const storeNames = ['transactions', 'assets', 'liabilities', 'holdings', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
           .filter(name => db.objectStoreNames.contains(name));
 
         const tx = db.transaction(storeNames, 'readonly');
@@ -449,6 +461,7 @@ export class IndexedDBStorageService {
           transactions,
           assets,
           liabilities,
+          holdings,
           snapshots,
           accounts,
           budgets,
@@ -460,6 +473,7 @@ export class IndexedDBStorageService {
           getStore('transactions'),
           getStore('assets'),
           getStore('liabilities'),
+          getStore('holdings'),
           getStore('snapshots'),
           getStore('accounts'),
           getStore('budgets'),
@@ -479,6 +493,7 @@ export class IndexedDBStorageService {
           transactions: transactions as Transaction[],
           assets: assets as Asset[],
           liabilities: liabilities as Liability[],
+          holdings: (holdings as Holding[]) ?? [],
           snapshots: snapshots as NetWorthSnapshot[],
           accounts: accounts as Account[],
           budgets: budgets as MonthlyBudget[],
@@ -593,6 +608,7 @@ export class IndexedDBStorageService {
           transactions: [...state.transactions],
           assets: [...state.assets],
           liabilities: [...state.liabilities],
+          holdings: [...(state.holdings ?? [])],
           snapshots: [...state.snapshots],
           accounts: [...accounts],
           budgets: [...budgets],
@@ -607,7 +623,7 @@ export class IndexedDBStorageService {
       let db: IDBDatabase | undefined;
       try {
         db = await this.getDB();
-        const storeNames = ['transactions', 'assets', 'liabilities', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
+        const storeNames = ['transactions', 'assets', 'liabilities', 'holdings', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
           .filter(name => db!.objectStoreNames.contains(name));
 
         const activeTx = db.transaction(storeNames, 'readwrite');
@@ -634,6 +650,7 @@ export class IndexedDBStorageService {
             ['transactions', state.transactions],
             ['assets', state.assets],
             ['liabilities', state.liabilities],
+            ['holdings', state.holdings ?? []],
             ['snapshots', state.snapshots],
             ['accounts', accounts],
             ['budgets', budgets],
@@ -727,6 +744,7 @@ export class IndexedDBStorageService {
           transactions: [],
           assets: [],
           liabilities: [],
+          holdings: [],
           snapshots: [],
           accounts: [],
           budgets: [],
@@ -741,7 +759,7 @@ export class IndexedDBStorageService {
       let db: IDBDatabase | undefined;
       try {
         db = await this.getDB();
-        const storeNames = ['transactions', 'assets', 'liabilities', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
+        const storeNames = ['transactions', 'assets', 'liabilities', 'holdings', 'snapshots', 'accounts', 'budgets', 'policies', 'goals', 'profile', 'meta']
           .filter(name => db!.objectStoreNames.contains(name));
 
         const tx = db.transaction(storeNames, 'readwrite');

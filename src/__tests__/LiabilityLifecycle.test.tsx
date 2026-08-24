@@ -59,7 +59,8 @@ const totalDebt = () => libs().reduce((s, l) => s + l.amount, 0);
 const drain = () => new Promise(r => setTimeout(r, 30));
 
 function reset() {
-  repo.liabilitiesData = []; repo.assetsData = []; repo.snapshotsData = []; repo.syncStore();
+  repo.liabilitiesData = [];
+  repo.holdingsData = []; repo.assetsData = []; repo.snapshotsData = []; repo.syncStore();
   useCanonicalLedger.setState({ liabilities: [], assets: [], snapshots: [] } as any);
 }
 

@@ -29,6 +29,7 @@ function reset() {
   repo.accountsData = [];
   repo.assetsData = [];
   repo.liabilitiesData = [];
+  repo.holdingsData = [];
   repo.syncStore();
 }
 

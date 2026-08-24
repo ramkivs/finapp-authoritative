@@ -1,7 +1,7 @@
 import {
-  Transaction, Asset, Liability, NetWorthSnapshot,
+  Transaction, Asset, Liability, Holding, NetWorthSnapshot,
   TransactionQuery, TransactionRepository, AssetRepository,
-  LiabilityRepository, SnapshotRepository, FinancialRepositoryPort,
+  LiabilityRepository, HoldingRepository, SnapshotRepository, FinancialRepositoryPort,
   Account, AccountRepository, MonthlyBudget, BudgetRepository,
   InsurancePolicy, PolicyRepository, FinancialGoal, GoalRepository,
   FinancialProfile, ProfileRepository, BatchRollbackResultShape, BatchRestoreResultShape,
@@ -352,10 +352,30 @@ export class PrismaProfileRepository implements ProfileRepository {
   async save(_profile: FinancialProfile): Promise<void> {}
 }
 
+/**
+ * WP-FB-IMPORT-BROKER-01 — minimum Prisma port-contract stub.
+ *
+ * The Prisma binding is currently dormant (repositories/index.ts:2). The
+ * FinancialRepositoryPort gained a `holdings` field; this stub provides the
+ * compile-time member so the port contract remains satisfied. The full
+ * Prisma implementation is out of WP-07 scope.
+ */
+class PrismaHoldingRepository implements HoldingRepository {
+  async findAll(): Promise<Holding[]> { throw new Error('PrismaHoldingRepository not implemented'); }
+  findAllSync(): Holding[] { throw new Error('PrismaHoldingRepository not implemented'); }
+  async add(_holding: Holding): Promise<void> { throw new Error('PrismaHoldingRepository not implemented'); }
+  async update(_holding: Holding): Promise<void> { throw new Error('PrismaHoldingRepository not implemented'); }
+  findByIdSync(_id: string): Holding | null { throw new Error('PrismaHoldingRepository not implemented'); }
+  findByIdentitySync(_h: Holding): Holding | null { throw new Error('PrismaHoldingRepository not implemented'); }
+  async saveMany(_holdings: Holding[]): Promise<void> { throw new Error('PrismaHoldingRepository not implemented'); }
+  async remove(_id: string): Promise<void> { throw new Error('PrismaHoldingRepository not implemented'); }
+}
+
 export class PrismaRepository implements FinancialRepositoryPort {
   public transactions = new PrismaTransactionRepository();
   public assets = new PrismaAssetRepository();
   public liabilities = new PrismaLiabilityRepository();
+  public holdings = new PrismaHoldingRepository();
   public snapshots = new PrismaSnapshotRepository();
   public accounts = new PrismaAccountRepository();
   public budgets = new PrismaBudgetRepository();

@@ -66,6 +66,7 @@ const settle = (p: any) => Promise.resolve(p).then(() => 'ok' as const).catch(()
 
 function reset() {
   repo.transactionsData = []; repo.assetsData = []; repo.liabilitiesData = [];
+  repo.holdingsData = [];
   repo.snapshotsData = []; repo.accountsData = []; repo.syncStore();
   useCanonicalLedger.setState({
     transactions: [], assets: [], liabilities: [], snapshots: [], accounts: []

@@ -6,6 +6,8 @@ import {
   AssetRepository,
   Liability,
   LiabilityRepository,
+  Holding,
+  HoldingRepository,
   NetWorthSnapshot,
   SnapshotRepository,
   Account,
@@ -30,6 +32,7 @@ import { TransactionSignService } from '../services/TransactionSignService';
 import { AssetIdentityService } from '../services/AssetIdentityService';
 import { AssetLifecycleService } from '../services/AssetLifecycleService';
 import { LiabilityLifecycleService } from '../services/LiabilityLifecycleService';
+import { MemoryHoldingRepository } from './MemoryHoldingRepository';
 import { AccountAssetLinkService } from '../services/AccountAssetLinkService';
 import { TransferIntegrityService, TransferValidation } from '../services/TransferIntegrityService';
 import { TransactionIdentityService, DuplicateIdGroup } from '../services/TransactionIdentityService';
@@ -709,6 +712,7 @@ interface LedgerSnapshot {
   transactions: Transaction[];
   assets: Asset[];
   liabilities: Liability[];
+  holdings: Holding[];
   snapshots: NetWorthSnapshot[];
   accounts: Account[];
   budgets: MonthlyBudget[];
@@ -736,6 +740,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
   public partiallyExcludedTransfersAtLoad: TransferValidation[] = [];
   public assetsData: Asset[] = [];
   public liabilitiesData: Liability[] = [];
+  public holdingsData: Holding[] = [];
   public snapshotsData: NetWorthSnapshot[] = [];
   public accountsData: Account[] = [];
   public budgetsData: MonthlyBudget[] = [];
@@ -746,6 +751,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
   public transactions: TransactionRepository = new MemoryTransactionRepository(this);
   public assets: AssetRepository = new MemoryAssetRepository(this);
   public liabilities: LiabilityRepository = new MemoryLiabilityRepository(this);
+  public holdings: HoldingRepository = new MemoryHoldingRepository(this);
   public snapshots: SnapshotRepository = new MemorySnapshotRepository(this);
   public accounts: AccountRepository = new MemoryAccountRepository(this);
   public budgets: BudgetRepository = new MemoryBudgetRepository(this);
@@ -803,6 +809,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
       transactions: this.transactionsData,
       assets: this.assetsData,
       liabilities: this.liabilitiesData,
+      holdings: this.holdingsData,
       snapshots: this.snapshotsData,
       accounts: this.accountsData,
       budgets: this.budgetsData,
@@ -821,6 +828,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
     this.transactionsData = snapshot.transactions as Transaction[];
     this.assetsData = snapshot.assets as Asset[];
     this.liabilitiesData = snapshot.liabilities as Liability[];
+    this.holdingsData = (snapshot.holdings as Holding[]) ?? [];
     this.snapshotsData = snapshot.snapshots as NetWorthSnapshot[];
     this.accountsData = snapshot.accounts as Account[];
     this.budgetsData = snapshot.budgets as MonthlyBudget[];
@@ -884,6 +892,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
     this.transactionsData = revertOne(before.transactions, after.transactions, this.transactionsData);
     this.assetsData = revertOne(before.assets, after.assets, this.assetsData);
     this.liabilitiesData = revertOne(before.liabilities, after.liabilities, this.liabilitiesData);
+    this.holdingsData = revertOne(before.holdings ?? [], after.holdings ?? [], this.holdingsData);
     this.snapshotsData = revertOne(before.snapshots, after.snapshots, this.snapshotsData);
     this.accountsData = revertOne(before.accounts, after.accounts, this.accountsData);
     this.budgetsData = revertOne(before.budgets, after.budgets, this.budgetsData);
@@ -936,6 +945,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
       transactions: [...this.transactionsData],
       assets: [...this.assetsData],
       liabilities: [...this.liabilitiesData],
+      holdings: [...this.holdingsData],
       snapshots: [...this.snapshotsData],
       accounts: [...this.accountsData],
       budgets: [...this.budgetsData],
@@ -966,6 +976,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
     this.transactionsData = data.transactions;
     this.assetsData = data.assets;
     this.liabilitiesData = data.liabilities;
+    this.holdingsData = data.holdings ?? [];
     this.snapshotsData = data.snapshots;
     this.accountsData = data.accounts;
     this.budgetsData = data.budgets;
@@ -1119,6 +1130,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
       this.transactionsData = [...demoTransactions];
       this.assetsData = identifiedAssets;
       this.liabilitiesData = [...demoLiabilities];
+      this.holdingsData = [];
       this.snapshotsData = [...demoSnapshots];
       this.accountsData = [];
       this.budgetsData = [];
@@ -1142,6 +1154,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
       this.transactionsData = [];
       this.assetsData = [];
       this.liabilitiesData = [];
+      this.holdingsData = [];
       this.snapshotsData = [];
       this.accountsData = [];
       this.budgetsData = [];

@@ -4,6 +4,7 @@ import {
   Asset,
   AssetType,
   Liability,
+  Holding,
   NetWorthSnapshot,
   WealthHealthSummary,
   AssetConcentrationAnalysis,
@@ -16,6 +17,7 @@ import {
 } from '../domain/types';
 import { getEffectiveAsOfDate } from './DateRangeService';
 import { LiquidReservesService } from './LiquidReservesService';
+import { HoldingWealthBridge } from './HoldingWealthBridge';
 
 /**
  * Single authoritative definition of the Reference Allocation Benchmark.
@@ -175,9 +177,12 @@ export class WealthIntelligenceService {
     // the canonical transactions. Optional so existing callers keep compiling;
     // omitting them yields asset-only liquidity, matching prior behaviour.
     accounts: Account[] = [],
-    transactions: Transaction[] = []
+    transactions: Transaction[] = [],
+    // WP-FB-IMPORT-BROKER-01 D-04: imported Holdings contribute currentValue to
+    // the net-worth sum. Optional so existing callers keep compiling.
+    holdings: Holding[] = []
   ): WealthHealthSummary {
-    const totalAssets = assets.reduce((s, a) => s + a.amount, 0);
+    const totalAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
     const totalLiabilities = liabilities.reduce((s, l) => s + l.amount, 0);
     const netWorth = totalAssets - totalLiabilities;
 
@@ -224,8 +229,8 @@ export class WealthIntelligenceService {
    * Missing geography and currency remain 'Not Specified' without inference.
    * Missing type remains 'Unclassified' without converting to 'Other'.
    */
-  public static getAssetConcentration(assets: Asset[]): AssetConcentrationAnalysis {
-    const total = assets.reduce((s, a) => s + a.amount, 0);
+  public static getAssetConcentration(assets: Asset[], holdings: Holding[] = []): AssetConcentrationAnalysis {
+    const total = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
     if (assets.length === 0 || total === 0) {
       return {
         byType: [],
@@ -307,8 +312,8 @@ export class WealthIntelligenceService {
   }
 
   /** Compute Allocation Diagnostics & Target Drift (Workstream C3) */
-  public static getAllocationDiagnostics(assets: Asset[]): AllocationDiagnostics {
-    const total = assets.reduce((s, a) => s + a.amount, 0);
+  public static getAllocationDiagnostics(assets: Asset[], holdings: Holding[] = []): AllocationDiagnostics {
+    const total = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
     if (assets.length === 0 || total === 0) {
       return {
         underrepresentedCategories: [],
@@ -362,8 +367,8 @@ export class WealthIntelligenceService {
   }
 
   /** Compute Liquidity & Liability Health (Workstream C4) */
-  public static getLiabilityDiagnostics(assets: Asset[], liabilities: Liability[]): LiabilityDiagnostics {
-    const totalAssets = assets.reduce((s, a) => s + a.amount, 0);
+  public static getLiabilityDiagnostics(assets: Asset[], liabilities: Liability[], holdings: Holding[] = []): LiabilityDiagnostics {
+    const totalAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
     const totalDebt = liabilities.reduce((s, l) => s + l.amount, 0);
 
     if (assets.length === 0 && liabilities.length === 0) {

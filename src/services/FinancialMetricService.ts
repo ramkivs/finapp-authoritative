@@ -1,9 +1,10 @@
-import { FinancialMetric, FinancialSeries, Transaction, Asset, Liability, NetWorthSnapshot } from '../domain/types';
+import { FinancialMetric, FinancialSeries, Transaction, Asset, Liability, Holding, NetWorthSnapshot } from '../domain/types';
 import { DateRangeService, getEffectiveAsOfDate } from './DateRangeService';
 import { LedgerExclusionService } from './LedgerExclusionService';
 import { DividendService } from './DividendService';
 import { WealthIntelligenceService } from './WealthIntelligenceService';
 import { EssentialsService } from './EssentialsService';
+import { HoldingWealthBridge } from './HoldingWealthBridge';
 import { repository } from '../repositories';
 
 export class FinancialMetricService {
@@ -13,7 +14,10 @@ export class FinancialMetricService {
     assets: Asset[] = [],
     liabilities: Liability[] = [],
     snapshots: NetWorthSnapshot[] = [],
-    asOfDateStr: string = getEffectiveAsOfDate()
+    asOfDateStr: string = getEffectiveAsOfDate(),
+    // WP-FB-IMPORT-BROKER-01 D-04: imported Holdings contribute currentValue to
+    // the net-worth sum. Optional so existing callers keep compiling.
+    holdings: Holding[] = []
   ): FinancialMetric {
     // WP-FB-DATA-06c-1: every metric below derives money from rows, so all of
     // them read the exclusion-filtered set rather than the raw input.
@@ -68,7 +72,7 @@ export class FinancialMetricService {
         status: 'RECONCILED'
       };
     } else if (metricName === 'NET_WORTH') {
-      const totAssets = assets.reduce((sum, a) => sum + a.amount, 0);
+      const totAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
       const totLiabs = liabilities.reduce((sum, l) => sum + l.amount, 0);
 
       return {
@@ -76,21 +80,21 @@ export class FinancialMetricService {
         value: totAssets - totLiabs,
         currency: 'INR',
         asOf: asOfDateStr,
-        source: 'CanonicalLedger -> Asset/Liability Registry',
+        source: 'CanonicalLedger -> Asset/Liability/Holding Registry',
         filters: {},
         formula: 'Total Assets - Total Liabilities',
         status: 'RECONCILED'
       };
     } else if (metricName === 'TOTAL_ASSETS') {
-      const totAssets = assets.reduce((sum, a) => sum + a.amount, 0);
+      const totAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
       return {
         metric: 'TOTAL_ASSETS',
         value: totAssets,
         currency: 'INR',
         asOf: asOfDateStr,
-        source: 'CanonicalLedger -> Asset Registry',
+        source: 'CanonicalLedger -> Asset/Holding Registry',
         filters: {},
-        formula: 'SUM(assets.amount)',
+        formula: 'SUM(assets.amount) + SUM(holdings.currentValue)',
         status: 'RECONCILED'
       };
     } else if (metricName === 'TOTAL_LIABILITIES') {

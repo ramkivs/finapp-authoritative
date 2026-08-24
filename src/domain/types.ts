@@ -536,6 +536,138 @@ export interface BatchRollbackResultShape {
  * This is an ASSET capability only. The transaction write surface is unchanged
  * and still has no delete: D9-A stands.
  */
+/* =========================================================================
+ * WP-FB-IMPORT-BROKER-01 — D-01 / D-02 / D-04 / D-05
+ *
+ * First-class Holding entity, separate from Asset.
+ *
+ * NOT a member of Asset. Persists in its own IndexedDB object store.
+ * Identity is computed by HoldingIdentityService.identityOf(holding).
+ *
+ * All monetary values are JavaScript numbers in the project's existing
+ * convention (mirrors Asset.amount). No floating-point currency conversions
+ * are applied at this layer.
+ *
+ * All quantity values are JavaScript numbers; mutual-fund fractional units
+ * are first-class. The parser is responsible for any required precision
+ * handling.
+ *
+ * D-05: securityClassification is an UNCONSTRAINED optional string —
+ * broker-native label, no closed vocabulary. The repository normalises
+ * empty string to undefined.
+ * ========================================================================= */
+
+export type HoldingStatus = 'active' | 'closed_absent';
+
+export interface Holding {
+  /** Authoritative persisted identity. Prefix `hld-`. Survives renames. */
+  id: string;
+
+  // === IDENTITY ===
+
+  /** Broker name as supplied by the import context (UI). Required. */
+  broker: string;
+
+  /**
+   * Account identifier as observed in the source file (UCC, Mobile, Email,
+   * Unique Client Code, etc.). Optional because not all broker formats
+   * expose it. The D-02 identity rule is:
+   *   account-undefined  !=  account-explicit
+   * — they MUST remain distinct. See HoldingIdentityService.identityOf.
+   */
+  account?: string;
+
+  /**
+   * Human-readable instrument name as supplied by the source. Required for
+   * display; not the primary identifier (see `isin` / `ticker`).
+   */
+  instrumentName: string;
+
+  /**
+   * ISIN when present in the source. Currently only Groww stocks carry
+   * ISIN; other formats leave this undefined. When present, ISIN is the
+   * strongest instrument identifier.
+   */
+  isin?: string;
+
+  /**
+   * Exchange ticker (Zerodha equity only, e.g. "AIIL", "BHEL"). When
+   * present, the ticker is the stable instrument identifier for that
+   * broker.
+   */
+  ticker?: string;
+
+  // === POSITION / VALUATION ===
+
+  /** Units held. Fractional for mutual funds. Non-negative in V1. */
+  quantity: number;
+
+  /**
+   * Volume-weighted average cost per unit, in source currency.
+   * computed: investedValue / quantity when quantity > 0; 0 when
+   * quantity === 0. The repository does not re-derive it.
+   */
+  averageCost: number;
+
+  /** Total cost basis. Computed: Σ lot.invested (Dhan aggregation) or Qty × AvgCost (other). */
+  investedValue: number;
+
+  /** Last/current price per unit, in source currency. The "LTP" / "NAV" / "Closing price". */
+  currentPrice: number;
+
+  /** Qty × currentPrice. The only Holding field that contributes to Wealth. */
+  currentValue: number;
+
+  /** currentValue − investedValue. May be negative. */
+  unrealisedPnL: number;
+
+  /**
+   * unrealisedPnL / investedValue × 100, expressed as a percent in the
+   * 0-100 range (NOT 0-1). For holdings imported with XIRR (Dhan MF,
+   * Groww MF), XIRR is captured separately. For holdings imported without
+   * (Zerodha, Groww stocks, Dhan equity after aggregation), this is the
+   * only percentage metric and is computed at import time.
+   */
+  unrealisedPnLPercent?: number;
+
+  /**
+   * XIRR percent from the source, when supplied. Dhan MF and Groww MF
+   * provide per-scheme XIRR. For other formats this is undefined. Stored
+   * as percent in 0-100 range (NOT 0-1). Not used in Wealth aggregation.
+   */
+  xirrPercent?: number;
+
+  // === CLASSIFICATION (D-05) ===
+
+  /**
+   * Broker-native classification string. NOT a controlled vocabulary.
+   * Empty string is normalised to undefined at the repository boundary.
+   * Canonical analytics buckets are derived at the analytics layer from
+   * this string and/or the instrumentName; that derivation is out of scope
+   * for WP-07.
+   */
+  securityClassification?: string;
+
+  // === LIFECYCLE ===
+
+  /** Lifecycle state. See WP-07 design §3.3. */
+  status: HoldingStatus;
+
+  /**
+   * Filename of the source statement (audit provenance). The actual file
+   * is NOT persisted in the canonical model — the user keeps it. The
+   * filename + importedAt are sufficient to retrace the import.
+   */
+  sourceFile: string;
+
+  /**
+   * ISO 8601 timestamp of when this Holding was last imported / updated.
+   * For Dhan Equity aggregation, this is the max(lot.tradeDate) of the
+   * contributing lots, falling back to the file's download timestamp.
+   */
+  importedAt: string;
+}
+
 export interface AssetRepository {
   findAll(): Promise<Asset[]>;
   findAllSync(): Asset[];
@@ -566,6 +698,55 @@ export interface LiabilityRepository {
   findAllSync(): Liability[];
   add(liability: Liability): Promise<void>;
   update(liability: Liability): Promise<void>;
+  remove(id: string): Promise<void>;
+}
+
+/**
+ * WP-FB-IMPORT-BROKER-01 — Holding persistence port.
+ *
+ * Mirrors the AssetRepository / LiabilityRepository shape (findAll, add,
+ * update, remove) with identity-lookup support. Identity is computed by
+ * HoldingIdentityService.identityOf; the repository does not interpret
+ * the (broker, account?, instrument) tuple directly.
+ */
+export interface HoldingRepository {
+  findAll(): Promise<Holding[]>;
+  findAllSync(): Holding[];
+
+  /**
+   * Appends a new holding. Refuses a duplicate identity
+   * (DUPLICATE_IDENTITY) — the import pipeline must perform an explicit
+   * update for re-imports of the same identity.
+   */
+  add(holding: Holding): Promise<void>;
+
+  /**
+   * Complete-record replace addressed by `Holding.id`. Refuses an id that
+   * is not present. Refuses an identity change (IDENTITY_CHANGE_FORBIDDEN).
+   */
+  update(holding: Holding): Promise<void>;
+
+  /** Finds by authoritative id. */
+  findByIdSync(id: string): Holding | null;
+
+  /**
+   * Identity lookup, the import-time hot path. Returns the holding whose
+   * identity (broker, account?, instrument) matches `h`, or null.
+   */
+  findByIdentitySync(h: Holding): Holding | null;
+
+  /**
+   * Bulk append. Used by the import pipeline after a successful atomic
+   * write. Each holding is validated; a duplicate-identity within the
+   * batch or against existing holdings refuses the whole batch.
+   */
+  saveMany(holdings: Holding[]): Promise<void>;
+
+  /**
+   * Removes by authoritative id. DESTRUCTIVE: the UI / import pipeline
+   * must obtain explicit user confirmation before calling. WP-07 does
+   * not provide auto-delete logic.
+   */
   remove(id: string): Promise<void>;
 }
 
@@ -616,6 +797,7 @@ export interface FinancialRepositoryPort {
   transactions: TransactionRepository;
   assets: AssetRepository;
   liabilities: LiabilityRepository;
+  holdings: HoldingRepository;
   snapshots: SnapshotRepository;
   accounts: AccountRepository;
   budgets: BudgetRepository;

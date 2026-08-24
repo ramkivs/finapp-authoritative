@@ -1,5 +1,9 @@
-import { Asset } from '../domain/types';
+import { Asset, Holding } from '../domain/types';
 import { AssetIdentityService } from './AssetIdentityService';
+import {
+  HoldingAssetCollisionGuard,
+  AssetWriteRequestWithCollisionIdentity,
+} from './HoldingAssetCollisionGuard';
 
 /* =============================================================================
  * ASSET LIFECYCLE (WP-FB-DATA-07b)
@@ -62,7 +66,11 @@ export type AssetLifecycleCode =
   | 'ASSET_NOT_FOUND'
   | 'DUPLICATE_ID'
   | 'EMPTY_NAME'
-  | 'INVALID_AMOUNT';
+  | 'INVALID_AMOUNT'
+  // WP-FB-IMPORT-BROKER-01 D-04: a manual Asset collides with an imported
+  // Holding representing the same (broker, account?, instrument) economic
+  // position. The create / update is refused to prevent double counting.
+  | 'HOLDING_COLLISION';
 
 /**
  * Every field a user may change — the whole of `Asset` apart from `id`.
@@ -167,9 +175,31 @@ export class AssetLifecycleService {
    *
    * A caller may supply its own id (import/seed determinism); it must be unused.
    */
-  static planCreate(request: AssetWriteRequest, existing: Asset[]): AssetWritePlan {
+  static planCreate(
+    request: AssetWriteRequest,
+    existing: Asset[],
+    // WP-FB-IMPORT-BROKER-01 D-04: optional D-04 collision check. When supplied,
+    // a request that would create a manual Asset colliding with an imported
+    // Holding is refused. The existing Asset type, AssetWriteRequest interface,
+    // and compose() whitelist are NOT modified.
+    holdingsForCollisionCheck: readonly Holding[] = []
+  ): AssetWritePlan {
     const name = this.requireName(request?.name);
     const amount = this.requireAmount(request?.amount);
+
+    // D-04 collision check (optional, no-op if no holdings supplied).
+    if (holdingsForCollisionCheck.length > 0) {
+      const collision = HoldingAssetCollisionGuard.detect(
+        request as AssetWriteRequestWithCollisionIdentity,
+        holdingsForCollisionCheck
+      );
+      if (collision) {
+        throw new AssetLifecycleError(
+          'HOLDING_COLLISION',
+          collision.reason
+        );
+      }
+    }
 
     let id: string;
     if (AssetIdentityService.isValidId(request?.id) && String(request.id).trim() !== '') {
@@ -198,11 +228,32 @@ export class AssetLifecycleService {
    * A rename to a name another asset already uses is ALLOWED: duplicate names
    * are permitted by Q-D07b-1a = (c).
    */
-  static planUpdate(request: AssetWriteRequest, existing: Asset[]): AssetWritePlan {
+  static planUpdate(
+    request: AssetWriteRequest,
+    existing: Asset[],
+    // WP-FB-IMPORT-BROKER-01 D-04: optional D-04 collision check. When supplied,
+    // a request that would update a manual Asset into a position colliding with
+    // an imported Holding is refused.
+    holdingsForCollisionCheck: readonly Holding[] = []
+  ): AssetWritePlan {
     const id = this.requireId(request?.id);
     const index = this.requireIndex(id, existing);
     const name = this.requireName(request?.name);
     const amount = this.requireAmount(request?.amount);
+
+    // D-04 collision check (optional, no-op if no holdings supplied).
+    if (holdingsForCollisionCheck.length > 0) {
+      const collision = HoldingAssetCollisionGuard.detect(
+        request as AssetWriteRequestWithCollisionIdentity,
+        holdingsForCollisionCheck
+      );
+      if (collision) {
+        throw new AssetLifecycleError(
+          'HOLDING_COLLISION',
+          collision.reason
+        );
+      }
+    }
 
     const asset = this.compose(existing[index].id as string, request, name, amount);
     const next = [...existing];

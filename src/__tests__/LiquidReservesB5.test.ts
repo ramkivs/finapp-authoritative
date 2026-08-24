@@ -31,6 +31,7 @@ const TODAY = '2026-08-21';
 
 function reset() {
   repo.transactionsData = []; repo.accountsData = []; repo.assetsData = []; repo.liabilitiesData = [];
+  repo.holdingsData = [];
   repo.syncStore();
 }
 function account(id: string, name: string, ob: number, type = 'Bank', extra: Partial<Account> = {}): Account {
