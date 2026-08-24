@@ -12,7 +12,19 @@ export type ImportIssueCode =
   | 'MALFORMED_ROW'
   | 'MULTILINE_RECORD_ERROR'
   | 'UNSUPPORTED_FORMAT'
-  | 'BINARY_PARSE_ERROR';
+  | 'BINARY_PARSE_ERROR'
+  // WP-FB-IMPORT-BROKER-01 — broker-parse issue codes (WP-04 / WP-05 / WP-06).
+  // Authorised in the WP-04 / WP-05 / WP-06 sequencing report §11 and
+  // ratified in the WP-04 Zerodha Implementation Authority record §18.
+  | 'BROKER_UNSUPPORTED'
+  | 'BROKER_HEADER_MISSING'
+  | 'BROKER_HEADER_ONLY'
+  | 'BROKER_EMPTY'
+  | 'BROKER_ROW_MALFORMED'
+  | 'BROKER_NUMERIC_INVALID'
+  | 'BROKER_IDENTITY_MISSING'
+  | 'BROKER_DUPLICATE_INSIDE_BATCH'
+  | 'BROKER_QUANTITY_NON_POSITIVE';
 
 export interface ImportRowIssue {
   rowNumber: number;
