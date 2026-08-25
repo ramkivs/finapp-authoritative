@@ -140,28 +140,62 @@ export const BrokerImportSection: React.FC = () => {
   // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
+  //
+  // Defect remediation note (post-closeout UI fix):
+  //   The success/error commit notice must remain mounted after the
+  //   preview -> upload transition. Previously the notice JSX lived
+  //   inside `PreviewView`, so calling `setPreview(null)` immediately
+  //   after `setCommitNotice(...)` unmounted the notice before the
+  //   user could see it. The notice now lives at the parent level so
+  //   it survives the preview clear.
+
+  const noticeNode = commitNotice ? (
+    <div
+      className={`mt-4 rounded border p-3 flex items-start gap-2 ${
+        commitNotice.kind === 'success'
+          ? 'border-green-700 bg-green-900/30'
+          : 'border-red-700 bg-red-900/30'
+      }`}
+      data-testid="broker-import-commit-notice"
+      data-notice-kind={commitNotice.kind}
+    >
+      {commitNotice.kind === 'success' ? (
+        <CheckCircle2 className="w-4 h-4 text-green-400 mt-0.5 shrink-0" />
+      ) : (
+        <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+      )}
+      <div className={`text-sm ${commitNotice.kind === 'success' ? 'text-green-200' : 'text-red-200'}`}>
+        {commitNotice.text}
+      </div>
+    </div>
+  ) : null;
 
   if (preview) {
     return (
-      <PreviewView
-        preview={preview}
-        busy={busy}
-        commitNotice={commitNotice}
-        showParserIssues={showParserIssues}
-        onToggleParserIssues={() => setShowParserIssues((v) => !v)}
-        onConfirm={handleConfirm}
-        onCancel={handleCancel}
-      />
+      <>
+        <PreviewView
+          preview={preview}
+          busy={busy}
+          showParserIssues={showParserIssues}
+          onToggleParserIssues={() => setShowParserIssues((v) => !v)}
+          onConfirm={handleConfirm}
+          onCancel={handleCancel}
+        />
+        {noticeNode}
+      </>
     );
   }
 
   return (
-    <UploadView
-      fileInputRef={fileInputRef}
-      busy={busy}
-      rawError={rawError}
-      onFileChosen={handleFileChosen}
-    />
+    <>
+      <UploadView
+        fileInputRef={fileInputRef}
+        busy={busy}
+        rawError={rawError}
+        onFileChosen={handleFileChosen}
+      />
+      {noticeNode}
+    </>
   );
 };
 
@@ -219,12 +253,11 @@ const UploadView: React.FC<{
 const PreviewView: React.FC<{
   preview: BrokerImportPreview;
   busy: boolean;
-  commitNotice: CommitNotice | null;
   showParserIssues: boolean;
   onToggleParserIssues: () => void;
   onConfirm: () => void;
   onCancel: () => void;
-}> = ({ preview, busy, commitNotice, showParserIssues, onToggleParserIssues, onConfirm, onCancel }) => {
+}> = ({ preview, busy, showParserIssues, onToggleParserIssues, onConfirm, onCancel }) => {
   const canConfirm = preview.confirmationEligible && !busy;
   return (
     <section className="rounded-lg border border-[#30363D] bg-[#161B22] p-4 mt-6">
@@ -285,25 +318,6 @@ const PreviewView: React.FC<{
               ))}
             </div>
           )}
-        </div>
-      )}
-
-      {commitNotice && (
-        <div
-          className={`mt-4 rounded border p-3 flex items-start gap-2 ${
-            commitNotice.kind === 'success'
-              ? 'border-green-700 bg-green-900/30'
-              : 'border-red-700 bg-red-900/30'
-          }`}
-        >
-          {commitNotice.kind === 'success' ? (
-            <CheckCircle2 className="w-4 h-4 text-green-400 mt-0.5 shrink-0" />
-          ) : (
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-          )}
-          <div className={`text-sm ${commitNotice.kind === 'success' ? 'text-green-200' : 'text-red-200'}`}>
-            {commitNotice.text}
-          </div>
         </div>
       )}
 

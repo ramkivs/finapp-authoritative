@@ -104,7 +104,7 @@ interface HoldingsStats {
 async function getHoldingsFromPage(page: Page): Promise<HoldingsStats> {
   return page.evaluate(`
     new Promise(function(resolveMain, rejectMain) {
-      const openReq = window.indexedDB.open('finboom_db', 6);
+      const openReq = window.indexedDB.open('finboom_db');
       openReq.onerror = function() { rejectMain(openReq.error); };
       openReq.onsuccess = function() {
         const db = openReq.result;
@@ -260,7 +260,7 @@ async function runBrowserImportE2E() {
     // Wait for the persisted holdings to appear in IndexedDB.
     await page.waitForFunction(
       `new Promise(function(resolve) {
-        const req = window.indexedDB.open('finboom_db', 6);
+        const req = window.indexedDB.open('finboom_db');
         req.onsuccess = function() {
           const db = req.result;
           if (!db.objectStoreNames.contains('holdings')) {
@@ -299,18 +299,43 @@ async function runBrowserImportE2E() {
     // wealth page renders and that the imported total is in
     // the rendered DOM.
     const totalForDisplay = afterReload.totalCurrentValue;
-    // Format the number with thousands separators (en-IN).
-    const formattedTotal = totalForDisplay.toLocaleString('en-IN', { maximumFractionDigits: 0 });
-    // The number may be very large (millions). We just look for
-    // a number-formatted prefix.
-    const prefix = formattedTotal.split(',')[0] + ','; // first 3-digit group
+    // Format the number using the application's default locale
+    // (the same call pattern as `CurrencyValue` in
+    // `src/components/CurrencyValue.tsx`, which uses
+    // `value.toLocaleString(undefined, ...)`). The page
+    // renders the value with a `₹` prefix. We assemble the
+    // full expected string rather than an arbitrary prefix
+    // substring.
+    const formattedTotal = totalForDisplay.toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    });
+    const expectedWealthText = `₹${formattedTotal}`;
+    // Build a regex that tolerates an optional thousands
+    // separator (the page's default-locale formatting may
+    // include or omit a comma depending on the browser
+    // default). The regex preserves the contract that the
+    // numeric value is actually present in the rendered DOM.
+    const digitsOnly = String(Math.round(totalForDisplay));
+    const thousandsRegex = digitsOnly.replace(/\B(?=(\d{3})+(?!\d))/g, ',?');
     const wealthContainsImported = await page.evaluate(`
-      document.body.innerText.includes('${prefix}')
+      (function() {
+        const haystack = document.body.innerText;
+        const needle = ${JSON.stringify(expectedWealthText)};
+        const re = new RegExp(${JSON.stringify(thousandsRegex)});
+        return haystack.includes(needle) || re.test(haystack);
+      })()
     `);
-    // Also assert that Wealth page rendered the expected Tier 1 cards.
+    // Also assert that Wealth page rendered the expected Tier 1
+    // cards. The KPI labels live inside elements that apply
+    // `text-transform: uppercase` via Tailwind, so
+    // `document.body.innerText` returns the uppercased text
+    // (e.g. "NET WORTH"). Normalize case before comparison.
     const wealthPageRendered = await page.evaluate(`
-      document.body.innerText.includes('Net Worth') &&
-      document.body.innerText.includes('Total Assets')
+      (function() {
+        const haystack = document.body.innerText.toLowerCase();
+        return haystack.includes('net worth') && haystack.includes('total assets');
+      })()
     `);
     check(
       wealthPageRendered,
@@ -320,7 +345,7 @@ async function runBrowserImportE2E() {
     check(
       wealthContainsImported,
       'Step 11b',
-      `Imported currentValue (${prefix}...) reaches the displayed wealth output`,
+      `Imported currentValue (${expectedWealthText}) reaches the displayed wealth output`,
     );
 
     console.log('\n──────────────────────────────────────────────────────────────────────────');
