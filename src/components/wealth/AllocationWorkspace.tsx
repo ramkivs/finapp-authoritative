@@ -78,7 +78,7 @@ export const AllocationWorkspace: React.FC<Props> = ({ assets, holdings = [] }) 
         ))}
       </div>
 
-      {assets.length === 0 ? (
+      {assets.length === 0 && holdings.length === 0 ? (
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-12 text-center shadow-sm">
           <div className="text-base font-bold text-gray-900 dark:text-white">No assets recorded</div>
           <div className="text-xs text-gray-500 dark:text-gray-400 mt-2 max-w-sm mx-auto">

@@ -54,7 +54,7 @@ export const AssetConcentrationCard: React.FC<Props> = ({ assets, holdings = [] 
         <div className="bg-[#0D1117] border border-[#21262D]/60 rounded-xl p-3 flex flex-col justify-between">
           <div>
             <div className="text-[10px] font-bold text-[#8B949E] uppercase tracking-wider">
-              Largest Asset Position
+              Largest Position
             </div>
             {concentration.topAsset ? (
               <>
@@ -66,7 +66,7 @@ export const AssetConcentrationCard: React.FC<Props> = ({ assets, holdings = [] 
                 </div>
               </>
             ) : (
-              <div className="text-xs text-[#8B949E] mt-1">No assets</div>
+              <div className="text-xs text-[#8B949E] mt-1">No positions</div>
             )}
           </div>
           <div className="mt-2">
@@ -74,6 +74,9 @@ export const AssetConcentrationCard: React.FC<Props> = ({ assets, holdings = [] 
               (concentration.topAsset?.pct || 0) > 40 ? 'text-[#F59E0B]' : 'text-[#23C55E]'
             }`}>
               {concentration.topAsset?.pct}% of total portfolio
+            </span>
+            <span className="text-[9px] text-[#6E7681] block">
+              Largest single position in your portfolio
             </span>
           </div>
         </div>

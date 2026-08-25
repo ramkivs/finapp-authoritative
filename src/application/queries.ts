@@ -213,7 +213,10 @@ export class FinancialQueries {
     const assets = repository.assets.findAllSync();
     const liabilities = repository.liabilities.findAllSync();
     const snapshots = repository.snapshots.findAllSync();
-    return WealthIntelligenceService.getDataQuality(assets, liabilities, snapshots);
+    // WP-FB-IMPORT-BROKER-01 D-04-HWA-07: thread holdings for activation
+    // semantics. Completeness methodology remains unchanged.
+    const holdings = repository.holdings.findAllSync();
+    return WealthIntelligenceService.getDataQuality(assets, liabilities, snapshots, holdings);
   }
 
   static getWealthInsights(): WealthInsight[] {

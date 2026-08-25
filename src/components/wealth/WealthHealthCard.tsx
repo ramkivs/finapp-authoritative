@@ -1,5 +1,6 @@
 import React from 'react';
 import { Asset, Holding, Liability, NetWorthSnapshot } from '../../domain/types';
+import { FinancialQueries } from '../../application/queries';
 import { WealthIntelligenceService } from '../../services/WealthIntelligenceService';
 import { CurrencyValue } from '../CurrencyValue';
 import { Activity } from 'lucide-react';
@@ -20,7 +21,16 @@ export const WealthHealthCard: React.FC<Props> = ({ assets, liabilities, snapsho
   // include the imported currentValue.
   const health = WealthIntelligenceService.getHealthSummary(assets, liabilities, snapshots, [], [], holdings);
   const liabDiag = WealthIntelligenceService.getLiabilityDiagnostics(assets, liabilities, holdings);
-  const dataQuality = WealthIntelligenceService.getDataQuality(assets, liabilities, snapshots);
+  // WP-FB-IMPORT-BROKER-01 D04-HWA-07: use the queries layer so the
+  // authoritative Holdings-aware data-quality result is used. The
+  // service-layer `getDataQuality(assets, liabilities, snapshots,
+  // holdings)` correctly counts Holdings in `totalRecords`, but the
+  // queries layer is the single entry point for the UI (consistent
+  // with the other wealth cards) and already threads Holdings per
+  // the D04-HWA-07 implementation. The completeness methodology
+  // (canonical Asset/Liability type/geography/currency checks) is
+  // unchanged; this is a wiring-only fix.
+  const dataQuality = FinancialQueries.getDataQuality();
 
   if (health.status === 'NOT_CONFIGURED') {
     return (
@@ -125,11 +135,11 @@ export const WealthHealthCard: React.FC<Props> = ({ assets, liabilities, snapsho
           </div>
         </div>
 
-        {/* Top Asset Concentration */}
+        {/* Top Position Concentration */}
         <div className="bg-[#0D1117] border border-[#21262D]/60 rounded-xl p-3 flex flex-col justify-between">
           <div>
             <div className="text-[10px] font-bold text-[#8B949E] uppercase tracking-wider">
-              Top Asset Concentration
+              Top Position Concentration
             </div>
             <div className="text-xl font-black text-[#F0F6FC] mt-0.5">
               {Math.round(health.topAssetConcentration)}%
@@ -139,10 +149,10 @@ export const WealthHealthCard: React.FC<Props> = ({ assets, liabilities, snapsho
             <span className={`text-[10px] font-bold block ${
               health.topAssetConcentration > 40 ? 'text-[#F59E0B]' : 'text-[#23C55E]'
             }`}>
-              {health.topAssetConcentration > 40 ? 'Concentrated single asset' : 'Balanced distribution'}
+              {health.topAssetConcentration > 40 ? 'Concentrated single position' : 'Balanced distribution'}
             </span>
             <span className="text-[9px] text-[#6E7681] block">
-              Largest holding vs portfolio
+              Largest position as % of total wealth
             </span>
           </div>
         </div>

@@ -18,6 +18,7 @@ import {
 import { getEffectiveAsOfDate } from './DateRangeService';
 import { LiquidReservesService } from './LiquidReservesService';
 import { HoldingWealthBridge } from './HoldingWealthBridge';
+import { classifyHolding } from './HoldingAnalyticsClassifier';
 
 /**
  * Single authoritative definition of the Reference Allocation Benchmark.
@@ -186,7 +187,7 @@ export class WealthIntelligenceService {
     const totalLiabilities = liabilities.reduce((s, l) => s + l.amount, 0);
     const netWorth = totalAssets - totalLiabilities;
 
-    if (assets.length === 0 && liabilities.length === 0) {
+    if (assets.length === 0 && liabilities.length === 0 && holdings.length === 0) {
       return {
         netWorth: 0,
         totalAssets: 0,
@@ -209,8 +210,16 @@ export class WealthIntelligenceService {
 
     const liquidRatio = totalAssets > 0 ? (liquidReserve / totalAssets) * 100 : 0;
 
-    const maxAssetAmt = assets.length > 0 ? Math.max(...assets.map(a => a.amount)) : 0;
-    const topAssetConcentration = totalAssets > 0 ? (maxAssetAmt / totalAssets) * 100 : 0;
+    // WP-FB-IMPORT-BROKER-01 D04-HWA-CONC-01 (concentration methodology):
+    // topAssetConcentration is the ratio of the largest individual position
+    // (canonical Asset or imported Holding, ranked by monetary value) to
+    // the D-04 total wealth. The same `computeLargestPosition` helper
+    // used by `getAssetConcentration` is used here, so the two metrics
+    // share methodology and agree on the winner.
+    const topPosition = WealthIntelligenceService.computeLargestPosition(assets, holdings, totalAssets);
+    const topAssetConcentration = topPosition
+      ? (topPosition.amount / totalAssets) * 100
+      : 0;
 
     return {
       netWorth,
@@ -225,13 +234,153 @@ export class WealthIntelligenceService {
   }
 
   /**
+   * Compute the largest individual position across the unified
+   * population of canonical Assets and individual imported Holdings.
+   *
+   * WP-FB-IMPORT-BROKER-01 — D04-HWA-CONC-01 (concentration methodology):
+   * the authoritative concentration population is the **union** of
+   * (canonical Assets, individual imported Holdings). The two identity
+   * stores remain separate — only their monetary values are compared for
+   * ranking. D-04 §3's identity-spanning block (a manual Asset for the
+   * same identity as a Holding is blocked at creation) ensures no
+   * double counting is possible.
+   *
+   * Algorithm:
+   *   1. Iterate canonical Assets in input order. The maximum by
+   *      `Asset.amount` is recorded.
+   *   2. Iterate Holdings in input order (i.e., the order returned by
+   *      `repository.holdings.findAllSync()`). The maximum by
+   *      `Holding.currentValue` is recorded.
+   *   3. Compare the two maxima. The larger one wins.
+   *   4. Tie-break rule (D04-HWA-CONC-01 §5): canonical Asset wins
+   *      over Holding on ties; Holdings preserve their input order
+   *      for Holding-vs-Holding ties.
+   *
+   * Returns `undefined` when the population is empty. The caller is
+   * responsible for passing the D-04 total wealth (`aggregateAssetsAndHoldings`)
+   * as the denominator. The returned `pct` is rounded to the nearest
+   * integer percentage, matching the existing display format.
+   *
+   * This helper is the single authoritative notion of "largest position"
+   * shared by `getAssetConcentration().topAsset` and
+   * `getHealthSummary().topAssetConcentration` (D04-HWA-CONC-01 §6).
+   */
+  private static computeLargestPosition(
+    assets: Asset[],
+    holdings: Holding[],
+    total: number,
+  ): { name: string; amount: number; pct: number; kind: 'canonicalAsset' | 'holding' } | undefined {
+    if (total <= 0) {
+      return undefined;
+    }
+
+    // Track the maximum by value, with deterministic tie-breaking.
+    // Iteration order: canonical Assets first, then Holdings.
+    // For the canonical-Asset side: input order is preserved (the
+    // function does not sort `assets`); the first Asset with a
+    // strictly larger amount wins. Among Assets tied at the maximum,
+    // the first in input order wins.
+    // For the Holding side: same rule on the `holdings` array.
+    // When the two sides are tied at the maximum, the canonical
+    // Asset wins.
+    let best:
+      | { name: string; amount: number; pct: number; kind: 'canonicalAsset' | 'holding' }
+      | undefined;
+
+    for (const a of assets) {
+      const amt = Number(a.amount) || 0;
+      if (amt <= 0) continue;
+      if (best === undefined || amt > best.amount) {
+        best = {
+          name: a.name,
+          amount: amt,
+          pct: Math.round((amt / total) * 100),
+          kind: 'canonicalAsset',
+        };
+      }
+      // amt === best.amount: tie on canonical-Asset side; first in
+      // input order wins (do nothing).
+      // amt < best.amount: not a candidate.
+    }
+
+    for (const h of holdings) {
+      const cv = Number(h.currentValue) || 0;
+      if (cv <= 0) continue;
+      if (best === undefined) {
+        // No canonical Asset has been seen yet (or all had amt <= 0).
+        // This Holding is the best so far.
+        best = {
+          name: WealthIntelligenceService.formatHoldingDisplayName(h),
+          amount: cv,
+          pct: Math.round((cv / total) * 100),
+          kind: 'holding',
+        };
+        continue;
+      }
+      if (cv > best.amount) {
+        // Strictly larger: this Holding wins over any prior winner
+        // (including a canonical Asset that was previously the best).
+        best = {
+          name: WealthIntelligenceService.formatHoldingDisplayName(h),
+          amount: cv,
+          pct: Math.round((cv / total) * 100),
+          kind: 'holding',
+        };
+      }
+      // cv === best.amount: tie.
+      //   - If best.kind === 'canonicalAsset': canonical Asset wins
+      //     (D04-HWA-CONC-01 §5). Do nothing.
+      //   - If best.kind === 'holding': Holding-vs-Holding tie;
+      //     first in input order wins. Do nothing.
+      // cv < best.amount: not a candidate.
+    }
+
+    return best;
+  }
+
+  /**
+   * Format a Holding's display name for the largest-position view.
+   * Per D04-HWA-CONC-01 §3, the optional `broker` prefix is included
+   * for clarity when a Holding is the largest position. The canonical
+   * `Holding.instrumentName` is always present and is used as the
+   * primary label. The `Holding` object is never mutated.
+   */
+  private static formatHoldingDisplayName(h: Holding): string {
+    const instrument = (h.instrumentName || '').trim();
+    const broker = (h.broker || '').trim();
+    if (broker.length > 0 && instrument.length > 0) {
+      return `${broker} — ${instrument}`;
+    }
+    if (instrument.length > 0) {
+      return instrument;
+    }
+    // Fall back to a deterministic, broker-native identifier; never
+    // invent a classification (D-05 §3).
+    if (h.id) return h.id;
+    return 'Unnamed Holding';
+  }
+
+  /**
    * Compute Asset Concentration Analysis (Workstream C2).
    * Missing geography and currency remain 'Not Specified' without inference.
    * Missing type remains 'Unclassified' without converting to 'Other'.
+   *
+   * WP-FB-IMPORT-BROKER-01 — D-04 + D-05: imported Holdings contribute to
+   * the same `total` denominator (via `HoldingWealthBridge`) and to
+   * `byType` via the deterministic D-05 analytics classifier.
+   *
+   * WP-FB-IMPORT-BROKER-01 — D04-HWA-CONC-01 (concentration methodology):
+   * the `topAsset` field is the **largest individual position across the
+   * unified population** of (canonical Assets ∪ individual imported
+   * Holdings). The two identity stores remain separate — only their
+   * monetary values are compared for ranking. Tie-breaking is
+   * deterministic: canonical Assets first, then Holdings in the order
+   * they appear in the `holdings` array. `byGeography` and `byCurrency`
+   * remain canonical-Asset-only (D-05 §4 explicit-metadata-only).
    */
   public static getAssetConcentration(assets: Asset[], holdings: Holding[] = []): AssetConcentrationAnalysis {
     const total = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
-    if (assets.length === 0 || total === 0) {
+    if (total === 0) {
       return {
         byType: [],
         byGeography: [],
@@ -241,18 +390,13 @@ export class WealthIntelligenceService {
       };
     }
 
-    // Largest individual asset
-    const sorted = [...assets].sort((a, b) => b.amount - a.amount);
-    const top = sorted[0];
-    const topAsset = top
-      ? {
-          name: top.name,
-          amount: top.amount,
-          pct: Math.round((top.amount / total) * 100)
-        }
-      : undefined;
+    // Largest individual position (unified population per D04-HWA-CONC-01).
+    const topAsset = WealthIntelligenceService.computeLargestPosition(assets, holdings, total);
 
-    // Concentration by Type
+    // Concentration by Type — canonical Assets (Asset.type) AND
+    // D-05 analytics-classified imported Holdings share the same map.
+    // Holdings whose `securityClassification` cannot be deterministically
+    // mapped (D-05 §5) flow into the existing 'Unclassified' bucket.
     const typeMap: Record<string, number> = {};
     let unclassifiedAmt = 0;
     for (const a of assets) {
@@ -260,6 +404,14 @@ export class WealthIntelligenceService {
       typeMap[t] = (typeMap[t] || 0) + a.amount;
       if (!a.type) {
         unclassifiedAmt += a.amount;
+      }
+    }
+    for (const h of holdings) {
+      const cat = classifyHolding(h);
+      const cv = Number(h.currentValue) || 0;
+      typeMap[cat] = (typeMap[cat] || 0) + cv;
+      if (cat === 'Unclassified') {
+        unclassifiedAmt += cv;
       }
     }
     const byType = Object.entries(typeMap)
@@ -311,10 +463,25 @@ export class WealthIntelligenceService {
     };
   }
 
-  /** Compute Allocation Diagnostics & Target Drift (Workstream C3) */
+  /**
+   * Compute Allocation Diagnostics & Target Drift (Workstream C3).
+   *
+   * WP-FB-IMPORT-BROKER-01 — D-04 + D-05: imported Holdings contribute
+   * to the same `total` denominator (via `HoldingWealthBridge`) and to
+   * `typeMap` via the D-05 analytics classifier. `targetDrift` is
+   * computed against the 5 reference benchmark categories, which are a
+   * subset of the closed `AssetType` vocabulary; unclassified Holdings
+   * therefore do NOT contribute to the per-category drift calculation
+   * (D-05 §5 — preserve as unclassified rather than coerce into a
+   * benchmark bucket). They DO contribute to the `total` denominator,
+   * which is the same denominator the by-category percentages are
+   * computed against. `metadataCompletenessPct` is the proportion of
+   * canonical Assets + Holdings that have a deterministic closed-
+   * vocabulary classification.
+   */
   public static getAllocationDiagnostics(assets: Asset[], holdings: Holding[] = []): AllocationDiagnostics {
     const total = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
-    if (assets.length === 0 || total === 0) {
+    if ((assets.length === 0 && holdings.length === 0) || total === 0) {
       return {
         underrepresentedCategories: [],
         targetDrift: [],
@@ -325,14 +492,28 @@ export class WealthIntelligenceService {
 
     const typeMap: Record<string, number> = {};
     let classifiedCount = 0;
+    let classifiableCount = 0;
     for (const a of assets) {
       const t = a.type || 'Unclassified';
       typeMap[t] = (typeMap[t] || 0) + a.amount;
+      classifiableCount += 1;
       if (a.type) classifiedCount++;
     }
+    for (const h of holdings) {
+      const cat = classifyHolding(h);
+      const cv = Number(h.currentValue) || 0;
+      typeMap[cat] = (typeMap[cat] || 0) + cv;
+      classifiableCount += 1;
+      if (cat !== 'Unclassified') classifiedCount++;
+    }
 
-    const dominantCategory = Object.entries(typeMap).sort((a, b) => b[1] - a[1])[0]?.[0];
-    const dominantPct = total > 0 && dominantCategory ? (typeMap[dominantCategory] / total) * 100 : 0;
+    // Exclude 'Unclassified' from dominantCategory consideration so a
+    // portfolio whose only exposure is unclassified Holdings does not
+    // report 'Unclassified' as the "dominant" category.
+    const nonUnclassifiedEntries = Object.entries(typeMap).filter(([k]) => k !== 'Unclassified');
+    const dominantEntry = nonUnclassifiedEntries.sort((a, b) => b[1] - a[1])[0];
+    const dominantCategory = dominantEntry?.[0];
+    const dominantPct = total > 0 && dominantCategory ? (dominantEntry![1] / total) * 100 : 0;
     const hasConcentrationWarning = dominantPct > 60;
 
     const underrepresentedCategories: string[] = [];
@@ -346,6 +527,10 @@ export class WealthIntelligenceService {
     for (const benchmark of REFERENCE_ALLOCATION_BENCHMARK) {
       const cat = benchmark.category;
       const targetPct = benchmark.targetPct;
+      // D-05 §5: the per-category target-drift calculation excludes
+      // unclassified Holdings. typeMap only contains a benchmark
+      // category's amount when the classifier deterministically
+      // mapped a Holding (or a canonical Asset's `type`) into it.
       const actualAmt = typeMap[cat] || 0;
       const actualPct = total > 0 ? Math.round((actualAmt / total) * 100) : 0;
       const driftPct = actualPct - targetPct;
@@ -355,7 +540,8 @@ export class WealthIntelligenceService {
       }
     }
 
-    const metadataCompletenessPct = Math.round((classifiedCount / assets.length) * 100);
+    const metadataCompletenessPct =
+      classifiableCount > 0 ? Math.round((classifiedCount / classifiableCount) * 100) : 0;
 
     return {
       dominantCategory,
@@ -371,7 +557,7 @@ export class WealthIntelligenceService {
     const totalAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
     const totalDebt = liabilities.reduce((s, l) => s + l.amount, 0);
 
-    if (assets.length === 0 && liabilities.length === 0) {
+    if (assets.length === 0 && liabilities.length === 0 && holdings.length === 0) {
       return {
         totalDebt: 0,
         debtToAssetRatio: 0,
@@ -471,9 +657,10 @@ export class WealthIntelligenceService {
   public static getDataQuality(
     assets: Asset[],
     liabilities: Liability[],
-    snapshots: NetWorthSnapshot[] = []
+    snapshots: NetWorthSnapshot[] = [],
+    holdings: Holding[] = []
   ): WealthDataQuality {
-    const totalRecords = assets.length + liabilities.length;
+    const totalRecords = assets.length + liabilities.length + holdings.length;
     if (totalRecords === 0) {
       return {
         status: 'NOT_CONFIGURED',

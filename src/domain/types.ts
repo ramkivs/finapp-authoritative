@@ -1037,6 +1037,14 @@ export interface AssetConcentrationAnalysis {
     name: string;
     amount: number;
     pct: number;
+    // WP-FB-IMPORT-BROKER-01 D04-HWA-CONC-01: identifies the kind of
+    // position that won the unified-population concentration ranking.
+    // The two identity spaces (canonical Asset, Holding) remain
+    // separate; only their monetary values are compared for ranking.
+    // 'canonicalAsset' = the largest position is a manually-created
+    // Asset. 'holding' = the largest position is an imported Holding.
+    // UI rendering can use this to add broker context for Holdings.
+    kind: 'canonicalAsset' | 'holding';
   };
   byType: Array<{
     type: string;

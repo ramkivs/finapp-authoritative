@@ -608,8 +608,8 @@ export const WealthPage: React.FC = () => {
         {/* Action Queue & Insights */}
         <WealthInsightsCard assets={assets} liabilities={liabilities} snapshots={snapshots} />
 
-        {/* Portfolio Concentration Analytics (if assets exist) */}
-        {assets.length > 0 && <AssetConcentrationCard assets={assets} holdings={holdings} />}
+        {/* Portfolio Concentration Analytics (if assets or holdings exist) */}
+        {(assets.length > 0 || holdings.length > 0) && <AssetConcentrationCard assets={assets} holdings={holdings} />}
       </div>
 
       {/* =========================================================================
