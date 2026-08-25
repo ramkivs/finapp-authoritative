@@ -293,7 +293,18 @@ export class BrokerImportService {
     for (const entry of preview.entries) {
       if (entry.classification !== 'UPDATED') continue;
       if (entry.existing === null) continue; // defensive
-      const plan = HoldingLifecycleService.planUpdate(entry.candidate, working);
+      // WP-FB-IMPORT-BROKER-01 re-import defect fix: preserve the existing's
+      // authoritative persisted id. The candidate was just parsed and
+      // carries a fresh hld-<uuid>; the reconcile step matched by identity,
+      // so entry.existing.id is the canonical id (per the Holding.id
+      // contract: "Authoritative persisted identity. Prefix `hld-`.
+      // Survives renames."). planUpdate searches by id; without this
+      // preservation it throws NOT_FOUND on every re-import.
+      const updateRequest: Holding = {
+        ...entry.candidate,
+        id: entry.existing.id,
+      };
+      const plan = HoldingLifecycleService.planUpdate(updateRequest, working);
       working = plan.next;
     }
     // CLOSED_ABSENT
