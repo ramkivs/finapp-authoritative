@@ -175,6 +175,9 @@ describe('WP-FB-DATA-08A — destructive deletion and import commit disclosure',
      */
     const openReview = async () => {
       render(<ImportPage />);
+      // FINBOOM-CR (CR-02) — switch to the bank sub-tab to access
+      // the 5-stage engine and its Simulate Upload / Commit button.
+      fireEvent.click(document.querySelector('[data-testid="import-subtab-bank"]') as HTMLButtonElement);
       fireEvent.click([...document.querySelectorAll('button')]
         .find(b => /Simulate Upload/i.test(b.textContent || ''))!);
       await waitFor(() => expect(document.getElementById('btn-commit-import')).toBeTruthy());

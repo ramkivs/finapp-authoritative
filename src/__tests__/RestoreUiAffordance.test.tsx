@@ -80,7 +80,16 @@ async function attempt(fn: () => Promise<any>) {
   catch (e: any) { return { ok: false, value: null, error: e }; }
 }
 
-const renderImport = () => render(<ImportPage />);
+const renderImport = () => {
+  // FINBOOM-CR (CR-02) — the Import page now defaults to the
+  // 'broker' sub-tab. Bank workflow tests must first switch to
+  // the 'bank' sub-tab to access the 5-stage engine and its
+  // import-history / rollback / restore controls.
+  const result = render(<ImportPage />);
+  const bankTab = document.querySelector('[data-testid="import-subtab-bank"]') as HTMLButtonElement | null;
+  if (bankTab) fireEvent.click(bankTab);
+  return result;
+};
 const restoreBtn = (id: string) =>
   document.querySelector(`[data-restore-batch="${id}"]`) as HTMLButtonElement;
 const rollbackBtn = (id: string) =>

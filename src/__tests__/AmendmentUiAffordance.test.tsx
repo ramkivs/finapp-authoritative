@@ -711,6 +711,8 @@ describe('WP-FB-DATA-06c-2a — amendment UI affordance', () => {
       await repository.transactions.appendMany([mk('i1', 1000), mk('i2', 2000)]);
       await repository.transactions.supersede([{ targetId: 'i1', changes: { amount: 1500 } }]);
       render(<ImportPage />);
+      // FINBOOM-CR (CR-02) — switch to the bank sub-tab.
+      fireEvent.click(document.querySelector('[data-testid="import-subtab-bank"]') as HTMLButtonElement);
       const el = document.querySelector('[data-batch-corrections]')!;
       expect(el).toBeTruthy();
       expect(el.getAttribute('data-batch-corrections')).toBe('1');
@@ -726,6 +728,8 @@ describe('WP-FB-DATA-06c-2a — amendment UI affordance', () => {
         importBatchId: 'bx', recordedAt: new Date().toISOString()
       } as any);
       render(<ImportPage />);
+      // FINBOOM-CR (CR-02) — switch to the bank sub-tab.
+      fireEvent.click(document.querySelector('[data-testid="import-subtab-bank"]') as HTMLButtonElement);
       expect(document.querySelector('[data-batch-corrections]')).toBeNull();
     });
   });

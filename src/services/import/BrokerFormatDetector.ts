@@ -27,6 +27,7 @@ import { ParsedCsvRow, StatementInput } from './ImportTypes';
 import { ZerodhaHoldingsAdapter } from './adapters/ZerodhaHoldingsAdapter';
 import { GrowwHoldingsAdapter } from './adapters/GrowwHoldingsAdapter';
 import { DhanHoldingsAdapter } from './adapters/DhanHoldingsAdapter';
+import { AngelOneHoldingsAdapter } from './adapters/AngelOneHoldingsAdapter';
 
 export class BrokerFormatDetector {
   // Registry order matters when two adapters' structural
@@ -36,10 +37,18 @@ export class BrokerFormatDetector {
   // marker, not the full column sequence), so Dhan must be
   // registered before Groww to ensure Dhan XLSX files route
   // to the Dhan adapter.
+  //
+  // FINBOOM-CR (CR-05): Angel One is a new XLSX-only adapter.
+  // Its detection (Holding Details section marker + 15-column
+  // header) is structurally distinct from Groww (Stock Name
+  // header on R1, R1=R8 in Groww) and Dhan MF (Scheme Name
+  // header). The Angel One adapter can be registered at the end
+  // of the list without ambiguity.
   private static adapters: BrokerAdapter[] = [
     new ZerodhaHoldingsAdapter(),
     new DhanHoldingsAdapter(),
     new GrowwHoldingsAdapter(),
+    new AngelOneHoldingsAdapter(),
   ];
 
   /**

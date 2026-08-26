@@ -2,8 +2,17 @@ import React, { useState, useRef } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { ImportBatchRollbackService, ImportBatchSummary } from '../services/ImportBatchRollbackService';
 import { ImportPipelineService, CSVImportResult } from '../services/ImportPipelineService';
+import { ImportHistoryService, ImportHistoryEntry } from '../services/ImportHistoryService';
 import { BrokerImportSection } from './BrokerImportSection';
 import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
+
+/**
+ * FINBOOM-CR (CR-02) — sub-tab discriminator. The Import page now
+ * exposes two parallel sub-tabs: `broker` (Broker Import) and
+ * `bank` (Bank Statement Import). The default tab is `broker`
+ * (per the spec: the broker workflow is the elevated flow).
+ */
+type ImportSubTab = 'broker' | 'bank';
 
 /** Returns true if the filename has a native binary spreadsheet extension */
 function isBinarySpreadsheet(name: string): boolean {
@@ -19,6 +28,12 @@ const SAMPLE_DEFAULT_CSV = `Date,Title,Narration,Amount,Type,Account
 2026-08-01,=HYPERLINK("https://evil.com","Click"),HOSTILE-PAYLOAD,100,INCOME,HDFC Bank`;
 
 export const ImportPage: React.FC = () => {
+  // FINBOOM-CR (CR-02) — sub-tab state. Default to 'broker' so the
+  // elevated broker workflow is the first thing the user sees.
+  const [subTab, setSubTab] = useState<ImportSubTab>('broker');
+  // FINBOOM-CR (CR-04) — history panel collapsed by default.
+  const [showHistory, setShowHistory] = useState(false);
+
   const [selectedBroker, setSelectedBroker] = useState('Zerodha');
   const [showReview, setShowReview] = useState(false);
   const [importResult, setImportResult] = useState<CSVImportResult | null>(null);
@@ -220,6 +235,17 @@ export const ImportPage: React.FC = () => {
       if (persisted) await persisted;
     } catch (e: any) {
       setCommitBusy(false);
+      // CR-04: record the failed bank import.
+      ImportHistoryService.record({
+        importType: 'BANK_STATEMENT',
+        institution: selectedBroker,
+        sourceFilename: selectedFileName,
+        result: 'failure',
+        processedCount: importResult.totalDetected,
+        importedCount: 0,
+        rejectedCount: importResult.totalDetected,
+        errorSummary: [e?.message || 'Persistence failed.'],
+      });
       setCommitNotice({
         kind: 'error',
         headline: 'Import not committed.',
@@ -250,6 +276,29 @@ export const ImportPage: React.FC = () => {
       headline: 'Import committed.',
       text: `Appended ${appended} new rows. Automatically excluded ${duplicates} exact duplicates.${divergentNote}${transferNote}${duplicateIdNote}`
     });
+    // CR-04: record the successful bank import. The recording is
+    // best-effort; a failure here does not affect the import
+    // outcome (which has already been committed atomically by
+    // `commitImportedRows`).
+    const totalRejected = (importResult.duplicateCount ?? 0) + divergentDuplicates
+      + rejectedTransferRows + rejectedDuplicateIdRows
+      + (importResult.invalidCount ?? 0) + (importResult.ambiguousCount ?? 0);
+    const result: 'success' | 'partial' | 'failure' =
+      totalRejected === 0 ? 'success' : (appended === 0 ? 'failure' : 'partial');
+    ImportHistoryService.record({
+      importType: 'BANK_STATEMENT',
+      institution: selectedBroker,
+      sourceFilename: selectedFileName,
+      result,
+      processedCount: importResult.totalDetected,
+      importedCount: appended,
+      rejectedCount: totalRejected,
+      errorSummary: [
+        ...(divergentNote ? [divergentNote.trim()] : []),
+        ...(transferNote ? [transferNote.trim()] : []),
+        ...(duplicateIdNote ? [duplicateIdNote.trim()] : []),
+      ].slice(0, 10),
+    });
   };
 
   const allIssues = [
@@ -257,20 +306,74 @@ export const ImportPage: React.FC = () => {
     ...(importResult?.ambiguousRows || [])
   ].sort((a, b) => a.rowNumber - b.rowNumber);
 
+  // CR-04: history entries (in-memory; refreshed each render).
+  const historyEntries: ImportHistoryEntry[] = ImportHistoryService.list();
+
   return (
     <div className="space-y-8">
-      {/* WP-FB-IMPORT-BROKER-01 — WP-08 broker-import section.
-          Sits above the bank-import flow. Self-contained: file upload →
-          detect → parse → preview → confirm / cancel. */}
-      <BrokerImportSection />
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white tracking-tight">
-          5-Stage Bulk Import Engine
-        </h1>
-        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-          1. UPLOAD ➔ 2. DETECT ➔ 3. PARSE ➔ 4. NORMALIZE ➔ 5. REVIEW ➔ COMMIT (Append Mode)
-        </p>
+      {/* FINBOOM-CR (CR-02) — sub-tab control. Two sub-tabs:
+          `Broker Import` (default) and `Bank Statement Import`.
+          The control is at the top of the page; the active
+          sub-tab's content is rendered below. */}
+      <div
+        role="tablist"
+        aria-label="Import workflow"
+        className="flex items-center gap-2 border-b border-gray-200 dark:border-gray-800"
+        data-testid="import-subtabs"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={subTab === 'broker'}
+          data-testid="import-subtab-broker"
+          onClick={() => setSubTab('broker')}
+          className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition ${
+            subTab === 'broker'
+              ? 'border-green-600 text-green-700 dark:text-green-400'
+              : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+          }`}
+        >
+          Broker Import
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={subTab === 'bank'}
+          data-testid="import-subtab-bank"
+          onClick={() => setSubTab('bank')}
+          className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition ${
+            subTab === 'bank'
+              ? 'border-green-600 text-green-700 dark:text-green-400'
+              : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+          }`}
+        >
+          Bank Statement Import
+        </button>
       </div>
+
+      {/* FINBOOM-CR (CR-02) — broker sub-tab. Renders the existing
+          self-contained broker workflow. */}
+      {subTab === 'broker' && (
+        <div data-testid="import-subtab-panel-broker">
+          {/* WP-FB-IMPORT-BROKER-01 — WP-08 broker-import section.
+              Self-contained: file upload → detect → parse → preview → confirm / cancel. */}
+          <BrokerImportSection />
+        </div>
+      )}
+
+      {/* FINBOOM-CR (CR-02) — bank sub-tab. Renders the existing
+          5-stage engine with the heading renamed. The engine is
+          unchanged in code (per CR-03). */}
+      {subTab === 'bank' && (
+        <div data-testid="import-subtab-panel-bank">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white tracking-tight">
+              Bank Statement Import
+            </h1>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+              1. UPLOAD ➔ 2. DETECT ➔ 3. PARSE ➔ 4. NORMALIZE ➔ 5. REVIEW ➔ COMMIT (Append Mode)
+            </p>
+          </div>
 
       {/* WP-FB-DATA-08A: the commit outcome, reported only after storage has
           agreed. This replaces an alert() that announced "Appended N new rows"
@@ -651,6 +754,89 @@ export const ImportPage: React.FC = () => {
                   </button>
                 </div>
               </>
+            )}
+          </div>
+        )}
+      </div>
+        </div>
+      )}
+
+      {/* FINBOOM-CR (CR-04) — Import History panel. Visible on the
+          Import page (cross-cutting, NOT scoped to a sub-tab).
+          Collapsed by default; the [show history] toggle expands
+          it. The history is in-memory only and is reset on full
+          page reload (per the spec: no IndexedDB schema change). */}
+      <div
+        data-testid="import-history-panel"
+        className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm"
+      >
+        <button
+          type="button"
+          onClick={() => setShowHistory((v) => !v)}
+          className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white"
+          data-testid="import-history-toggle"
+        >
+          {showHistory ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          <span>Import History ({historyEntries.length})</span>
+        </button>
+        {showHistory && (
+          <div className="mt-3" data-testid="import-history-content">
+            {historyEntries.length === 0 ? (
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                No imports recorded yet. Broker and bank imports will be listed here
+                as they complete. History is in-memory and resets on page reload.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {historyEntries.map((e) => (
+                  <div
+                    key={e.id}
+                    data-testid="import-history-entry"
+                    data-history-result={e.result}
+                    data-history-type={e.importType}
+                    className="rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/40 px-3 py-2.5"
+                  >
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                          e.result === 'success'
+                            ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
+                            : e.result === 'partial'
+                            ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
+                            : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                        }`}
+                      >
+                        {e.result}
+                      </span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                          e.importType === 'BROKER_HOLDINGS'
+                            ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                            : 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300'
+                        }`}
+                      >
+                        {e.importType === 'BROKER_HOLDINGS' ? 'Broker' : 'Bank'}
+                      </span>
+                      <span className="font-semibold text-gray-900 dark:text-white">
+                        {e.institution}
+                      </span>
+                      <span className="text-gray-500 dark:text-gray-400 font-mono truncate">
+                        {e.sourceFilename}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                      {new Date(e.timestamp).toLocaleString()} &middot; processed {e.processedCount} &middot; imported {e.importedCount} &middot; rejected {e.rejectedCount}
+                    </div>
+                    {e.errorSummary.length > 0 && (
+                      <ul className="mt-1 text-[11px] text-amber-700 dark:text-amber-300 list-disc list-inside">
+                        {e.errorSummary.map((msg, idx) => (
+                          <li key={idx}>{msg}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}

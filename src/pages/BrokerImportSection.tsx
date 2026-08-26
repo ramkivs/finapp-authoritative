@@ -23,6 +23,7 @@ import { Upload, CheckCircle2, AlertTriangle, XCircle, FileText, ChevronDown, Ch
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { BrokerImportService, BrokerImportPreview, BrokerImportPreviewEntry, BrokerImportPreviewClosure } from '../services/BrokerImportService';
 import { ImportRowIssue, StatementInput } from '../services/import/ImportTypes';
+import { ImportHistoryService } from '../services/ImportHistoryService';
 import { Holding } from '../domain/types';
 
 interface CommitNotice {
@@ -91,6 +92,11 @@ export const BrokerImportSection: React.FC = () => {
   /**
    * Confirm the preview. Commits the parsed Holdings atomically via the
    * store hook. Surfaces success or failure.
+   *
+   * FINBOOM-CR (CR-04): after the persistence settles, an Import
+   * History entry is recorded via `ImportHistoryService.record`.
+   * The recording is at the caller site (NOT inside the canonical
+   * lifecycle); it does not modify any MUST-NOT-CHANGE service.
    */
   const handleConfirm = () => {
     if (!preview) return;
@@ -109,12 +115,44 @@ export const BrokerImportSection: React.FC = () => {
                 `Imported ${preview.counts.new} new, ${preview.counts.updated} updated, ` +
                 `${preview.counts.closed_absent} closed-absent, ${preview.counts.unchanged} unchanged.`,
             });
+            // CR-04: record the broker import in the in-memory history.
+            // The recording is best-effort; a failure here does not
+            // affect the import outcome (which has already been
+            // committed atomically by `commitImportedHoldings`).
+            const imported = preview.counts.new + preview.counts.updated;
+            const rejected = preview.counts.issueCount; // parser-level rejections surfaced as issues
+            const result: 'success' | 'partial' | 'failure' =
+              rejected === 0 ? 'success' : (imported === 0 ? 'failure' : 'partial');
+            ImportHistoryService.record({
+              importType: 'BROKER_HOLDINGS',
+              institution: preview.broker,
+              sourceFilename: preview.sourceFile,
+              result,
+              processedCount: preview.entries.length + preview.issues.length,
+              importedCount: imported,
+              rejectedCount: rejected,
+              errorSummary: preview.issues
+                .filter((i) => i.severity === 'INVALID')
+                .slice(0, 10)
+                .map((i) => `R${i.rowNumber} [${i.code}] ${i.field ? i.field + ': ' : ''}${i.message}`),
+            });
             setBusy(false);
             // Clear the preview so the user can start a new import.
             setPreview(null);
             if (fileInputRef.current) fileInputRef.current.value = '';
           })
           .catch((e: unknown) => {
+            // CR-04: record the failed broker import.
+            ImportHistoryService.record({
+              importType: 'BROKER_HOLDINGS',
+              institution: preview.broker,
+              sourceFilename: preview.sourceFile,
+              result: 'failure',
+              processedCount: preview.entries.length + preview.issues.length,
+              importedCount: 0,
+              rejectedCount: preview.entries.length + preview.issues.length,
+              errorSummary: [e instanceof Error ? e.message : String(e)],
+            });
             setCommitNotice({
               kind: 'error',
               text: e instanceof Error ? e.message : String(e),
@@ -135,6 +173,28 @@ export const BrokerImportSection: React.FC = () => {
       });
       setBusy(false);
     }
+  };
+
+  /**
+   * FINBOOM-CR (CR-04): when the user cancels an in-progress
+   * broker import (after the file has been parsed and a preview
+   * has been built), record a "partial" entry with 0 imported so
+   * the history reflects the abort.
+   */
+  const handleCancelWithHistory = () => {
+    if (preview) {
+      ImportHistoryService.record({
+        importType: 'BROKER_HOLDINGS',
+        institution: preview.broker,
+        sourceFilename: preview.sourceFile,
+        result: 'partial',
+        processedCount: preview.entries.length + preview.issues.length,
+        importedCount: 0,
+        rejectedCount: preview.entries.length + preview.issues.length,
+        errorSummary: ['User cancelled the import.'],
+      });
+    }
+    handleCancel();
   };
 
   // -------------------------------------------------------------------------
@@ -179,7 +239,7 @@ export const BrokerImportSection: React.FC = () => {
           showParserIssues={showParserIssues}
           onToggleParserIssues={() => setShowParserIssues((v) => !v)}
           onConfirm={handleConfirm}
-          onCancel={handleCancel}
+          onCancel={handleCancelWithHistory}
         />
         {noticeNode}
       </>

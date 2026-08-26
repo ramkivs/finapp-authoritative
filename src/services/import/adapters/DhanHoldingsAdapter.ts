@@ -1,12 +1,14 @@
 /**
  * WP-FB-IMPORT-BROKER-01 — WP-05 Dhan holdings adapter.
  *
- * Structural detection + row-level parsing for the three evidenced
+ * Structural detection + row-level parsing for the four evidenced
  * Dhan export variants:
  *
  *   A. Dhan Equity CSV  (Sample 3)
  *   B. Dhan Mutual Fund CSV (Sample 4)
  *   C. Dhan Mutual Fund XLSX (Sample 5)
+ *   D. Dhan Stock Holdings CSV (FINBOOM-CR — supplied CR fixture,
+ *      9 rows, double-quoted 8-column header)
  *
  * Discovered file properties (sequencing report §3.2):
  *
@@ -144,6 +146,34 @@ const MF_HEADERS: readonly string[] = [
 ] as const;
 
 /**
+ * FINBOOM-CR-BROKER-BANK-IMPORT Variant D — Dhan Stock Holdings CSV.
+ * Source: supplied CR fixture `Dhan stock holdings.csv` (9 rows).
+ * 8-column comma-delimited, double-quoted every field, UTF-8 with BOM.
+ * Header (after quote strip, case-sensitive):
+ *   Name, Quantity, Avg Price, Last Traded,
+ *   Investment, Current Value, P&L, P&L %
+ *
+ * Distinguishing markers from the existing Dhan Variant A (Equity 8-col
+ * unquoted `Instrument, Qty., ...`):
+ *   - Variant A: unquoted, first cell = "Instrument"
+ *   - Variant D: double-quoted, first cell = "Name" (after quote strip)
+ *
+ * The 4th-variant detection is tried FIRST (before the existing Variant A
+ * detection) so that a double-quoted `Name,...` header is not misread as
+ * the unquoted `Instrument,...` header — they are distinct schemas.
+ */
+const STOCK_HOLDINGS_HEADERS: readonly string[] = [
+  'Name',
+  'Quantity',
+  'Avg Price',
+  'Last Traded',
+  'Investment',
+  'Current Value',
+  'P&L',
+  'P&L %',
+] as const;
+
+/**
  * Account identity for Dhan MF (preamble R3 in CSV, metadata R2
  * in XLSX). The Dhan Equity CSV does not provide an account
  * identifier; `account = undefined` for every Equity output.
@@ -176,6 +206,31 @@ function parseDhanNumber(raw: string | undefined | null): number | null {
   const trimmed = String(raw).trim();
   if (trimmed === '') return null;
   const n = Number(trimmed);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
+/**
+ * Numeric parser that additionally tolerates thousands-separator
+ * commas (e.g. "1,087.80" → 1087.80).
+ *
+ * This is needed for the CR Variant D (Dhan Stock Holdings CSV)
+ * where numeric columns include a thousands separator. The other
+ * three Dhan variants (Equity, MF CSV, MF XLSX) do not have
+ * thousands separators in the supplied fixtures, so they use
+ * the simpler `parseDhanNumber`.
+ */
+function parseDhanNumberWithCommas(raw: string | undefined | null): number | null {
+  if (raw === undefined || raw === null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed === '') return null;
+  // Strip thousands-separator commas. A comma is a thousands
+  // separator only if it appears before a decimal point (or
+  // without a decimal point in an integer); we strip them all to
+  // be permissive (the canonical 4th-variant values never have
+  // non-thousands commas).
+  const noCommas = trimmed.replace(/,/g, '');
+  const n = Number(noCommas);
   if (!Number.isFinite(n)) return null;
   return n;
 }
@@ -239,12 +294,25 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
 
   canHandle(input: StatementInput): BrokerDetectionResult {
     if (input.kind === 'text') {
-      // CSV path — could be Equity CSV or MF CSV. Both are
-      // distinguished by header content.
+      // CSV path — could be Equity CSV (unquoted), MF CSV, or the
+      // CR Stock Holdings variant (quoted). All are distinguished
+      // by header content. The CR variant is detected FIRST so a
+      // double-quoted `Name, Quantity, ...` header is not misread
+      // as the unquoted `Instrument, Qty., ...` header.
       const text = input.content || '';
       const firstLine = this.firstNonEmptyLine(text);
       if (firstLine === null) {
         return this.noMatch('Empty or headerless content');
+      }
+      // CR Variant D: Stock Holdings (double-quoted, `Name, ...`).
+      if (this.matchesStockHoldingsHeaderRow(firstLine)) {
+        return {
+          matched: true,
+          formatId: 'dhan',
+          displayName: this.displayName,
+          confidence: 'HIGH',
+          reason: 'Matched Dhan Stock Holdings CSV header signature (CR Variant D)',
+        };
       }
       // Try Equity first (header on row 1).
       if (this.matchesEquityHeaderRow(firstLine)) {
@@ -294,6 +362,15 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
   }
 
   canHandleRows(headers: string[], _rows: ParsedCsvRow[]): BrokerDetectionResult {
+    if (this.matchesStockHoldingsHeader(headers)) {
+      return {
+        matched: true,
+        formatId: 'dhan',
+        displayName: this.displayName,
+        confidence: 'HIGH',
+        reason: 'Matched Dhan Stock Holdings CSV header signature (CR Variant D, decoded rows)',
+      };
+    }
     if (this.matchesEquityHeader(headers)) {
       return {
         matched: true,
@@ -345,8 +422,15 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
         this.issue(1, 'INVALID', 'BROKER_EMPTY', 'Decoded rows are empty.'),
       ]);
     }
-    // Detect variant by first cell content.
-    const first = String(rows[0].rawFields[0] ?? '').trim();
+    // Detect variant by first cell content. The CR Variant D
+    // (Stock Holdings) is checked first. The first cell may
+    // carry outer double-quotes (the rows path preserves them
+    // by convention; the walker strips them per-row before
+    // value extraction). We strip here for the dispatch.
+    const first = this.stripQuotes(String(rows[0].rawFields[0] ?? '')).trim();
+    if (first === 'Name') {
+      return this.walkStockHoldingsRows(rows, fileName);
+    }
     if (first === 'Instrument') {
       return this.walkEquityRows(rows, fileName);
     }
@@ -361,7 +445,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
     }
     return this.emptyOutput(fileName, [
       this.issue(1, 'INVALID', 'BROKER_HEADER_MISSING',
-        'Cannot locate a Dhan header marker (Instrument or Scheme Name) in the decoded rows.'),
+        'Cannot locate a Dhan header marker (Name, Instrument, or Scheme Name) in the decoded rows.'),
     ]);
   }
 
@@ -382,20 +466,31 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
       );
     }
 
-    // Detect variant by the first non-empty line.
+    // Detect variant by the first non-empty line. The CR Variant D
+    // (Stock Holdings) is detected FIRST so a double-quoted
+    // `Name, ...` header is matched before any other heuristic.
     const firstLine = records[0] ?? [];
-    const firstCell = String(firstLine[0] ?? '').trim();
+    const firstCellUnquoted = String(firstLine[0] ?? '').trim();
 
-    if (firstCell === 'Instrument') {
+    // The CR Variant D file is fully double-quoted. After tokenisation
+    // the quote characters are stripped only for fields that are
+    // "quoted". A naive `firstCell.trim()` may still include the
+    // leading quote if the field is `"Name"`. The exact-match
+    // signature is therefore run against BOTH the unquoted and
+    // the literal (with-quote) versions of the first cell.
+    if (firstCellUnquoted === 'Name' || firstLine[0] === '"Name"') {
+      return this.walkStockHoldingsFromRecords(records, fileName);
+    }
+    if (firstCellUnquoted === 'Instrument') {
       return this.walkEquityFromRecords(records, fileName);
     }
-    if (firstCell === 'MF Holdings' || firstCell.startsWith('MF Holdings')) {
+    if (firstCellUnquoted === 'MF Holdings' || firstCellUnquoted.startsWith('MF Holdings')) {
       // MF CSV: header is on a later row, not row 1.
       return this.parseMfCsv(records, fileName);
     }
     return this.emptyOutput(fileName, [
       this.issue(1, 'INVALID', 'BROKER_HEADER_MISSING',
-        `First non-empty cell "${firstCell}" is not a known Dhan header marker (Instrument or MF Holdings).`),
+        `First non-empty cell "${firstCellUnquoted}" is not a known Dhan header marker (Name, Instrument, or MF Holdings).`),
     ]);
   }
 
@@ -1046,6 +1141,472 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
   }
 
   // =========================================================================
+  // =========================================================================
+  // CR VARIANT D — STOCK HOLDINGS ROW WALKERS
+  // =========================================================================
+
+  /**
+   * Walk Dhan Stock Holdings data records (string[][]).
+   *
+   * Source: CR fixture `Dhan stock holdings.csv` — 9 rows,
+   * 8 columns, comma-delimited, double-quoted every field.
+   * Each row produces exactly one Holding (one row per
+   * instrument; no trade-lot aggregation).
+   *
+   * Mapping:
+   *   Name           → instrumentName
+   *   Quantity       → quantity
+   *   Avg Price      → averageCost
+   *   Last Traded    → currentPrice
+   *   Investment     → investedValue
+   *   Current Value  → currentValue
+   *   P&L            → unrealisedPnL
+   *   P&L %          → unrealisedPnLPercent (strip trailing '%', 0-100 range)
+   *
+   * No Trade Date column: importedAt is parser execution time
+   * (new Date().toISOString()), not the file's date.
+   *
+   * No account / ISIN / ticker / securityClassification / xirrPercent
+   * — all set to undefined.
+   */
+  private walkStockHoldingsFromRecords(
+    records: string[][],
+    fileName: string,
+  ): BrokerParseOutput {
+    const headerRow = records[0];
+    // After tokenization, the cells are still double-quoted (the
+    // RFC-4180 tokenizer does not strip outer quotes automatically).
+    // Normalise: trim whitespace, then strip a single layer of
+    // outer double-quotes. The header check (matchesStockHoldingsHeader)
+    // does the same normalisation.
+    const headerNormalised = headerRow.map((h) => this.stripQuotes(h).trim());
+    if (!this.matchesStockHoldingsHeader(headerNormalised)) {
+      return this.emptyOutput(fileName, [
+        this.issue(1, 'INVALID', 'BROKER_HEADER_MISSING',
+          'Stock Holdings header marker found but the column sequence does not match the Dhan CR Variant D schema.')],
+      );
+    }
+    if (records.length === 1) {
+      return this.emptyOutput(fileName, [
+        this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+          'Dhan Stock Holdings file contains only the header row, no data rows.')],
+      );
+    }
+    return this.walkStockHoldingsDataRecords(records.slice(1), fileName, /* sourceRowOffset */ 1);
+  }
+
+  /**
+   * Walk the post-header data records of the CR Variant D.
+   * Each row produces one Holding (no aggregation; 9 rows → 9 Holdings).
+   */
+  private walkStockHoldingsDataRecords(
+    dataRecords: string[][],
+    fileName: string,
+    sourceRowOffset: number,
+  ): BrokerParseOutput {
+    const issues: ImportRowIssue[] = [];
+    const holdings: Holding[] = [];
+    const importedAt = new Date().toISOString();
+
+    // Column indices (post-header, 0-based, exact 8-column schema).
+    const idxName = 0;
+    const idxQuantity = 1;
+    const idxAvgPrice = 2;
+    const idxLastTraded = 3;
+    const idxInvestment = 4;
+    const idxCurrentValue = 5;
+    const idxPnl = 6;
+    const idxPnlPct = 7;
+
+    dataRecords.forEach((fields, idx) => {
+      const fileRowNumber = idx + 2 + sourceRowOffset; // 1-based; first data row is row 2
+
+      // Each field may still have outer double-quotes from the
+      // CSV tokeniser; strip them for the row-shape validation
+      // and value extraction.
+      const cleanFields = fields.map((f) => this.stripQuotes(String(f ?? '')).trim());
+
+      if (cleanFields.length < STOCK_HOLDINGS_HEADERS.length) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_ROW_MALFORMED',
+          `Row has ${cleanFields.length} fields; expected ${STOCK_HOLDINGS_HEADERS.length}.`));
+        return;
+      }
+      if (cleanFields.length > STOCK_HOLDINGS_HEADERS.length) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_ROW_MALFORMED',
+          `Row has ${cleanFields.length} fields; expected ${STOCK_HOLDINGS_HEADERS.length} (Dhan Stock Holdings has no trailing empty column).`));
+        return;
+      }
+
+      const instrumentName = cleanFields[idxName];
+      if (instrumentName === '') {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_IDENTITY_MISSING',
+          'Name is empty for this row.'));
+        return;
+      }
+
+      // Quantity: integer (Dhan Stock Holdings never has fractional
+      // shares in the supplied fixture).
+      const quantity = parseDhanNumberWithCommas(cleanFields[idxQuantity]);
+      if (quantity === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Quantity is not a parseable number: ${JSON.stringify(cleanFields[idxQuantity])}`, 'Quantity', cleanFields[idxQuantity]));
+        return;
+      }
+      if (quantity < 0) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_QUANTITY_NON_POSITIVE',
+          `Quantity is negative (${quantity}); row rejected.`, 'Quantity', cleanFields[idxQuantity]));
+        return;
+      }
+      if (!Number.isInteger(quantity)) {
+        issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_NUMERIC_INVALID',
+          `Quantity is not an integer (${quantity}); row accepted but flagged.`, 'Quantity', cleanFields[idxQuantity]));
+      }
+
+      // Avg Price (averageCost).
+      const averageCostRaw = parseDhanNumberWithCommas(cleanFields[idxAvgPrice]);
+      if (averageCostRaw === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Avg Price is not a parseable number: ${JSON.stringify(cleanFields[idxAvgPrice])}`, 'Avg Price', cleanFields[idxAvgPrice]));
+        return;
+      }
+      if (averageCostRaw < 0) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Avg Price is negative (${averageCostRaw}); rejected.`, 'Avg Price', cleanFields[idxAvgPrice]));
+        return;
+      }
+
+      // Last Traded (currentPrice).
+      const currentPriceRaw = parseDhanNumberWithCommas(cleanFields[idxLastTraded]);
+      if (currentPriceRaw === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Last Traded is not a parseable number: ${JSON.stringify(cleanFields[idxLastTraded])}`, 'Last Traded', cleanFields[idxLastTraded]));
+        return;
+      }
+      if (currentPriceRaw < 0) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Last Traded is negative (${currentPriceRaw}); rejected.`, 'Last Traded', cleanFields[idxLastTraded]));
+        return;
+      }
+
+      // Investment (investedValue).
+      const investedValueRaw = parseDhanNumberWithCommas(cleanFields[idxInvestment]);
+      if (investedValueRaw === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Investment is not a parseable number: ${JSON.stringify(cleanFields[idxInvestment])}`, 'Investment', cleanFields[idxInvestment]));
+        return;
+      }
+      if (investedValueRaw < 0) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Investment is negative (${investedValueRaw}); rejected.`, 'Investment', cleanFields[idxInvestment]));
+        return;
+      }
+
+      // Current Value (currentValue).
+      const currentValueRaw = parseDhanNumberWithCommas(cleanFields[idxCurrentValue]);
+      if (currentValueRaw === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Current Value is not a parseable number: ${JSON.stringify(cleanFields[idxCurrentValue])}`, 'Current Value', cleanFields[idxCurrentValue]));
+        return;
+      }
+      if (currentValueRaw < 0) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Current Value is negative (${currentValueRaw}); rejected.`, 'Current Value', cleanFields[idxCurrentValue]));
+        return;
+      }
+
+      // P&L (unrealisedPnL). The Dhan P&L is the absolute difference
+      // between Current Value and Investment; we parse the
+      // broker-supplied value and use it directly (we do NOT
+      // re-derive from currentValue - investedValue because the
+      // broker's P&L is the authoritative source for the supplied
+      // fixture, and the canonical Holding.unrealisedPnL is what
+      // the user sees in the UI). Defence-in-depth: if P&L
+      // disagrees with currentValue - investedValue by more than
+      // 0.01, emit a non-blocking issue.
+      const pnlRaw = parseDhanNumberWithCommas(cleanFields[idxPnl]);
+      if (pnlRaw === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `P&L is not a parseable number: ${JSON.stringify(cleanFields[idxPnl])}`, 'P&L', cleanFields[idxPnl]));
+        return;
+      }
+
+      // P&L %: the field is "20.20%" or "-4.14%" — value + literal '%'
+      // suffix with no space. Parse by stripping the trailing '%'
+      // and converting to a 0-100 range number.
+      const pnlPctRaw = cleanFields[idxPnlPct];
+      let unrealisedPnLPercent: number | undefined;
+      if (pnlPctRaw === '') {
+        unrealisedPnLPercent = undefined;
+      } else {
+        // Strip a single trailing '%' (possibly with whitespace).
+        const stripped = pnlPctRaw.replace(/\s*%\s*$/, '').trim();
+        const parsed = parseDhanNumberWithCommas(stripped);
+        if (parsed === null) {
+          issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+            `P&L % is not a parseable number: ${JSON.stringify(pnlPctRaw)}`, 'P&L %', pnlPctRaw));
+          return;
+        }
+        unrealisedPnLPercent = parsed;
+      }
+
+      // NaN/Infinity guard (defence in depth; should never trip
+      // given the per-cell parse checks above).
+      if (
+        !Number.isFinite(quantity) ||
+        !Number.isFinite(averageCostRaw) ||
+        !Number.isFinite(currentPriceRaw) ||
+        !Number.isFinite(investedValueRaw) ||
+        !Number.isFinite(currentValueRaw) ||
+        !Number.isFinite(pnlRaw) ||
+        (unrealisedPnLPercent !== undefined && !Number.isFinite(unrealisedPnLPercent))
+      ) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          'Computed value is not finite (NaN/Infinity guard tripped).'));
+        return;
+      }
+
+      // Defence-in-depth: flag P&L vs (currentValue - investedValue)
+      // divergence as a non-blocking AMBIGUOUS issue. The Dhan
+      // fixture's P&L is the authoritative source; this is a
+      // sanity check.
+      const recomputedPnl = currentValueRaw - investedValueRaw;
+      if (Math.abs(pnlRaw - recomputedPnl) > 0.01) {
+        issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_NUMERIC_INVALID',
+          `P&L (${pnlRaw}) does not match Current Value (${currentValueRaw}) − Investment (${investedValueRaw}) = ${recomputedPnl}; using broker-supplied P&L.`));
+      }
+
+      if (quantity === 0) {
+        issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_QUANTITY_NON_POSITIVE',
+          'Quantity is zero; holding emitted with derived zeros (averageCost and currentPrice set to 0).',
+          'Quantity', cleanFields[idxQuantity]));
+      }
+
+      const holding: Holding = {
+        id: HoldingIdentityService.generateId(),
+        broker: 'Dhan',
+        account: undefined,
+        instrumentName,
+        isin: undefined,
+        ticker: undefined,
+        quantity,
+        averageCost: quantity === 0 ? 0 : averageCostRaw,
+        investedValue: investedValueRaw,
+        currentPrice: quantity === 0 ? 0 : currentPriceRaw,
+        currentValue: currentValueRaw,
+        unrealisedPnL: pnlRaw,
+        ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
+        xirrPercent: undefined,
+        securityClassification: undefined,
+        status: ACTIVE_HOLDING_STATUS,
+        sourceFile: fileName,
+        importedAt,
+      };
+      holdings.push(holding);
+    });
+
+    return {
+      broker: 'Dhan',
+      account: undefined,
+      holdings,
+      sourceFile: fileName,
+      importedAt,
+      issues,
+    };
+  }
+
+  /**
+   * Walk Dhan CR Variant D rows from ParsedCsvRow[] (binary-workbook
+   * path / BrokerFormatDetector.detectFromRows). Each row carries
+   * its own rowNumber.
+   */
+  private walkStockHoldingsRows(rows: ParsedCsvRow[], fileName: string): BrokerParseOutput {
+    const records = rows.map((r) => r.rawFields);
+    // Reuse the records path. The records walker uses idx + 2 +
+    // sourceRowOffset, but for the rows path we delegate to the
+    // row-aware variant below to preserve per-row file row numbers.
+    return this.walkStockHoldingsDataRecordsWithRows(rows, fileName);
+  }
+
+  /**
+   * Walk Dhan CR Variant D data rows from ParsedCsvRow[] (each
+   * row carries its own rowNumber). One row per Holding; no
+   * aggregation.
+   */
+  private walkStockHoldingsDataRecordsWithRows(
+    rows: ParsedCsvRow[],
+    fileName: string,
+  ): BrokerParseOutput {
+    const issues: ImportRowIssue[] = [];
+    const holdings: Holding[] = [];
+    const importedAt = new Date().toISOString();
+
+    const idxName = 0;
+    const idxQuantity = 1;
+    const idxAvgPrice = 2;
+    const idxLastTraded = 3;
+    const idxInvestment = 4;
+    const idxCurrentValue = 5;
+    const idxPnl = 6;
+    const idxPnlPct = 7;
+
+    rows.forEach((row) => {
+      const fileRowNumber = row.rowNumber;
+      const cleanFields = row.rawFields.map((f) => this.stripQuotes(String(f ?? '')).trim());
+
+      if (cleanFields.length < STOCK_HOLDINGS_HEADERS.length) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_ROW_MALFORMED',
+          `Row has ${cleanFields.length} fields; expected ${STOCK_HOLDINGS_HEADERS.length}.`));
+        return;
+      }
+      if (cleanFields.length > STOCK_HOLDINGS_HEADERS.length) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_ROW_MALFORMED',
+          `Row has ${cleanFields.length} fields; expected ${STOCK_HOLDINGS_HEADERS.length} (Dhan Stock Holdings has no trailing empty column).`));
+        return;
+      }
+
+      const instrumentName = cleanFields[idxName];
+      if (instrumentName === '') {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_IDENTITY_MISSING',
+          'Name is empty for this row.'));
+        return;
+      }
+
+      const quantity = parseDhanNumberWithCommas(cleanFields[idxQuantity]);
+      if (quantity === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Quantity is not a parseable number: ${JSON.stringify(cleanFields[idxQuantity])}`, 'Quantity', cleanFields[idxQuantity]));
+        return;
+      }
+      if (quantity < 0) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_QUANTITY_NON_POSITIVE',
+          `Quantity is negative (${quantity}); row rejected.`, 'Quantity', cleanFields[idxQuantity]));
+        return;
+      }
+
+      const averageCostRaw = parseDhanNumberWithCommas(cleanFields[idxAvgPrice]);
+      if (averageCostRaw === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Avg Price is not a parseable number: ${JSON.stringify(cleanFields[idxAvgPrice])}`, 'Avg Price', cleanFields[idxAvgPrice]));
+        return;
+      }
+      if (averageCostRaw < 0) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Avg Price is negative (${averageCostRaw}); rejected.`, 'Avg Price', cleanFields[idxAvgPrice]));
+        return;
+      }
+
+      const currentPriceRaw = parseDhanNumberWithCommas(cleanFields[idxLastTraded]);
+      if (currentPriceRaw === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Last Traded is not a parseable number: ${JSON.stringify(cleanFields[idxLastTraded])}`, 'Last Traded', cleanFields[idxLastTraded]));
+        return;
+      }
+      if (currentPriceRaw < 0) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Last Traded is negative (${currentPriceRaw}); rejected.`, 'Last Traded', cleanFields[idxLastTraded]));
+        return;
+      }
+
+      const investedValueRaw = parseDhanNumberWithCommas(cleanFields[idxInvestment]);
+      if (investedValueRaw === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Investment is not a parseable number: ${JSON.stringify(cleanFields[idxInvestment])}`, 'Investment', cleanFields[idxInvestment]));
+        return;
+      }
+      if (investedValueRaw < 0) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Investment is negative (${investedValueRaw}); rejected.`, 'Investment', cleanFields[idxInvestment]));
+        return;
+      }
+
+      const currentValueRaw = parseDhanNumberWithCommas(cleanFields[idxCurrentValue]);
+      if (currentValueRaw === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Current Value is not a parseable number: ${JSON.stringify(cleanFields[idxCurrentValue])}`, 'Current Value', cleanFields[idxCurrentValue]));
+        return;
+      }
+      if (currentValueRaw < 0) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `Current Value is negative (${currentValueRaw}); rejected.`, 'Current Value', cleanFields[idxCurrentValue]));
+        return;
+      }
+
+      const pnlRaw = parseDhanNumberWithCommas(cleanFields[idxPnl]);
+      if (pnlRaw === null) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          `P&L is not a parseable number: ${JSON.stringify(cleanFields[idxPnl])}`, 'P&L', cleanFields[idxPnl]));
+        return;
+      }
+
+      const pnlPctRaw = cleanFields[idxPnlPct];
+      let unrealisedPnLPercent: number | undefined;
+      if (pnlPctRaw === '') {
+        unrealisedPnLPercent = undefined;
+      } else {
+        const stripped = pnlPctRaw.replace(/\s*%\s*$/, '').trim();
+        const parsed = parseDhanNumberWithCommas(stripped);
+        if (parsed === null) {
+          issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+            `P&L % is not a parseable number: ${JSON.stringify(pnlPctRaw)}`, 'P&L %', pnlPctRaw));
+          return;
+        }
+        unrealisedPnLPercent = parsed;
+      }
+
+      if (
+        !Number.isFinite(quantity) ||
+        !Number.isFinite(averageCostRaw) ||
+        !Number.isFinite(currentPriceRaw) ||
+        !Number.isFinite(investedValueRaw) ||
+        !Number.isFinite(currentValueRaw) ||
+        !Number.isFinite(pnlRaw) ||
+        (unrealisedPnLPercent !== undefined && !Number.isFinite(unrealisedPnLPercent))
+      ) {
+        issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          'Computed value is not finite (NaN/Infinity guard tripped).'));
+        return;
+      }
+
+      if (quantity === 0) {
+        issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_QUANTITY_NON_POSITIVE',
+          'Quantity is zero; holding emitted with derived zeros (averageCost and currentPrice set to 0).',
+          'Quantity', cleanFields[idxQuantity]));
+      }
+
+      const holding: Holding = {
+        id: HoldingIdentityService.generateId(),
+        broker: 'Dhan',
+        account: undefined,
+        instrumentName,
+        isin: undefined,
+        ticker: undefined,
+        quantity,
+        averageCost: quantity === 0 ? 0 : averageCostRaw,
+        investedValue: investedValueRaw,
+        currentPrice: quantity === 0 ? 0 : currentPriceRaw,
+        currentValue: currentValueRaw,
+        unrealisedPnL: pnlRaw,
+        ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
+        xirrPercent: undefined,
+        securityClassification: undefined,
+        status: ACTIVE_HOLDING_STATUS,
+        sourceFile: fileName,
+        importedAt,
+      };
+      holdings.push(holding);
+    });
+
+    return {
+      broker: 'Dhan',
+      account: undefined,
+      holdings,
+      sourceFile: fileName,
+      importedAt,
+      issues,
+    };
+  }
+
+  // =========================================================================
   // MF ROW WALKERS
   // =========================================================================
 
@@ -1533,6 +2094,39 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
       if (extra.some((e) => e !== '')) return false;
     }
     return true;
+  }
+
+  /**
+   * Match the CR Variant D (Dhan Stock Holdings) header by
+   * column sequence. Case-insensitive. The fixture is
+   * double-quoted but the tokeniser strips outer quotes; the
+   * caller is expected to pass the post-strip header.
+   */
+  private matchesStockHoldingsHeader(headers: readonly string[]): boolean {
+    if (headers.length < STOCK_HOLDINGS_HEADERS.length) return false;
+    for (let i = 0; i < STOCK_HOLDINGS_HEADERS.length; i++) {
+      if ((headers[i] ?? '').toLowerCase() !== STOCK_HOLDINGS_HEADERS[i].toLowerCase()) {
+        return false;
+      }
+    }
+    if (headers.length > STOCK_HOLDINGS_HEADERS.length) {
+      const extra = headers.slice(STOCK_HOLDINGS_HEADERS.length);
+      if (extra.some((e) => e !== '')) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Match the CR Variant D (Dhan Stock Holdings) header from a
+   * single raw header line. Tokenises the line with the
+   * quote-aware CSV parser, strips outer quotes, and checks
+   * the column sequence.
+   */
+  private matchesStockHoldingsHeaderRow(headerLine: string): boolean {
+    const records = this.parseCsvRecords(headerLine + '\n');
+    if (records.length === 0) return false;
+    const fields = records[0].map((f) => this.stripQuotes(f).trim());
+    return this.matchesStockHoldingsHeader(fields);
   }
 
   /**

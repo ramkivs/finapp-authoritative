@@ -51,7 +51,7 @@ export type BrokerIssueCode =
  */
 export interface BrokerDetectionResult {
   matched: boolean;
-  formatId: 'zerodha' | 'dhan' | 'groww' | 'unsupported';
+  formatId: 'zerodha' | 'dhan' | 'groww' | 'angelone' | 'unsupported';
   displayName: string;
   confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE';
   reason: string;

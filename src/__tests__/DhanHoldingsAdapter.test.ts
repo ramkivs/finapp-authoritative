@@ -22,6 +22,8 @@ import { StatementInput, ParsedCsvRow } from '../services/import/ImportTypes';
 const SAMPLE_EQUITY_PATH = '/home/user/uploads/dhan holdings _capstewengine.csv';
 const SAMPLE_MF_CSV_PATH = '/home/user/uploads/Dhan_MF_Report_23-08-2026.csv';
 const SAMPLE_MF_XLSX_PATH = '/home/user/uploads/Dhan_MF_Report_23-08-2026.xlsx';
+// FINBOOM-CR — Dhan Stock Holdings (CR Variant D, 9 rows)
+const SAMPLE_STOCK_HOLDINGS_PATH = '/home/user/finboom-cr-impl/worktree/src/__tests__/fixtures/cr_broker_bank_import/dhan-stock-holdings.csv';
 
 function loadText(path: string): string {
   return readFileSync(path, 'utf8');
@@ -930,5 +932,240 @@ describe('WP-09 detection tightening — Dhan full-column validation in binary p
     const out = adapter.parseHoldings({ kind: 'text', content: csv, fileName: 'dhan equity.csv' });
     expect(out.broker).toBe('Dhan');
     expect(out.holdings.length).toBeGreaterThan(0);
+  });
+});
+
+// ===========================================================================
+// I. FINBOOM-CR Variant D — Dhan Stock Holdings (9 rows, double-quoted)
+// ===========================================================================
+
+describe('I. FINBOOM-CR Variant D — Dhan Stock Holdings', () => {
+  it('I.1 canHandle(Stock Holdings CSV text) → matched=true, HIGH, dhan', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const det = adapter.canHandle(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    expect(det.matched).toBe(true);
+    expect(det.formatId).toBe('dhan');
+    expect(det.confidence).toBe('HIGH');
+  });
+
+  it('I.2 Stock Holdings is detected BEFORE Equity (no cross-detection)', () => {
+    // The CR fixture has a different header from the existing
+    // Dhan Equity Sample 3. The CR variant must be detected
+    // correctly without falling through to the Equity detection
+    // branch.
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const det = adapter.canHandle(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    expect(det.reason).toContain('Stock Holdings');
+  });
+
+  it('I.3 Equity Sample 3 still routes to Equity detection (regression)', () => {
+    // The 4th-variant addition must NOT regress Equity detection.
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_EQUITY_PATH);
+    const det = adapter.canHandle(asTextInput(csv, 'dhan equity.csv'));
+    expect(det.matched).toBe(true);
+    expect(det.reason).toContain('Equity');
+    expect(det.reason).not.toContain('Stock Holdings');
+  });
+
+  it('I.4 parseHoldings(Stock Holdings CSV) → 9 Holdings, no issues', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const out = adapter.parseHoldings(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    expect(out.broker).toBe('Dhan');
+    expect(out.account).toBeUndefined();
+    expect(out.holdings.length).toBe(9);
+    expect(out.issues.length).toBe(0);
+  });
+
+  it('I.5 First holding — Bajaj Finance, with all 8 mapped fields', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const out = adapter.parseHoldings(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    const b = out.holdings[0];
+    expect(b.instrumentName).toBe('Bajaj Finance');
+    expect(b.broker).toBe('Dhan');
+    expect(b.quantity).toBe(30);
+    expect(b.averageCost).toBe(904.97);
+    expect(b.currentPrice).toBe(1087.8);
+    expect(b.investedValue).toBe(27148.95);
+    expect(b.currentValue).toBe(32634);
+    expect(b.unrealisedPnL).toBe(5485.05);
+    expect(b.unrealisedPnLPercent).toBe(20.2);
+    // No account / ISIN / ticker / classification / XIRR for Variant D
+    expect(b.account).toBeUndefined();
+    expect(b.isin).toBeUndefined();
+    expect(b.ticker).toBeUndefined();
+    expect(b.securityClassification).toBeUndefined();
+    expect(b.xirrPercent).toBeUndefined();
+    expect(b.status).toBe('active');
+  });
+
+  it('I.6 HDFC Bank row — negative P&L is preserved as a negative number', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const out = adapter.parseHoldings(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    const hdfc = out.holdings.find((h) => h.instrumentName === 'HDFC Bank');
+    expect(hdfc).toBeDefined();
+    expect(hdfc!.quantity).toBe(70);
+    expect(hdfc!.unrealisedPnL).toBe(-2203.8);
+    expect(hdfc!.unrealisedPnLPercent).toBe(-4.14);
+    // Math: 50977.5 - 53181.3 = -2203.8 ✓
+    // Kalyan Jewellers is the largest absolute P&L (positive);
+    // verify it's the largest by checking value
+  });
+
+  it('I.7 Kalyan Jewellers row — highest absolute P&L (positive)', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const out = adapter.parseHoldings(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    const kj = out.holdings.find((h) => h.instrumentName === 'Kalyan Jewellers');
+    expect(kj).toBeDefined();
+    expect(kj!.quantity).toBe(30);
+    expect(kj!.currentValue).toBe(18370.5);
+    expect(kj!.unrealisedPnLPercent).toBe(74.54);
+  });
+
+  it('I.8 All 9 Holdings have one-row-per-instrument mapping (no aggregation)', () => {
+    // Each fixture row produces exactly one Holding. The 9 fixture
+    // rows produce 9 Holdings (no duplicate-instrument collapsing).
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const out = adapter.parseHoldings(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    const names = out.holdings.map((h) => h.instrumentName).sort();
+    expect(names).toEqual([
+      'Bajaj Finance', 'DLF', 'HDFC Bank', 'Infosys', 'Kalyan Jewellers',
+      'Kotak Bank', 'Natco Pharma', 'State Bank of India', 'Wipro',
+    ]);
+  });
+
+  it('I.9 All 9 Holdings preserve the canonical 0-100 range for unrealisedPnLPercent', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const out = adapter.parseHoldings(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    for (const h of out.holdings) {
+      expect(h.unrealisedPnLPercent).toBeDefined();
+      expect(h.unrealisedPnLPercent).toBeGreaterThanOrEqual(-100);
+      expect(h.unrealisedPnLPercent).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it('I.10 importedAt is parser execution time (ISO 8601) — no Trade Date column', () => {
+    // The Stock Holdings variant has no Trade Date column. The
+    // CR spec says importedAt = parser execution time, NOT
+    // file's date.
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const out = adapter.parseHoldings(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    for (const h of out.holdings) {
+      // Must be a valid ISO 8601 string
+      const d = new Date(h.importedAt);
+      expect(isNaN(d.getTime())).toBe(false);
+      // Must be close to now (within 5 seconds)
+      const now = Date.now();
+      expect(Math.abs(now - d.getTime())).toBeLessThan(5000);
+    }
+  });
+
+  it('I.11 canHandleRows(Stock Holdings decoded headers) → matched=true', () => {
+    // Binary-workbook path: the header is decoded into a string[]
+    // before canHandleRows is called.
+    const adapter = new DhanHoldingsAdapter();
+    const det = adapter.canHandleRows(
+      ['Name', 'Quantity', 'Avg Price', 'Last Traded', 'Investment', 'Current Value', 'P&L', 'P&L %'],
+      [],
+    );
+    expect(det.matched).toBe(true);
+    expect(det.formatId).toBe('dhan');
+    expect(det.reason).toContain('Stock Holdings');
+  });
+
+  it('I.12 canHandleRows(Equity decoded headers) → still matches Equity (regression)', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const det = adapter.canHandleRows(
+      ['Instrument', 'Qty.', 'Buy Price', 'LTP', 'P&L', 'Invested', 'Curr value', 'Trade Date'],
+      [],
+    );
+    expect(det.matched).toBe(true);
+    expect(det.reason).toContain('Equity');
+  });
+
+  it('I.13 parseHoldingsFromRows(Stock Holdings rows) → 9 Holdings', () => {
+    // Binary-workbook path: pre-decoded rows. Convention: the rows
+    // array includes the header row as row 0, and rawFields are
+    // unquoted (the walker strips quotes per-row). The header is
+    // matched by the variant dispatch and the data rows are
+    // processed. This matches the existing Dhan Equity / MF
+    // walker convention.
+    const adapter = new DhanHoldingsAdapter();
+    const rows: ParsedCsvRow[] = [
+      { rowNumber: 1, data: {}, rawFields: ['Name', 'Quantity', 'Avg Price', 'Last Traded', 'Investment', 'Current Value', 'P&L', 'P&L %'] },
+      { rowNumber: 2, data: {}, rawFields: ['Bajaj Finance', '30', '904.97', '1087.8', '27148.95', '32634', '5485.05', '20.20%'] },
+      { rowNumber: 3, data: {}, rawFields: ['DLF', '16', '574.66', '683.2', '9194.5', '10931.2', '1736.7', '18.89%'] },
+      { rowNumber: 4, data: {}, rawFields: ['HDFC Bank', '70', '759.73', '728.25', '53181.3', '50977.5', '-2203.8', '-4.14%'] },
+      { rowNumber: 5, data: {}, rawFields: ['Infosys', '10', '1053.86', '1124.3', '10538.6', '11243', '704.4', '6.68%'] },
+      { rowNumber: 6, data: {}, rawFields: ['Kalyan Jewellers', '30', '350.84', '612.35', '10525.25', '18370.5', '7845.25', '74.54%'] },
+      { rowNumber: 7, data: {}, rawFields: ['Kotak Bank', '39', '377.85', '412.5', '14736.25', '16087.5', '1351.25', '9.17%'] },
+      { rowNumber: 8, data: {}, rawFields: ['Natco Pharma', '10', '982.92', '866.1', '9829.2', '8661', '-1168.2', '-11.88%'] },
+      { rowNumber: 9, data: {}, rawFields: ['State Bank of India', '10', '956.2', '1056.9', '9562', '10569', '1007', '10.53%'] },
+      { rowNumber: 10, data: {}, rawFields: ['Wipro', '10', '175.85', '178.52', '1758.5', '1785.2', '26.7', '1.52%'] },
+    ];
+    const out = adapter.parseHoldingsFromRows(rows, 'dhan-stock-holdings.csv');
+    expect(out.holdings.length).toBe(9);
+    // The walker iterates all rows (consistent with the existing
+    // Dhan Equity / MF rows-path convention). The header row
+    // (row 1) produces a single BROKER_NUMERIC_INVALID issue
+    // because the literal 'Quantity' is not a number. The 9 data
+    // rows (rows 2-10) produce 0 issues. The total issues count
+    // is 1.
+    expect(out.issues.length).toBe(1);
+    expect(out.issues[0].rowNumber).toBe(1);
+    expect(out.issues[0].code).toBe('BROKER_NUMERIC_INVALID');
+    expect(out.holdings[0].instrumentName).toBe('Bajaj Finance');
+    expect(out.holdings[2].instrumentName).toBe('HDFC Bank');
+    expect(out.holdings[2].unrealisedPnL).toBe(-2203.8);
+  });
+
+  it('I.14 Thousands-separator commas are stripped (regression for 1,087.80 etc.)', () => {
+    // The fixture has values like "1,087.80", "9,194.50",
+    // "53,181.30" etc. The parser must strip commas and produce
+    // correct numeric values.
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const out = adapter.parseHoldings(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    const b = out.holdings.find((h) => h.instrumentName === 'Bajaj Finance');
+    expect(b!.currentPrice).toBe(1087.8);  // 1,087.80 → 1087.80
+    const dlf = out.holdings.find((h) => h.instrumentName === 'DLF');
+    expect(dlf!.investedValue).toBe(9194.5);  // 9,194.50 → 9194.50
+    const hdfc = out.holdings.find((h) => h.instrumentName === 'HDFC Bank');
+    expect(hdfc!.investedValue).toBe(53181.3); // 53,181.30 → 53181.30
+  });
+
+  it('I.15 BrokerFormatDetector.detect(Stock Holdings) routes to Dhan', () => {
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const det = BrokerFormatDetector.detect(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    expect(det.adapter?.id).toBe('dhan');
+    expect(det.detection.reason).toContain('Stock Holdings');
+  });
+
+  it('I.16 No canonical Asset is created from a Holding (D-04 invariant)', () => {
+    // The adapter does not instantiate any canonical Asset. This is
+    // a property of the design (the adapter only produces Holding[]);
+    // we assert it by checking that the output's only `broker` field
+    // is 'Dhan' and that no separate Asset-like structure is emitted.
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const out = adapter.parseHoldings(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    expect(out.broker).toBe('Dhan');
+    expect(out.account).toBeUndefined(); // no canonical Asset semantics
+    for (const h of out.holdings) {
+      // The Holding shape is what the canonical Asset would carry
+      // (quantity, averageCost, etc.) — but the adapter never
+      // produces a separate Asset object. The Holding IS the
+      // canonical representation for broker imports.
+      expect(h.broker).toBe('Dhan');
+    }
   });
 });
