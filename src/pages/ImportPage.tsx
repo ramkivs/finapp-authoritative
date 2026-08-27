@@ -3,6 +3,8 @@ import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { ImportBatchRollbackService, ImportBatchSummary } from '../services/ImportBatchRollbackService';
 import { ImportPipelineService, CSVImportResult } from '../services/ImportPipelineService';
 import { ImportHistoryService, ImportHistoryEntry } from '../services/ImportHistoryService';
+import { DividendClassifier, DividendClassificationResult, DividendClassifyAllResult } from '../services/DividendClassifier';
+import { Transaction } from '../domain/types';
 import { BrokerImportSection } from './BrokerImportSection';
 import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -53,6 +55,35 @@ export const ImportPage: React.FC = () => {
   const [selectedFileName, setSelectedFileName] = useState<string>('Simulated_Statement.csv');
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // FINBOOM-CR-TRANSACTION-CLASSIFICATION — per-row user override map.
+  // The user can override the classifier's per-row category via a
+  // per-row `<select>` in the Review surface. The override is held
+  // here in local component state. The override is NOT applied to
+  // importResult.validRows directly on `<select>` change; instead, it
+  // is merged into importResult.validRows in `handleCommit` (see
+  // below) so that the `importResult` array passed to
+  // `commitImportedRows` is the canonical, override-merged array.
+  // This is the only safe pattern: the classifier must not be re-run
+  // on the override; the override must not be stored in a separate
+  // path that the commit can forget; the override must survive all
+  // the way through the commit.
+  const [categoryOverrides, setCategoryOverrides] = useState<Record<string, string>>({});
+
+  // FINBOOM-CR-TRANSACTION-CLASSIFICATION — per-row MEDIUM-confirmation
+  // map. When a row has a MEDIUM classification, the user must
+  // explicitly confirm it (by checking a per-row checkbox) to upgrade
+  // the row's `category` to 'DIVIDEND'. The confirmation is held here.
+  // The upgrade is applied to the override map (which is then merged
+  // into validRows at commit time).
+  const [mediumConfirmations, setMediumConfirmations] = useState<Record<string, boolean>>({});
+
+  // FINBOOM-CR-TRANSACTION-CLASSIFICATION — the classifier's per-row
+  // result, parallel to importResult.validRows. Used by the Review
+  // surface to render the per-row chip, the MEDIUM checkbox, the
+  // per-row `<select>`, and the import-level summary line. Reset
+  // whenever a new import is processed.
+  const [classification, setClassification] = useState<DividendClassificationResult[] | null>(null);
 
   const { transactions, commitImportedRows, rollbackImportBatch, restoreImportBatch } = useCanonicalLedger();
 
@@ -180,7 +211,18 @@ export const ImportPage: React.FC = () => {
 
   const runPipeline = (csvText: string, fileName: string) => {
     const result = ImportPipelineService.processCSV(csvText, transactions, selectedBank, fileName);
-    setImportResult(result);
+    // FINBOOM-CR-TRANSACTION-CLASSIFICATION — apply the classifier to
+    // the validRows BEFORE setting importResult. The classifier is a
+    // pure transformation that may upgrade some rows'
+    // `category: 'GENERAL'` to `category: 'DIVIDEND'`. The classifier
+    // is forward-only; it never mutates the input array (it returns
+    // a new array with shallow-copied elements for upgrades and
+    // identity-preserved references for no-ops).
+    const classified: DividendClassifyAllResult = DividendClassifier.classifyAll(result.validRows);
+    setImportResult({ ...result, validRows: classified.rows });
+    setClassification(classified.perRow);
+    setCategoryOverrides({});
+    setMediumConfirmations({});
     setSelectedFileName(fileName);
     setShowReview(true);
     setShowDiagnostics(result.unsupportedFormat || (result.invalidRows && result.invalidRows.length > 0) || (result.ambiguousRows && result.ambiguousRows.length > 0));
@@ -202,7 +244,13 @@ export const ImportPage: React.FC = () => {
         if (buffer) {
           const bytes = new Uint8Array(buffer);
           const result = ImportPipelineService.processBinaryFile(bytes, transactions, selectedBank, file.name);
-          setImportResult(result);
+          // FINBOOM-CR-TRANSACTION-CLASSIFICATION — apply the
+          // classifier to the validRows BEFORE setting importResult.
+          const classified: DividendClassifyAllResult = DividendClassifier.classifyAll(result.validRows);
+          setImportResult({ ...result, validRows: classified.rows });
+          setClassification(classified.perRow);
+          setCategoryOverrides({});
+          setMediumConfirmations({});
           setSelectedFileName(file.name);
           setShowReview(true);
           setShowDiagnostics(result.unsupportedFormat || (result.invalidRows && result.invalidRows.length > 0) || (result.ambiguousRows && result.ambiguousRows.length > 0));
@@ -238,12 +286,49 @@ export const ImportPage: React.FC = () => {
   const handleCommit = async () => {
     if (!importResult || commitBusy) return;
     setCommitNotice(null);
+
+    // FINBOOM-CR-TRANSACTION-CLASSIFICATION — apply the per-row
+    // override map to importResult.validRows BEFORE calling
+    // commitImportedRows. The override merge covers:
+    //
+    //   1. The per-row `<select>` override (the user flipped a row to
+    //      a different category — e.g. flipped a HIGH to GENERAL, or
+    //      manually picked DIVIDEND on an unflagged row).
+    //   2. The per-row MEDIUM-confirmation checkbox (the user
+    //      confirmed a MEDIUM row, which upgrades it to DIVIDEND).
+    //
+    // Both sources write to `categoryOverrides` (the single source
+    // of override truth). The override-merged `validRows` is the
+    // canonical array passed to `commitImportedRows`. The override
+    // survives all the way through the commit. The classifier is
+    // NOT re-run here; the override is the user's authoritative
+    // choice.
+    const validRowsWithOverrides: Transaction[] = importResult.validRows.map((r) => {
+      // Build the effective override for this row, checking the
+      // per-row `<select>` first and then the per-row MEDIUM
+      // confirmation (which is a special case of "override to
+      // DIVIDEND").
+      let effectiveOverride: string | undefined = categoryOverrides[r.id];
+      if (effectiveOverride === undefined && classification) {
+        // The per-row MEDIUM checkbox promotes the row to DIVIDEND.
+        // This is conditional on the classifier having produced a
+        // MEDIUM result for this row (defence-in-depth: the
+        // checkbox is only meaningful for MEDIUM rows).
+        const perRow = classification.find((c) => c.candidate.id === r.id);
+        if (perRow && perRow.confidence === 'MEDIUM' && mediumConfirmations[r.id]) {
+          effectiveOverride = 'DIVIDEND';
+        }
+      }
+      if (effectiveOverride === undefined) return r;
+      return { ...r, category: effectiveOverride };
+    });
+
     const {
       appended, duplicates, divergentDuplicates,
       rejectedTransferRows, rejectedTransferReasons,
       rejectedDuplicateIdRows, rejectedDuplicateIdReasons,
       persisted
-    } = commitImportedRows(importResult.validRows);
+    } = commitImportedRows(validRowsWithOverrides);
 
     setCommitBusy(true);
     try {
@@ -273,6 +358,13 @@ export const ImportPage: React.FC = () => {
 
     setShowReview(false);
     setImportResult(null);
+    // FINBOOM-CR-TRANSACTION-CLASSIFICATION — clear the per-row
+    // override state and the classifier result on a successful
+    // commit. The next import will produce a fresh classification
+    // and a fresh override map.
+    setClassification(null);
+    setCategoryOverrides({});
+    setMediumConfirmations({});
     // WP-FB-DATA-06a: an excluded row may be reported, but never silently dropped.
     const divergentNote = divergentDuplicates > 0
       ? ` Note: ${divergentDuplicates} of the excluded duplicates disagreed with the stored row on direction/type; those differences were NOT applied.`
@@ -710,6 +802,29 @@ export const ImportPage: React.FC = () => {
                     <AlertTriangle size={16} className="text-amber-600" />
                     <span><strong>{importResult.duplicateCount} Duplicates Flagged</strong> (Matching existing fingerprint Set, automatically skipped)</span>
                   </div>
+                  {/* FINBOOM-CR-TRANSACTION-CLASSIFICATION — import-level
+                      classification summary. Visible only when the
+                      classifier has produced a result. Shows the
+                      number of rows classified as DIVIDEND (HIGH),
+                      pending confirmation (MEDIUM), and rejected by a
+                      negative rule. */}
+                  {classification && (() => {
+                    const high = classification.filter((c) => c.confidence === 'HIGH').length;
+                    const medium = classification.filter((c) => c.confidence === 'MEDIUM').length;
+                    const rejected = classification.filter((c) => c.ruleId !== null && c.confidence === 'NONE').length;
+                    return (
+                      <div
+                        className="flex items-center gap-2"
+                        data-testid="dividend-classification-summary"
+                      >
+                        <FileText size={16} className="text-blue-600" />
+                        <span>
+                          <strong>{high} rows classified as Dividend</strong>
+                          {' '}({high} HIGH{medium > 0 ? `, ${medium} MEDIUM pending confirmation` : ''}{rejected > 0 ? `, ${rejected} rejected as non-dividend` : ''})
+                        </span>
+                      </div>
+                    );
+                  })()}
                   {importResult.divergentDuplicateCount > 0 && (
                     <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950/40">
                       <div className="flex items-start gap-2">
@@ -796,6 +911,111 @@ export const ImportPage: React.FC = () => {
                         </table>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* FINBOOM-CR-TRANSACTION-CLASSIFICATION — per-row
+                    override UI. Rendered as a compact table under the
+                    import-level summary. Each row shows:
+                      - the row's narration
+                      - a classification chip (HIGH/MEDIUM/GENERAL) with
+                        the rule id
+                      - a per-row `<select>` for the user's category
+                        override
+                      - a per-row MEDIUM-confirmation checkbox (only
+                        meaningful for MEDIUM rows) */}
+                {classification && classification.length > 0 && (
+                  <div className="mt-4 border-t border-gray-200 dark:border-gray-800 pt-3">
+                    <h4 className="font-bold text-sm text-gray-900 dark:text-white mb-2">
+                      Dividend Classification Per-Row Override
+                    </h4>
+                    <div className="max-h-64 overflow-y-auto rounded border border-gray-200 dark:border-gray-800">
+                      <table
+                        className="w-full text-xs"
+                        data-testid="dividend-classification-table"
+                      >
+                        <thead className="bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400 font-bold sticky top-0">
+                          <tr>
+                            <th className="text-left py-1.5 px-2">Row</th>
+                            <th className="text-left py-1.5 px-2">Narration</th>
+                            <th className="text-left py-1.5 px-2">Classification</th>
+                            <th className="text-left py-1.5 px-2">Override (Category)</th>
+                            <th className="text-left py-1.5 px-2">Confirm</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-gray-800 text-gray-700 dark:text-gray-300">
+                          {importResult.validRows.map((r, idx) => {
+                            const perRow = classification[idx];
+                            const conf = perRow ? perRow.confidence : 'NONE';
+                            const ruleId = perRow ? perRow.ruleId : null;
+                            const currentOverride = categoryOverrides[r.id] !== undefined
+                              ? categoryOverrides[r.id]
+                              : r.category;
+                            return (
+                              <tr key={r.id} data-testid={`classification-row-${r.id}`}>
+                                <td className="py-1.5 px-2 font-mono">{idx + 1}</td>
+                                <td className="py-1.5 px-2 truncate max-w-[280px]">{r.narration}</td>
+                                <td className="py-1.5 px-2">
+                                  <span
+                                    data-classification={conf}
+                                    data-rule-id={ruleId ?? ''}
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                      conf === 'HIGH'
+                                        ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
+                                        : conf === 'MEDIUM'
+                                        ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
+                                        : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                                    }`}
+                                  >
+                                    {conf}
+                                    {ruleId ? ` · ${ruleId}` : ''}
+                                  </span>
+                                </td>
+                                <td className="py-1.5 px-2">
+                                  <select
+                                    data-row-category={r.id}
+                                    value={currentOverride}
+                                    onChange={(e) => {
+                                      const newValue = e.target.value;
+                                      setCategoryOverrides((prev) => {
+                                        if (newValue === r.category) {
+                                          const { [r.id]: _, ...rest } = prev;
+                                          return rest;
+                                        }
+                                        return { ...prev, [r.id]: newValue };
+                                      });
+                                    }}
+                                    className="text-xs px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800"
+                                  >
+                                    <option value="GENERAL">GENERAL</option>
+                                    <option value="DIVIDEND">DIVIDEND</option>
+                                    <option value="SALARY">SALARY</option>
+                                    <option value="BONUS">BONUS</option>
+                                    <option value="INVESTMENT">INVESTMENT</option>
+                                    <option value="OTHER">OTHER</option>
+                                  </select>
+                                </td>
+                                <td className="py-1.5 px-2">
+                                  {conf === 'MEDIUM' && (
+                                    <input
+                                      type="checkbox"
+                                      data-confirm-dividend={r.id}
+                                      checked={!!mediumConfirmations[r.id]}
+                                      onChange={(e) => {
+                                        setMediumConfirmations((prev) => ({
+                                          ...prev,
+                                          [r.id]: e.target.checked,
+                                        }));
+                                      }}
+                                    />
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
 
