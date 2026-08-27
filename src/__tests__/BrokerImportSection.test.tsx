@@ -62,24 +62,35 @@ afterEach(async () => {
   cleanup();
 });
 
-describe('WP-09 BrokerImportSection — upload view', () => {
-  it('UI.1 UploadView renders without throwing — broker import heading + file input are present', () => {
+describe('WP-09 BrokerImportSection — 4-step upload view (smoke)', () => {
+  it('UI.1 4-step structure renders: Choose Broker, How to Export, Prepare Your File, Upload File', () => {
     render(<BrokerImportSection />);
-    // The "Broker Import" heading is present (matches the upload view).
-    expect(screen.getByText(/Broker Import/i)).toBeTruthy();
-    // The file input is present.
+    // Step 1: Choose Broker
+    expect(screen.getByText('Step 1: Choose Broker')).toBeTruthy();
+    // Step 2: How to Export from <Selected Broker>
+    // (initial selection is Zerodha, per the approved plan)
+    expect(screen.getByTestId('broker-step-2-title').textContent).toMatch(/How to Export from Zerodha/);
+    // Step 3: Prepare Your File
+    expect(screen.getByText('Step 3: Prepare Your File')).toBeTruthy();
+    // Step 4: Upload File
+    expect(screen.getByText('Step 4: Upload File')).toBeTruthy();
+    // The file input is present in Step 4.
     const fileInput = document.querySelector('input[type="file"]');
     expect(fileInput).not.toBeNull();
   });
 
-  it('UI.2 UploadView describes the supported broker/file formats in the helper text', () => {
+  it('UI.2 The 4 supported brokers are present and Zerodha is the default selection', () => {
     render(<BrokerImportSection />);
-    // The helper text lists the supported combinations. The
-    // heading and the helper text both mention broker names;
-    // getAllByText is appropriate.
-    expect(screen.getAllByText(/Zerodha/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Groww/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Dhan/i).length).toBeGreaterThan(0);
+    const expected = ['Zerodha', 'Groww', 'Dhan', 'Angel One'];
+    for (const b of expected) {
+      const btn = screen.getByTestId(`broker-institution-${b}`);
+      expect(btn).toBeTruthy();
+      if (b === 'Zerodha') {
+        expect(btn.getAttribute('aria-selected')).toBe('true');
+      } else {
+        expect(btn.getAttribute('aria-selected')).toBe('false');
+      }
+    }
   });
 });
 
@@ -96,8 +107,9 @@ describe('WP-09 BrokerImportSection — preview view (count chips)', () => {
     // the WP-08 tests already. For the smoke test, we assert
     // the upload view is rendered (this is the initial state).
     render(<BrokerImportSection />);
-    // Upload view is the initial state.
-    expect(screen.getByText(/Broker Import/i)).toBeTruthy();
+    // The new initial state exposes the 4-step structure; the
+    // file input is still the primary affordance.
+    expect(document.querySelector('input[type="file"]')).not.toBeNull();
   });
 });
 

@@ -16,9 +16,25 @@
  * The component is read-only with respect to the store's `holdings` slice
  * during preview (it reads it via `getState()` at preview-build time, but
  * does not mutate it). The commit step is the only mutation.
+ *
+ * FINBOOM Broker/Bank Import UI — 4-step guided structure
+ * ------------------------------------------------------
+ * Step 1: Choose Broker  (Zerodha | Groww | Dhan | Angel One)
+ * Step 2: How to Export from <Selected Broker>  (static, verbatim from spec)
+ * Step 3: Prepare Your File  (broker-specific supported-format guidance)
+ * Step 4: Upload File  (existing content-based detection)
+ *
+ * The broker selector is component-local. Switching the selected broker
+ * while a preview is active clears the preview, the raw error, the
+ * commit notice, the parser-issues display, and the file input value.
+ * No commit is issued during broker switching.
+ *
+ * Detection remains content-based and authoritative; the broker selector
+ * is a UI affordance that surfaces the matching export/preparation
+ * guidance — it does not constrain the accepted file types.
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Upload, CheckCircle2, AlertTriangle, XCircle, FileText, ChevronDown, ChevronUp, ShieldAlert, Trash2 } from 'lucide-react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { BrokerImportService, BrokerImportPreview, BrokerImportPreviewEntry, BrokerImportPreviewClosure } from '../services/BrokerImportService';
@@ -37,6 +53,170 @@ function isBinarySpreadsheet(name: string): boolean {
   return lower.endsWith('.xls') || lower.endsWith('.xlsx');
 }
 
+/** The four supported broker keys, exactly as required by the spec. */
+type SupportedBroker = 'Zerodha' | 'Groww' | 'Dhan' | 'Angel One';
+const SUPPORTED_BROKERS: readonly SupportedBroker[] = ['Zerodha', 'Groww', 'Dhan', 'Angel One'];
+
+/**
+ * Verbatim static copy from the FINBOOM UI spec §7-10.
+ * Displayed in Step 2 of the Broker Import flow. Keyed by the selected broker.
+ * This copy is informational and does not call any broker / fetch / authenticate.
+ */
+const BROKER_EXPORT_GUIDANCE: Record<SupportedBroker, { title: string; body: React.ReactNode }> = {
+  Zerodha: {
+    title: 'How to Export from Zerodha',
+    body: (
+      <>
+        <h4 className="text-sm font-semibold text-[#F0F6FC] mt-1">Option 1: Kite Web (CSV)</h4>
+        <ol className="list-decimal list-inside text-sm text-[#8B949E] space-y-1 mt-1">
+          <li>Login to kite.zerodha.com</li>
+          <li>Go to Holdings</li>
+          <li>Click the download icon to download the CSV file</li>
+          <li>Upload the downloaded file below</li>
+        </ol>
+        <h4 className="text-sm font-semibold text-[#F0F6FC] mt-3">Option 2: Console (XLSX)</h4>
+        <ol className="list-decimal list-inside text-sm text-[#8B949E] space-y-1 mt-1">
+          <li>Login to console.zerodha.com</li>
+          <li>Go to Portfolio → Holdings</li>
+          <li>Click the download icon (top right) to download the XLSX file</li>
+          <li>Upload the downloaded file below</li>
+        </ol>
+        <p className="text-sm text-[#8B949E] mt-3">
+          Supports both equity and mutual fund holdings from either format.
+        </p>
+      </>
+    ),
+  },
+  Groww: {
+    title: 'How to Export from Groww',
+    body: (
+      <>
+        <h4 className="text-sm font-semibold text-[#F0F6FC] mt-1">For Mutual Fund Holdings:</h4>
+        <ol className="list-decimal list-inside text-sm text-[#8B949E] space-y-1 mt-1">
+          <li>Login to groww.in or open the Groww app</li>
+          <li>Click on your profile photo (top right)</li>
+          <li>Click Reports</li>
+          <li>Go to Holdings → Mutual Funds Holdings Statement</li>
+          <li>Click Download on the right side</li>
+          <li>Upload the downloaded XLSX file below</li>
+        </ol>
+        <h4 className="text-sm font-semibold text-[#F0F6FC] mt-3">For Stock Holdings:</h4>
+        <ol className="list-decimal list-inside text-sm text-[#8B949E] space-y-1 mt-1">
+          <li>Login to groww.in or open the Groww app</li>
+          <li>Click on your profile photo (top right)</li>
+          <li>Click Reports</li>
+          <li>Go to Holdings → Stock Holdings Statement</li>
+          <li>Click Download on the right side</li>
+          <li>Upload the downloaded XLSX file below</li>
+        </ol>
+        <p className="text-sm text-[#8B949E] mt-3">
+          Upload one file at a time — stocks and mutual funds are imported separately.
+        </p>
+      </>
+    ),
+  },
+  Dhan: {
+    title: 'How to Export from Dhan',
+    body: (
+      <>
+        <p className="text-sm text-[#8B949E] mt-1">
+          Dhan publishes one holdings report, the Demat Holding Summary, and
+          offers it as either a spreadsheet or a PDF. Both carry the same
+          holdings, so upload whichever you have.
+        </p>
+        <ol className="list-decimal list-inside text-sm text-[#8B949E] space-y-1 mt-1">
+          <li>Open the Dhan app, or log in to web.dhan.co</li>
+          <li>Find your reports and statements, and open Demat Holding Summary</li>
+          <li>Download it as Excel or PDF and upload the file below</li>
+        </ol>
+        <p className="text-sm text-[#8B949E] mt-3">
+          The statement is issued by Raise Securities, Dhan&apos;s broking arm, and
+          covers your CDSL demat account. It carries quantities and the latest NSE
+          closing prices but no buy price at all, so add invested amounts after
+          importing.
+        </p>
+        <p className="text-sm text-[#8B949E] mt-2">
+          Pledged and MTF units are counted in the quantity, so a holding can read
+          higher here than the tradable balance the Dhan app shows.
+        </p>
+      </>
+    ),
+  },
+  'Angel One': {
+    title: 'How to Export from Angel One',
+    body: (
+      <>
+        <ol className="list-decimal list-inside text-sm text-[#8B949E] space-y-1 mt-1">
+          <li>Login to trade.angelone.in or open the Angel One app</li>
+          <li>Go to Portfolio</li>
+          <li>You&apos;ll see tabs for Equity, Mutual Funds, and SGB. Open any one (bonds show up under the SGB tab)</li>
+          <li>Click the download icon (top right) to download your statement</li>
+          <li>Upload the downloaded XLSX file below</li>
+        </ol>
+        <p className="text-sm text-[#8B949E] mt-3">
+          The download always includes every segment (Equity, Mutual Funds, SGB,
+          and Bonds) in one file, no matter which tab you were on when you clicked
+          download.
+        </p>
+        <h4 className="text-sm font-semibold text-[#F0F6FC] mt-3">Password-protected file?</h4>
+        <p className="text-sm text-[#8B949E] mt-1">
+          Angel One may password-protect the download. Open the file in Excel or
+          Google Sheets, enter the password, then re-save it as a new XLSX file
+          without a password before uploading.
+        </p>
+      </>
+    ),
+  },
+};
+
+/**
+ * Broker-specific supported-format / preparation guidance for Step 3.
+ * Distinct from Step 2 (which is "how to obtain the file").
+ * Step 3 is "what to verify before uploading".
+ *
+ * Content is broker-specific. No fictional "Download Template" capability
+ * is introduced; the guidance is purely informational.
+ */
+const BROKER_PREPARE_GUIDANCE: Record<SupportedBroker, { formats: string; notes: React.ReactNode }> = {
+  Zerodha: {
+    formats: 'CSV (Kite Web) or XLSX (Console). Detection is content-based — filename is not used.',
+    notes: (
+      <ul className="list-disc list-inside text-sm text-[#8B949E] space-y-1">
+        <li>Upload the file exactly as the broker exports it. Do not edit column headers.</li>
+        <li>Both equity and mutual fund holdings are accepted from either format.</li>
+      </ul>
+    ),
+  },
+  Groww: {
+    formats: 'XLSX only. Upload one file at a time — Stocks and Mutual Funds are imported separately.',
+    notes: (
+      <ul className="list-disc list-inside text-sm text-[#8B949E] space-y-1">
+        <li>Upload the file exactly as the broker exports it. Do not convert to CSV.</li>
+        <li>Detection is content-based — pick the file that matches the report you downloaded.</li>
+      </ul>
+    ),
+  },
+  Dhan: {
+    formats: 'Excel or PDF (Demat Holding Summary). Detection is content-based.',
+    notes: (
+      <ul className="list-disc list-inside text-sm text-[#8B949E] space-y-1">
+        <li>The statement is issued by Raise Securities (Dhan&apos;s broking arm) and covers your CDSL demat account.</li>
+        <li>No buy price is included — add invested amounts after importing if needed.</li>
+        <li>Pledged and MTF units are counted in the quantity — the imported quantity may be higher than the tradable balance the Dhan app shows.</li>
+      </ul>
+    ),
+  },
+  'Angel One': {
+    formats: 'XLSX (Portfolio → Holding Details). Detection is content-based.',
+    notes: (
+      <ul className="list-disc list-inside text-sm text-[#8B949E] space-y-1">
+        <li>The download always includes every segment (Equity, Mutual Funds, SGB, Bonds) in one file, regardless of which tab you were on when you clicked download.</li>
+        <li>If the file is password-protected: open it in Excel or Google Sheets, enter the password, then re-save it as a new XLSX without a password before uploading.</li>
+      </ul>
+    ),
+  },
+};
+
 export const BrokerImportSection: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { holdings, commitImportedHoldings } = useCanonicalLedger();
@@ -46,6 +226,33 @@ export const BrokerImportSection: React.FC = () => {
   const [rawError, setRawError] = useState<string | null>(null);
   const [commitNotice, setCommitNotice] = useState<CommitNotice | null>(null);
   const [showParserIssues, setShowParserIssues] = useState(false);
+
+  // Step 1 — broker selector. Component-local state. Default: Zerodha.
+  const [selectedBroker, setSelectedBroker] = useState<SupportedBroker>('Zerodha');
+
+  /**
+   * Broker-switch reset. When the user changes the selected broker
+   * AND a preview / commit-notice / raw-error / parser-issues state
+   * is in flight, clear it. This is the same set of clears that
+   * `handleCancel` performs (per the file's existing cancel semantics).
+   * The file input's value is reset so the next selection starts clean.
+   *
+   * Intentionally dependent ONLY on `selectedBroker` (not on `preview`),
+   * so the effect fires only when the broker changes — not on every
+   * preview update.
+   */
+  useEffect(() => {
+    if (preview || commitNotice || rawError || showParserIssues) {
+      setPreview(null);
+      setRawError(null);
+      setCommitNotice(null);
+      setShowParserIssues(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBroker]);
 
   /**
    * Read the selected file, detect + parse, and produce a preview.
@@ -233,6 +440,13 @@ export const BrokerImportSection: React.FC = () => {
   if (preview) {
     return (
       <>
+        {/* Step 1: Choose Broker (always visible, even during preview) */}
+        <BrokerStep1 selectedBroker={selectedBroker} onSelect={setSelectedBroker} />
+        {/* Step 2: How to Export from <Selected Broker> (always visible) */}
+        <BrokerStep2 broker={selectedBroker} />
+        {/* Step 3: Prepare Your File (always visible) */}
+        <BrokerStep3 broker={selectedBroker} />
+        {/* Step 4: Upload File → preview replaces the file input */}
         <PreviewView
           preview={preview}
           busy={busy}
@@ -240,6 +454,7 @@ export const BrokerImportSection: React.FC = () => {
           onToggleParserIssues={() => setShowParserIssues((v) => !v)}
           onConfirm={handleConfirm}
           onCancel={handleCancelWithHistory}
+          selectedBroker={selectedBroker}
         />
         {noticeNode}
       </>
@@ -248,11 +463,19 @@ export const BrokerImportSection: React.FC = () => {
 
   return (
     <>
+      {/* Step 1: Choose Broker (always visible) */}
+      <BrokerStep1 selectedBroker={selectedBroker} onSelect={setSelectedBroker} />
+      {/* Step 2: How to Export from <Selected Broker> (always visible) */}
+      <BrokerStep2 broker={selectedBroker} />
+      {/* Step 3: Prepare Your File (always visible) */}
+      <BrokerStep3 broker={selectedBroker} />
+      {/* Step 4: Upload File (existing) */}
       <UploadView
         fileInputRef={fileInputRef}
         busy={busy}
         rawError={rawError}
         onFileChosen={handleFileChosen}
+        selectedBroker={selectedBroker}
       />
       {noticeNode}
     </>
@@ -263,21 +486,128 @@ export const BrokerImportSection: React.FC = () => {
 // Sub-views (kept in the same file to avoid splitting UI state across files)
 // ---------------------------------------------------------------------------
 
+/**
+ * Step 1 — Choose Broker.
+ * Renders the four broker buttons. The selected broker is visually
+ * distinct. Switching the broker while a preview is active triggers
+ * the broker-switch reset (per the useEffect above).
+ */
+const BrokerStep1: React.FC<{
+  selectedBroker: SupportedBroker;
+  onSelect: (b: SupportedBroker) => void;
+}> = ({ selectedBroker, onSelect }) => {
+  return (
+    <section
+      data-testid="broker-step-1"
+      data-testid-broker-step="1"
+      className="rounded-lg border border-[#30363D] bg-[#161B22] p-4 mt-2"
+    >
+      <h2 className="text-lg font-semibold text-[#F0F6FC]">Step 1: Choose Broker</h2>
+      <div
+        role="tablist"
+        aria-label="Choose broker"
+        className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3"
+      >
+        {SUPPORTED_BROKERS.map((b) => {
+          const active = selectedBroker === b;
+          return (
+            <button
+              key={b}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              aria-pressed={active}
+              data-testid={`broker-institution-${b}`}
+              onClick={() => onSelect(b)}
+              className={`py-3 px-3 rounded-xl border text-sm font-bold transition ${
+                active
+                  ? 'bg-green-50 dark:bg-green-900/30 border-green-600 text-green-700 dark:text-green-400'
+                  : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              {b}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
+
+/**
+ * Step 2 — How to Export from <Selected Broker>.
+ * Renders the verbatim static copy from the FINBOOM UI spec §7-10,
+ * keyed by the currently selected broker. Switching the broker
+ * immediately replaces the rendered copy (the data is purely a
+ * function of `broker`).
+ */
+const BrokerStep2: React.FC<{ broker: SupportedBroker }> = ({ broker }) => {
+  const guidance = BROKER_EXPORT_GUIDANCE[broker];
+  return (
+    <section
+      data-testid="broker-step-2"
+      data-testid-broker-step="2"
+      data-broker-step-broker={broker}
+      className="rounded-lg border border-[#30363D] bg-[#161B22] p-4 mt-4"
+    >
+      <h2 className="text-lg font-semibold text-[#F0F6FC]" data-testid="broker-step-2-title">
+        Step 2: {guidance.title}
+      </h2>
+      <div className="mt-3" data-testid="broker-step-2-body">{guidance.body}</div>
+    </section>
+  );
+};
+
+/**
+ * Step 3 — Prepare Your File.
+ * Visibly labelled card (per FINBOOM UI spec). Renders broker-specific
+ * supported-format and preparation guidance. No fictional "Download
+ * Template" affordance is introduced; the guidance is informational.
+ *
+ * The content is keyed by the currently selected broker, so switching
+ * the broker immediately replaces the rendered notes.
+ */
+const BrokerStep3: React.FC<{ broker: SupportedBroker }> = ({ broker }) => {
+  const prep = BROKER_PREPARE_GUIDANCE[broker];
+  return (
+    <section
+      data-testid="broker-step-3"
+      data-testid-broker-step="3"
+      data-broker-step-broker={broker}
+      className="rounded-lg border border-[#30363D] bg-[#161B22] p-4 mt-4"
+    >
+      <h2 className="text-lg font-semibold text-[#F0F6FC]" data-testid="broker-step-3-title">
+        Step 3: Prepare Your File
+      </h2>
+      <p className="text-sm text-[#8B949E] mt-2" data-testid="broker-step-3-formats">
+        <strong className="text-[#F0F6FC]">Supported file type(s):</strong> {prep.formats}
+      </p>
+      <div className="mt-3" data-testid="broker-step-3-notes">{prep.notes}</div>
+    </section>
+  );
+};
+
 const UploadView: React.FC<{
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   busy: boolean;
   rawError: string | null;
   onFileChosen: (file: File) => void;
-}> = ({ fileInputRef, busy, rawError, onFileChosen }) => {
+  selectedBroker: SupportedBroker;
+}> = ({ fileInputRef, busy, rawError, onFileChosen, selectedBroker }) => {
   return (
-    <section className="rounded-lg border border-[#30363D] bg-[#161B22] p-4 mt-6">
+    <section
+      data-testid="broker-step-4"
+      data-testid-broker-step="4"
+      data-broker-step-broker={selectedBroker}
+      className="rounded-lg border border-[#30363D] bg-[#161B22] p-4 mt-4"
+    >
       <h2 className="text-lg font-semibold text-[#F0F6FC] flex items-center gap-2">
-        <FileText className="w-4 h-4" /> Broker Import (Zerodha / Groww / Dhan)
+        <FileText className="w-4 h-4" /> Step 4: Upload File
       </h2>
       <p className="text-sm text-[#8B949E] mt-2">
-        Upload a broker holdings file. Detection is content-based — filename is
-        not required. Supported: Zerodha Equity CSV, Groww Stocks XLSX, Groww
-        Mutual Funds XLSX, Dhan Equity CSV, Dhan Mutual Funds CSV/XLSX.
+        Upload your <strong className="text-[#F0F6FC]">{selectedBroker}</strong> broker file.
+        Detection is content-based — the file is matched to the correct
+        adapter from its header signature, not from the filename.
       </p>
       <div className="mt-4 flex items-center gap-3">
         <input
@@ -289,6 +619,7 @@ const UploadView: React.FC<{
             const f = e.target.files && e.target.files[0];
             if (f) onFileChosen(f);
           }}
+          data-testid="broker-file-input"
           className="block w-full text-sm text-[#F0F6FC] file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-[#21262D] file:text-[#F0F6FC] hover:file:bg-[#30363D] disabled:opacity-50"
         />
         {busy && (
@@ -317,12 +648,18 @@ const PreviewView: React.FC<{
   onToggleParserIssues: () => void;
   onConfirm: () => void;
   onCancel: () => void;
-}> = ({ preview, busy, showParserIssues, onToggleParserIssues, onConfirm, onCancel }) => {
+  selectedBroker: SupportedBroker;
+}> = ({ preview, busy, showParserIssues, onToggleParserIssues, onConfirm, onCancel, selectedBroker }) => {
   const canConfirm = preview.confirmationEligible && !busy;
   return (
-    <section className="rounded-lg border border-[#30363D] bg-[#161B22] p-4 mt-6">
+    <section
+      data-testid="broker-step-4"
+      data-testid-broker-step="4"
+      data-broker-step-broker={selectedBroker}
+      className="rounded-lg border border-[#30363D] bg-[#161B22] p-4 mt-4"
+    >
       <h2 className="text-lg font-semibold text-[#F0F6FC] flex items-center gap-2">
-        <ShieldAlert className="w-4 h-4" /> Broker Import — Preview
+        <ShieldAlert className="w-4 h-4" /> Step 4: Broker Import — Preview
       </h2>
       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-[#8B949E]">
         <div>

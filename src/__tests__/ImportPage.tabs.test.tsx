@@ -64,12 +64,25 @@ describe('B. Tab switching', () => {
     expect(document.querySelector('[data-testid="import-subtab-panel-bank"]')).toBeNull();
   });
 
-  it('B.3 tab buttons are reachable in the DOM in order: Broker, Bank', () => {
+  it('B.3 top-level import sub-tab buttons are reachable in the DOM in order: Broker, Bank', () => {
     render(<ImportPage />);
-    const tabs = [...document.querySelectorAll('[role="tab"]')];
-    expect(tabs).toHaveLength(2);
-    expect(tabs[0].getAttribute('data-testid')).toBe('import-subtab-broker');
-    expect(tabs[1].getAttribute('data-testid')).toBe('import-subtab-bank');
+    // The ImportPage now has THREE tablists (the top-level import sub-tabs
+    // + the bank-institution tablist + the broker-institution tablist, the
+    // last being inside BrokerImportSection). The original test asserted
+    // there were exactly 2 [role="tab"] elements; that assertion is no
+    // longer accurate. We instead target the top-level sub-tab buttons
+    // by their data-testid, which remains the unique identifier for the
+    // two import sub-tabs.
+    const brokerTab = document.querySelector('[data-testid="import-subtab-broker"]');
+    const bankTab = document.querySelector('[data-testid="import-subtab-bank"]');
+    expect(brokerTab).toBeTruthy();
+    expect(bankTab).toBeTruthy();
+    expect(brokerTab!.getAttribute('role')).toBe('tab');
+    expect(bankTab!.getAttribute('role')).toBe('tab');
+    // The broker tab appears first in the DOM
+    expect(
+      brokerTab!.compareDocumentPosition(bankTab as Node) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 });
 

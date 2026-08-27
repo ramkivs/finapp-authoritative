@@ -14,6 +14,15 @@ import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, Ch
  */
 type ImportSubTab = 'broker' | 'bank';
 
+/**
+ * FINBOOM Broker/Bank Import UI — the bank-section institution keys.
+ * Exactly 3 banks per the approved implementation authorization:
+ * HDFC Bank, ICICI Bank, SBI Bank. No brokers; no Generic CSV (it
+ * remains internally registered in the bank detection pipeline, but
+ * must not become a visible bank-institution button).
+ */
+type BankInstitution = 'HDFC Bank' | 'ICICI Bank' | 'SBI Bank';
+
 /** Returns true if the filename has a native binary spreadsheet extension */
 function isBinarySpreadsheet(name: string): boolean {
   const lower = name.toLowerCase();
@@ -34,7 +43,11 @@ export const ImportPage: React.FC = () => {
   // FINBOOM-CR (CR-04) — history panel collapsed by default.
   const [showHistory, setShowHistory] = useState(false);
 
-  const [selectedBroker, setSelectedBroker] = useState('Zerodha');
+  // FINBOOM Broker/Bank Import UI — the bank-section institution state
+  // is now correctly named `selectedBank` (was misleadingly `selectedBroker`).
+  // Default: 'HDFC Bank' (the bank with the strongest multi-indicator
+  // detection signature; matches the existing pre-populated SAMPLE_DEFAULT_CSV).
+  const [selectedBank, setSelectedBank] = useState<BankInstitution>('HDFC Bank');
   const [showReview, setShowReview] = useState(false);
   const [importResult, setImportResult] = useState<CSVImportResult | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string>('Simulated_Statement.csv');
@@ -157,13 +170,16 @@ export const ImportPage: React.FC = () => {
     }
   };
 
-  const brokers = [
-    'Zerodha', 'Groww', 'INDmoney', 'Upstox', 'ICICI Direct',
-    'CDSL', 'Angel One', 'HDFC Bank', 'SBI Bank', 'ICICI Bank'
-  ];
+  // FINBOOM Broker/Bank Import UI — the institution selector in the
+  // Bank Statement Import section now contains banks only. The
+  // pre-IMPLEMENTATION list (which mixed brokers and banks) has been
+  // replaced. The 4-step bank structure (Choose Account / Download
+  // Template / Prepare Your File / Upload File) is implemented in JSX
+  // below; this list populates Step 1.
+  const bankInstitutions: BankInstitution[] = ['HDFC Bank', 'ICICI Bank', 'SBI Bank'];
 
   const runPipeline = (csvText: string, fileName: string) => {
-    const result = ImportPipelineService.processCSV(csvText, transactions, selectedBroker, fileName);
+    const result = ImportPipelineService.processCSV(csvText, transactions, selectedBank, fileName);
     setImportResult(result);
     setSelectedFileName(fileName);
     setShowReview(true);
@@ -171,7 +187,7 @@ export const ImportPage: React.FC = () => {
   };
 
   const handleSimulate = () => {
-    runPipeline(SAMPLE_DEFAULT_CSV, `${selectedBroker}_Statement_Aug2026.csv`);
+    runPipeline(SAMPLE_DEFAULT_CSV, `${selectedBank}_Statement_Aug2026.csv`);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -185,7 +201,7 @@ export const ImportPage: React.FC = () => {
         const buffer = event.target?.result as ArrayBuffer;
         if (buffer) {
           const bytes = new Uint8Array(buffer);
-          const result = ImportPipelineService.processBinaryFile(bytes, transactions, selectedBroker, file.name);
+          const result = ImportPipelineService.processBinaryFile(bytes, transactions, selectedBank, file.name);
           setImportResult(result);
           setSelectedFileName(file.name);
           setShowReview(true);
@@ -238,7 +254,7 @@ export const ImportPage: React.FC = () => {
       // CR-04: record the failed bank import.
       ImportHistoryService.record({
         importType: 'BANK_STATEMENT',
-        institution: selectedBroker,
+        institution: selectedBank,
         sourceFilename: selectedFileName,
         result: 'failure',
         processedCount: importResult.totalDetected,
@@ -287,7 +303,7 @@ export const ImportPage: React.FC = () => {
       totalRejected === 0 ? 'success' : (appended === 0 ? 'failure' : 'partial');
     ImportHistoryService.record({
       importType: 'BANK_STATEMENT',
-      institution: selectedBroker,
+      institution: selectedBank,
       sourceFilename: selectedFileName,
       result,
       processedCount: importResult.totalDetected,
@@ -396,17 +412,30 @@ export const ImportPage: React.FC = () => {
       )}
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-sm">
-        <h3 className="font-bold text-gray-900 dark:text-white text-base mb-4">
-          Select Institution (18+ Supported Brokerages & Indian Banks)
+        {/* Step 1: Choose Account (banks only) */}
+        <h3
+          className="font-bold text-gray-900 dark:text-white text-base mb-4"
+          data-testid="bank-step-1"
+          data-testid-bank-step="1"
+        >
+          Step 1: Choose Account
         </h3>
-
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
-          {brokers.map(b => {
-            const active = selectedBroker === b;
+        <div
+          role="tablist"
+          aria-label="Choose bank account"
+          className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6"
+        >
+          {bankInstitutions.map(b => {
+            const active = selectedBank === b;
             return (
               <button
                 key={b}
-                onClick={() => setSelectedBroker(b)}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                aria-pressed={active}
+                data-testid={`bank-institution-${b.replace(/ /g, '_')}`}
+                onClick={() => setSelectedBank(b)}
                 className={`py-3 px-3 rounded-xl border text-sm font-bold transition ${
                   active
                     ? 'bg-green-50 dark:bg-green-900/30 border-green-600 text-green-700 dark:text-green-400'
@@ -419,45 +448,78 @@ export const ImportPage: React.FC = () => {
           })}
         </div>
 
-        <input
-          type="file"
-          ref={fileInputRef}
-          onChange={handleFileUpload}
-          accept=".csv,.txt,.xls,.xlsx"
-          className="hidden"
-        />
-
-        <div
-          onClick={() => fileInputRef.current?.click()}
-          className="border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-2xl p-10 text-center bg-gray-50 dark:bg-gray-800/50 hover:border-green-600 cursor-pointer transition mb-4"
-        >
-          <Upload className="mx-auto mb-2 text-gray-400" size={32} />
-          <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-1">
-            Upload Statement File (.csv, .txt, .xls, .xlsx)
-          </h4>
-          <p className="text-sm text-gray-500 mb-5">
-            Native support for HDFC Bank, ICICI Bank, SBI Bank &amp; Generic CSV exports with deterministic fingerprint deduplication and formula sanitization.
+        {/* Step 2: Download Template (existing bank template affordance) */}
+        <div data-testid="bank-step-2" data-testid-bank-step="2" className="mt-6">
+          <h3 className="font-bold text-gray-900 dark:text-white text-base mb-2">
+            Step 2: Download Template
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Use your bank&apos;s official statement download (HDFC / ICICI / SBI
+            web portal, or net-banking). The statement will be detected
+            automatically by content.
           </p>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              fileInputRef.current?.click();
-            }}
-            className="px-5 py-2.5 rounded-lg bg-green-700 hover:bg-green-800 text-white font-bold text-sm shadow-sm mr-3"
+        </div>
+
+        {/* Step 3: Prepare Your File (bank-specific guidance) */}
+        <div data-testid="bank-step-3" data-testid-bank-step="3" className="mt-6">
+          <h3 className="font-bold text-gray-900 dark:text-white text-base mb-2">
+            Step 3: Prepare Your File
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            <strong>Supported file type(s):</strong> CSV (and XLS / XLSX via
+            the spreadsheet parser for SBI-style exports).
+          </p>
+          <ul className="list-disc list-inside text-sm text-gray-600 dark:text-gray-400 mt-2 space-y-1">
+            <li>Upload the file exactly as the bank exports it. Do not edit column headers.</li>
+            <li>Detection is content-based — multi-indicator signature matching — filename is not used.</li>
+            <li>Deterministic fingerprint deduplication and formula sanitization are applied automatically.</li>
+          </ul>
+        </div>
+
+        {/* Step 4: Upload File */}
+        <div data-testid="bank-step-4" data-testid-bank-step="4" className="mt-6">
+          <h3 className="font-bold text-gray-900 dark:text-white text-base mb-4">
+            Step 4: Upload File
+          </h3>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileUpload}
+            accept=".csv,.txt,.xls,.xlsx"
+            className="hidden"
+          />
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            className="border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-2xl p-10 text-center bg-gray-50 dark:bg-gray-800/50 hover:border-green-600 cursor-pointer transition mb-4"
           >
-            Select File (.csv, .txt, .xls, .xlsx)
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleSimulate();
-            }}
-            className="px-5 py-2.5 rounded-lg bg-gray-600 hover:bg-gray-700 text-white font-bold text-sm shadow-sm"
-          >
-            Simulate Upload
-          </button>
+            <Upload className="mx-auto mb-2 text-gray-400" size={32} />
+            <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-1">
+              Upload Statement File (.csv, .txt, .xls, .xlsx)
+            </h4>
+            <p className="text-sm text-gray-500 mb-5">
+              Native support for HDFC Bank, ICICI Bank, SBI Bank &amp; Generic CSV exports with deterministic fingerprint deduplication and formula sanitization.
+            </p>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                fileInputRef.current?.click();
+              }}
+              className="px-5 py-2.5 rounded-lg bg-green-700 hover:bg-green-800 text-white font-bold text-sm shadow-sm mr-3"
+            >
+              Select File (.csv, .txt, .xls, .xlsx)
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleSimulate();
+              }}
+              className="px-5 py-2.5 rounded-lg bg-gray-600 hover:bg-gray-700 text-white font-bold text-sm shadow-sm"
+            >
+              Simulate Upload
+            </button>
+          </div>
         </div>
 
         {/* WP-FB-DATA-06c-6a — Import history + rollback. Derived from persisted
