@@ -1169,3 +1169,134 @@ describe('I. FINBOOM-CR Variant D — Dhan Stock Holdings', () => {
     }
   });
 });
+
+// =========================================================================
+// J. UTF-8 BOM normalization regression (Dhan Equity text-header detection)
+//
+// Windows verification of the accepted Requirement #1 Standard Import
+// transport exposed a Dhan Equity CSV detection regression: the real
+// Sample 3 fixture (`dhan-equity-capstewengine.csv`) begins with a
+// UTF-8 BOM (EF BB BF) and the text-header detection path was returning
+// false because the first header cell surfaced as `\uFEFFInstrument`
+// instead of `Instrument`, defeating the EQUITY_HEADERS[0] case-insensitive
+// comparison.
+//
+// The fix is in `DhanHoldingsAdapter.firstNonEmptyLine`: strip a leading
+// UTF-8 BOM at the line-splitting boundary so the returned line is
+// BOM-free. The 8-column signature, full-column validation, and case-
+// insensitive comparison are UNCHANGED.
+//
+// These tests cover the seven regression groups required by the
+// FINBOOM — DHAN EQUITY BOM REGRESSION authority gate (§4 A–G).
+// =========================================================================
+
+describe('J. UTF-8 BOM normalization regression (Dhan Equity text-header detection)', () => {
+  // A. Real BOM fixture: the canonical Dhan Equity CSV with a UTF-8 BOM
+  // must be recognized by `DhanHoldingsAdapter.canHandle()`.
+  it('A. canHandle(real BOM-bearing Equity fixture) → matched=true, formatId=dhan', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_EQUITY_PATH);
+    // Sanity: the fixture really does begin with a UTF-8 BOM.
+    expect(csv.charCodeAt(0)).toBe(0xfeff);
+    const det = adapter.canHandle(asTextInput(csv, 'dhan holdings _capstewengine.csv'));
+    expect(det.matched).toBe(true);
+    expect(det.formatId).toBe('dhan');
+    expect(det.confidence).toBe('HIGH');
+  });
+
+  // B. BOM-free equivalent: the same valid eight-column header without a
+  // BOM must remain recognized (regression: the fix must not change
+  // the signature for files that do not have a BOM).
+  it('B. canHandle(BOM-free Equity header) → matched=true (regression: fix does not change non-BOM behavior)', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const withBom = loadText(SAMPLE_EQUITY_PATH);
+    // Strip the leading BOM, if present, to produce the BOM-free equivalent.
+    const bomFree = withBom.charCodeAt(0) === 0xfeff ? withBom.slice(1) : withBom;
+    expect(bomFree.charCodeAt(0)).not.toBe(0xfeff);
+    const det = adapter.canHandle(asTextInput(bomFree, 'dhan holdings _capstewengine.csv'));
+    expect(det.matched).toBe(true);
+    expect(det.formatId).toBe('dhan');
+    expect(det.reason).toContain('Equity');
+  });
+
+  // C. BrokerFormatDetector: a BOM-prefixed Dhan Equity CSV must be
+  // recognized as Dhan by `BrokerFormatDetector.detect()`.
+  it('C. BrokerFormatDetector.detect(BOM-bearing Equity CSV) → adapter=DhanHoldingsAdapter', () => {
+    const csv = loadText(SAMPLE_EQUITY_PATH);
+    expect(csv.charCodeAt(0)).toBe(0xfeff);
+    const { adapter, detection } = BrokerFormatDetector.detect(
+      asTextInput(csv, 'dhan holdings _capstewengine.csv')
+    );
+    expect(adapter).toBeInstanceOf(DhanHoldingsAdapter);
+    expect(detection.matched).toBe(true);
+    expect(detection.formatId).toBe('dhan');
+  });
+
+  // D. Full parsing: the real Dhan Equity fixture (BOM-bearing) must
+  // parse to the established 66-holdings output with the expected
+  // identity, quantity, average cost, LTP, P&L, invested, and current
+  // value semantics.
+  it('D. parseHoldings(real BOM-bearing Equity fixture) → 66 Holdings (regression: B.1 baseline)', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_EQUITY_PATH);
+    const out = adapter.parseHoldings(asTextInput(csv, 'dhan holdings _capstewengine.csv'));
+    expect(out.holdings).toHaveLength(66);
+    // Sanity on the first real Dhan Equity instrument: "AGI Greenpac"
+    // has 2 lots in the fixture (qty 1 @ 588.30 on 27-05-2026, and
+    // qty 1 @ 591.00 on 27-05-2026) which aggregate to qty=2,
+    // avg=(588.30+591.00)/2=589.65, LTP=706.00 (constant per instrument),
+    // invested=1179.30, current=1412.00, P&L=232.70.
+    const agi = out.holdings.find((h) => h.instrumentName === 'AGI Greenpac');
+    expect(agi).toBeDefined();
+    expect(agi!.quantity).toBe(2);
+    expect(agi!.averageCost).toBeCloseTo(589.65, 2);
+    expect(agi!.currentPrice).toBeCloseTo(706.00, 2);
+    expect(agi!.investedValue).toBeCloseTo(1179.30, 2);
+    expect(agi!.currentValue).toBeCloseTo(1412.00, 2);
+    expect(agi!.unrealisedPnL).toBeCloseTo(232.70, 2);
+  });
+
+  // E. Invalid extra column: an otherwise valid Dhan Equity header with
+  // an additional non-empty column must remain rejected. This proves the
+  // fix does NOT weaken the full-column validation.
+  it('E. canHandle(Equity header + 1 extra non-empty column) → matched=false (full-column validation intact)', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const validHeader = loadText(SAMPLE_EQUITY_PATH).split(/\r?\n/)[0]!.replace(/^\uFEFF/, '');
+    // Append a non-empty 9th column.
+    const withExtra = validHeader + ',ExtraColumn';
+    const det = adapter.canHandle(asTextInput(withExtra, 'invalid.csv'));
+    expect(det.matched).toBe(false);
+  });
+
+  // F. Dhan Stock Holdings regression: the CR Variant D fixture
+  // (double-quoted, `Name, ...` header) must remain detected as
+  // Stock Holdings, not Equity. The BOM fix must not change the
+  // Stock Holdings detection branch.
+  it('F. canHandle(Stock Holdings) still routes to Stock Holdings (CR Variant D regression)', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_STOCK_HOLDINGS_PATH);
+    const det = adapter.canHandle(asTextInput(csv, 'dhan-stock-holdings.csv'));
+    expect(det.matched).toBe(true);
+    expect(det.reason).toContain('Stock Holdings');
+  });
+
+  // G. Dhan Mutual Fund regression: both MF CSV and MF XLSX must remain
+  // recognized. The BOM fix is at the line-splitting boundary of
+  // `firstNonEmptyLine`; the MF path uses `findMfHeaderInText` which
+  // also splits lines, so we verify both formats continue to work.
+  it('G.1 canHandle(MF CSV) still routes to MF (regression: BOM fix must not break MF)', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const csv = loadText(SAMPLE_MF_CSV_PATH);
+    const det = adapter.canHandle(asTextInput(csv, 'Dhan_MF_Report_23-08-2026.csv'));
+    expect(det.matched).toBe(true);
+    expect(det.reason).toContain('Mutual Fund');
+  });
+
+  it('G.2 canHandle(MF XLSX binary) still routes to MF XLSX (regression)', () => {
+    const adapter = new DhanHoldingsAdapter();
+    const bytes = loadBytes(SAMPLE_MF_XLSX_PATH);
+    const det = adapter.canHandle(asBinaryInput(bytes, 'Dhan_MF_Report_23-08-2026.xlsx'));
+    expect(det.matched).toBe(true);
+    expect(det.reason).toContain('XLSX');
+  });
+});

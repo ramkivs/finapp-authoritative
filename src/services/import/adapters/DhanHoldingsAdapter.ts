@@ -2315,7 +2315,16 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
   }
 
   private firstNonEmptyLine(text: string): string | null {
-    const lines = (text || '').split(/\r?\n/);
+    let body = text || '';
+    // Normalize a leading UTF-8 BOM at the line-splitting boundary so the
+    // returned line is BOM-free. The BOM is a file-level artifact, not a
+    // line-level one, and `String.prototype.trim()` does not strip it.
+    // Without this, a Dhan Equity CSV exported with a BOM (the real
+    // Sample 3 fixture) would surface a first cell starting with
+    // \uFEFFInstrument, defeating the EQUITY_HEADERS[0] === 'Instrument'
+    // case-insensitive comparison in `matchesEquityHeader`.
+    if (body.charCodeAt(0) === 0xfeff) body = body.slice(1);
+    const lines = body.split(/\r?\n/);
     for (const line of lines) {
       if (line.trim().length > 0) return line;
     }
