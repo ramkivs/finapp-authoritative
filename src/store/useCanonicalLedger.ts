@@ -29,6 +29,7 @@ import { AccountAssetLinkService, LinkResult } from '../services/AccountAssetLin
 import { TransactionSignService } from '../services/TransactionSignService';
 import { BrokerImportService } from '../services/BrokerImportService';
 import { HoldingDeletionService } from '../services/HoldingDeletionService';
+import { AssetLifecycleService } from '../services/AssetLifecycleService';
 import { repository } from '../repositories';
 
 /**
@@ -183,6 +184,44 @@ interface LedgerState {
    * with a `persisted` promise for the caller to await.
    */
   commitImportedHoldings: (parsed: Holding[]) => ImportCommitOutcome;
+
+  /**
+   * FINBOOM-CR (CR-STANDARD-IMPORT) — Requirement #1 Standard Import commit.
+   *
+   * Sibling to `commitImportedRows` (Transaction[]) and
+   * `commitImportedHoldings` (Holding[]). This hook accepts the parsed
+   * `Asset[]` candidates from a confirmed Standard Import preview and
+   * commits them atomically via `MemoryRepository.write`.
+   *
+   * The hook does NOT perform the parse / validate / preview steps —
+   * those are the Standard Import panel's responsibility (see
+   * `StandardImportService`). It only persists the final,
+   * user-confirmed set of parsed Assets.
+   *
+   * Semantics:
+   *   - All parsed candidates are appended via `AssetRepository.add` in
+   *     a single `MemoryRepository.write` boundary (so the whole import
+   *     is atomic: all-or-nothing, in-memory and IndexedDB).
+   *   - The planCreate decisions are made ONCE inside the write
+   *     boundary, against the live (snapshot) assets set.
+   *   - On failure, `MemoryRepository.write` rolls back the entire
+   *     mutation. The returned `persisted` promise REJECTS with the
+   *     failure; the caller (UI) must surface it.
+   *
+   * The returned `ImportCommitOutcome`-shaped result is synchronous
+   * (counts) with a `persisted` promise for the caller to await.
+   *
+   * Per the IMPLEMENTATION AUTHORITY REPORT (FINBOOM-REQUIREMENT-1-STANDARD-IMPORT-IMPLEMENTATION-AUTHORITY-REPORT.md):
+   *  - V1 has NO rollback support. The commit-success UX must
+   *    explicitly communicate the V1 rollback limitation.
+   *  - No new Asset fields are added (no `importBatchId`, no
+   *    `sourceFile`). The audit trail is via `ImportHistoryService`.
+   *  - Duplicate Asset names are PERMITTED at the canonical layer
+   *    (Q-D07b-1a = (c)); the within-file and against-existing dedup
+   *    rules are enforced at the StandardImportService level, not
+   *    here.
+   */
+  commitImportedStandardAssets: (assets: Asset[]) => ImportCommitOutcome;
 
   /**
    * WP-FB-IMPORT-BROKER-01 — D-06 closed_absent permanent deletion.
@@ -756,6 +795,74 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
       duplicates: preview.counts.unchanged,
       divergentDuplicates: preview.counts.updated,
       rejectedTransferRows: preview.counts.closed_absent,
+      rejectedTransferReasons: [] as string[],
+      rejectedDuplicateIdRows: 0,
+      rejectedDuplicateIdReasons: [] as string[],
+      persisted,
+    };
+  },
+
+  /**
+   * FINBOOM-CR (CR-STANDARD-IMPORT) — Standard Import commit.
+   *
+   * Persists the parsed `Asset[]` candidates in a single
+   * `MemoryRepository.write` boundary. Each candidate is appended via
+   * `AssetRepository.add` (which delegates to
+   * `AssetLifecycleService.planCreate`). Duplicate names are permitted
+   * (Q-D07b-1a = (c) — the canonical Asset collection keeps duplicate
+   * names as separate rows).
+   *
+   * Atomicity: the entire `Asset[]` is committed in one
+   * `MemoryRepository.write`. A failure (in-memory planCreate refusal
+   * or IndexedDB write failure) rolls back the entire mutation; the
+   * returned `persisted` promise REJECTS with the failure.
+   *
+   * The returned `ImportCommitOutcome` uses:
+   *   - `appended`           = number of Assets committed (= assets.length on success)
+   *   - `duplicates`         = 0 (AssetRepository.add does not refuse duplicate names)
+   *   - `divergentDuplicates`= 0
+   *   - `rejectedTransferRows` / `rejectedTransferReasons` = 0 / []
+   *   - `rejectedDuplicateIdRows` / `rejectedDuplicateIdReasons` = 0 / []
+   *   - `persisted`          = Promise<void> (resolves on success, rejects on failure)
+   *
+   * V1 has NO rollback. The UI is responsible for surfacing the
+   * commit-success / commit-failure message and the no-rollback
+   * limitation.
+   */
+  commitImportedStandardAssets: (assets) => {
+    let persisted: Promise<void> | undefined;
+    try {
+      // MemoryRepository.write is the single atomic boundary. The mutate
+      // closure is SYNCHRONOUS (it returns void, not Promise<void>);
+      // we operate directly on `parent.assetsData` to mirror the
+      // established pattern in `MemoryAssetRepository.add` and the
+      // transaction-repository patterns. AssetLifecycleService.planCreate
+      // is invoked synchronously per-asset inside the mutate closure.
+      persisted = (repository as any).write(() => {
+        for (const asset of assets) {
+          // The planCreate judgement is made against the LIVE
+          // (snapshot) assets set, inside the write boundary, so a
+          // concurrent mutation cannot interleave. This mirrors the
+          // MemoryAssetRepository.add implementation at
+          // src/services/IndexedDBStorageService.ts:359-366.
+          (repository as any).assetsData =
+            AssetLifecycleService.planCreate(asset, (repository as any).assetsData).next;
+        }
+      });
+      // The caller awaits `persisted`; a rejection here is the single
+      // source of failure that the UI must surface.
+      persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
+    } catch (e) {
+      // planCreate threw synchronously (e.g. DUPLICATE_ID). The write
+      // never started. Re-throw so the caller can render the failure.
+      throw e;
+    }
+
+    return {
+      appended: assets.length,
+      duplicates: 0,
+      divergentDuplicates: 0,
+      rejectedTransferRows: 0,
       rejectedTransferReasons: [] as string[],
       rejectedDuplicateIdRows: 0,
       rejectedDuplicateIdReasons: [] as string[],

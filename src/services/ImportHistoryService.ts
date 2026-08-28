@@ -32,8 +32,9 @@
  * Required fields per CR-04:
  *   - `id` (generated `imp-<uuid>`)
  *   - `timestamp` (ISO 8601 at record time)
- *   - `importType` ('BROKER_HOLDINGS' | 'BANK_STATEMENT')
- *   - `institution` (e.g. "Zerodha", "Dhan", "Angel One", "HDFC Bank")
+ *   - `importType` ('BROKER_HOLDINGS' | 'BANK_STATEMENT' | 'STANDARD_IMPORT')
+ *   - `institution` (e.g. "Zerodha", "Dhan", "Angel One", "HDFC Bank",
+ *      "Standard Import")
  *   - `sourceFilename` (the file as uploaded)
  *   - `result` ('success' | 'partial' | 'failure')
  *   - `processedCount` (total rows the import saw)
@@ -41,14 +42,21 @@
  *   - `rejectedCount` (rows rejected by validation / lifecycle)
  *   - `errorSummary` (short string descriptions of the first
  *      N rejections; bounded to keep the array small)
+ *
+ * FINBOOM-CR (CR-STANDARD-IMPORT) — extended the closed union to
+ * include `STANDARD_IMPORT` for the Requirement #1 Standard Import
+ * flow. Authorized in
+ * `FINBOOM-REQUIREMENT-1-STANDARD-IMPORT-IMPLEMENTATION-AUTHORITY-REPORT.md`
+ * (Q7 disposition = AUTHORIZED).
  */
 
 /**
- * Discriminator for the kind of import. The CR-04 spec defines
+ * Discriminator for the kind of import. The CR-04 spec defined
  * exactly two values: `BROKER_HOLDINGS` (broker import) and
- * `BANK_STATEMENT` (bank statement import).
+ * `BANK_STATEMENT` (bank statement import). The CR-STANDARD-IMPORT
+ * authority added a third value: `STANDARD_IMPORT`.
  */
-export type ImportHistoryType = 'BROKER_HOLDINGS' | 'BANK_STATEMENT';
+export type ImportHistoryType = 'BROKER_HOLDINGS' | 'BANK_STATEMENT' | 'STANDARD_IMPORT';
 
 /**
  * Result of the import. The CR-04 spec defines three values:

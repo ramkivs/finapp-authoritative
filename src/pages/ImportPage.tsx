@@ -6,6 +6,7 @@ import { ImportHistoryService, ImportHistoryEntry } from '../services/ImportHist
 import { DividendClassifier, DividendClassificationResult, DividendClassifyAllResult } from '../services/DividendClassifier';
 import { Transaction } from '../domain/types';
 import { BrokerImportSection } from './BrokerImportSection';
+import { StandardImportSection } from './StandardImportSection';
 import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 
 /**
@@ -13,8 +14,13 @@ import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, Ch
  * exposes two parallel sub-tabs: `broker` (Broker Import) and
  * `bank` (Bank Statement Import). The default tab is `broker`
  * (per the spec: the broker workflow is the elevated flow).
+ *
+ * FINBOOM-CR (CR-STANDARD-IMPORT) — extended to a third value
+ * `standard` for the Requirement #1 Standard Import flow. The
+ * default tab is unchanged (`broker`); the new sub-tab is added
+ * at the end of the tab strip.
  */
-type ImportSubTab = 'broker' | 'bank';
+type ImportSubTab = 'broker' | 'bank' | 'standard';
 
 /**
  * FINBOOM Broker/Bank Import UI — the bank-section institution keys.
@@ -456,6 +462,20 @@ export const ImportPage: React.FC = () => {
           }`}
         >
           Bank Statement Import
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={subTab === 'standard'}
+          data-testid="import-subtab-standard"
+          onClick={() => setSubTab('standard')}
+          className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition ${
+            subTab === 'standard'
+              ? 'border-green-600 text-green-700 dark:text-green-400'
+              : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+          }`}
+        >
+          Standard Import
         </button>
       </div>
 
@@ -1043,6 +1063,12 @@ export const ImportPage: React.FC = () => {
         </div>
       )}
 
+      {/* FINBOOM-CR (CR-STANDARD-IMPORT) — third sub-tab.
+          Renders the self-contained Standard Import flow. */}
+      {subTab === 'standard' && (
+        <StandardImportSection />
+      )}
+
       {/* FINBOOM-CR (CR-04) — Import History panel. Visible on the
           Import page (cross-cutting, NOT scoped to a sub-tab).
           Collapsed by default; the [show history] toggle expands
@@ -1094,10 +1120,12 @@ export const ImportPage: React.FC = () => {
                         className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                           e.importType === 'BROKER_HOLDINGS'
                             ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                            : e.importType === 'STANDARD_IMPORT'
+                            ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
                             : 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300'
                         }`}
                       >
-                        {e.importType === 'BROKER_HOLDINGS' ? 'Broker' : 'Bank'}
+                        {e.importType === 'BROKER_HOLDINGS' ? 'Broker' : e.importType === 'STANDARD_IMPORT' ? 'Standard' : 'Bank'}
                       </span>
                       <span className="font-semibold text-gray-900 dark:text-white">
                         {e.institution}
