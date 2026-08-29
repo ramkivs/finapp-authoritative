@@ -839,12 +839,35 @@ const EntryTable: React.FC<{ title: string; entries: BrokerImportPreviewEntry[] 
   );
 };
 
-const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosure[] }> = ({ title, closures }) => {
+export const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosure[] }> = ({ title, closures }) => {
   const [open, setOpen] = useState(true);
   // WP-FB-IMPORT-BROKER-01 / D-06: modal state for the closed_absent
   // permanent deletion flow. `deletionTarget` is the holding whose delete
   // the user has clicked; the modal renders only when it is set.
   const [deletionTarget, setDeletionTarget] = useState<Holding | null>(null);
+  // D-06-F1-A: user-selected multi-select batch deletion state.
+  // `selectedIds` is the raw checkbox selection; `batchTargets` holds the
+  // Holdings under review in the two-stage batch modal (null = closed).
+  //
+  // Stale-selection protection: the EFFECTIVE selection is always recomputed
+  // from the live `closures` rows and re-filtered to `closed_absent` — an id
+  // that disappeared or became ineligible drops out of the effective set
+  // automatically, and the store-side `planDeleteMany` re-validates every id
+  // against the live ledger at confirm time (throwing on ANY mismatch).
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+  const [batchTargets, setBatchTargets] = useState<Holding[] | null>(null);
+  const eligibleSelected: Holding[] = closures
+    .filter((c) => c.existing.status === 'closed_absent' && selectedIds.has(c.existing.id))
+    .map((c) => c.existing);
+  const selectedTotal = eligibleSelected.reduce((s, h) => s + (Number(h.currentValue) || 0), 0);
+  const toggleSelected = (id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
   return (
     <div className="mt-4">
       <button
@@ -863,12 +886,17 @@ const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosu
             to <code className="text-red-300">closed_absent</code>. The record is
             not removed. WP-FB-IMPORT-BROKER-01 / D-06: a <code className="text-red-300">closed_absent</code> row
             may be PERMANENTLY DELETED via the per-row &quot;Delete permanently&quot; button. The
-            deletion is irreversible and writes an audit record.
+            deletion is irreversible and writes an audit record. D-06-F1-A: multiple{' '}
+            <code className="text-red-300">closed_absent</code> rows can be selected via the
+            checkboxes and deleted together as one atomic batch.
           </p>
           <div className="max-h-48 overflow-y-auto rounded border border-[#30363D] bg-[#0D1117]">
             <table className="w-full text-xs">
               <thead className="bg-[#21262D] text-[#8B949E]">
                 <tr>
+                  {/* D-06-F1-A: selection column. Only `closed_absent` rows
+                      carry an enabled checkbox (defensive guard below). */}
+                  <th className="text-left p-1.5">Select</th>
                   <th className="text-left p-1.5">Instrument</th>
                   <th className="text-right p-1.5">Qty</th>
                   <th className="text-right p-1.5">Last Current Value</th>
@@ -878,6 +906,22 @@ const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosu
               <tbody>
                 {closures.map((c, idx) => (
                   <tr key={idx} className="border-t border-[#21262D]">
+                    <td className="p-1.5">
+                      <input
+                        type="checkbox"
+                        data-testid={`batch-select-checkbox-${c.existing.id}`}
+                        aria-label={`Select ${c.existing.instrumentName} for batch deletion`}
+                        checked={c.existing.status === 'closed_absent' && selectedIds.has(c.existing.id)}
+                        disabled={c.existing.status !== 'closed_absent'}
+                        onChange={(e) => toggleSelected(c.existing.id, e.target.checked)}
+                        className="accent-red-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={
+                          c.existing.status === 'closed_absent'
+                            ? 'Select this closed_absent holding for batch deletion (D-06-F1-A)'
+                            : 'Only closed_absent holdings can be selected for batch deletion'
+                        }
+                      />
+                    </td>
                     <td className="p-1.5">{c.existing.instrumentName}</td>
                     <td className="p-1.5 text-right font-mono">{c.existing.quantity}</td>
                     <td className="p-1.5 text-right font-mono">{c.existing.currentValue.toFixed(2)}</td>
@@ -903,6 +947,42 @@ const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosu
               </tbody>
             </table>
           </div>
+          {/* D-06-F1-A: batch action bar. Rendered ONLY when at least one
+              eligible `closed_absent` row is selected — an empty selection
+              can never trigger a batch deletion. No broker-wide,
+              account-wide, or global controls exist: the action operates
+              exactly on the user-selected ids and nothing else. */}
+          {eligibleSelected.length > 0 && (
+            <div
+              className="mt-2 flex flex-wrap items-center gap-2 rounded border border-red-800/60 bg-red-900/30 p-2"
+              data-testid="batch-delete-action-bar"
+            >
+              <span className="text-xs text-red-200" data-testid="batch-delete-count">
+                {eligibleSelected.length} closed_absent holding{eligibleSelected.length === 1 ? '' : 's'} selected
+              </span>
+              <span className="text-xs text-red-200 font-mono" data-testid="batch-delete-total">
+                Total current value:{' '}
+                {selectedTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+              <button
+                type="button"
+                data-testid="batch-delete-clear"
+                onClick={() => setSelectedIds(new Set())}
+                className="px-2 py-0.5 rounded bg-[#21262D] text-[#F0F6FC] text-xs font-medium hover:bg-[#30363D]"
+              >
+                Clear selection
+              </button>
+              <button
+                type="button"
+                data-testid="batch-delete-button"
+                onClick={() => setBatchTargets([...eligibleSelected])}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-700 text-white text-xs font-medium hover:bg-red-600"
+                title="Review and permanently delete the selected closed_absent holdings (D-06-F1-A)"
+              >
+                <Trash2 className="w-3 h-3" /> Delete {eligibleSelected.length} selected permanently…
+              </button>
+            </div>
+          )}
           {deletionTarget && (
             <DeleteHoldingModal
               holding={deletionTarget}
@@ -914,6 +994,19 @@ const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosu
                 // (which re-runs the preview). Closing the modal here is
                 // sufficient; the data is already committed atomically.
                 setDeletionTarget(null);
+              }}
+            />
+          )}
+          {batchTargets && (
+            <BatchDeleteHoldingModal
+              holdings={batchTargets}
+              onClose={() => setBatchTargets(null)}
+              onDeleted={() => {
+                // The batch was committed atomically by
+                // commitBatchHoldingDeletion. Clear the selection (the ids
+                // no longer exist in the ledger) and close the modal.
+                setSelectedIds(new Set());
+                setBatchTargets(null);
               }}
             />
           )}
@@ -1066,6 +1159,233 @@ const DeleteHoldingModal: React.FC<{
             <Trash2 className="w-3.5 h-3.5" /> Delete permanently
           </button>
         </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * D-06-F1-A — two-stage modal for user-selected multi-select BATCH deletion
+ * of `closed_absent` Holdings.
+ *
+ * Stage 1 (REVIEW): clearly identifies the selected deletion scope — count,
+ * each selected Holding identity, the aggregate current value that will be
+ * removed from live wealth, and the irreversible-action warning. Nothing is
+ * deleted in this stage; the only forward action is to proceed to the
+ * explicit confirmation stage.
+ *
+ * Stage 2 (CONFIRM): requires an explicit confirmation click. On confirm the
+ * modal calls `useCanonicalLedger.getState().commitBatchHoldingDeletion(ids)`
+ * which composes ALL removals + ALL audit records inside ONE atomic
+ * `MemoryRepository.write` boundary (whole-batch atomicity). There is no
+ * partial success: the store-side `planDeleteMany` re-validates every id at
+ * confirm time and rejects the ENTIRE batch on ANY mismatch.
+ *
+ * Race / stale-selection protection: the effective `ids` are recomputed from
+ * the live store at confirm time by `planDeleteMany`; a Holding that became
+ * ineligible (or vanished) between review and confirmation causes a
+ * synchronous rejection of the whole batch with the data unchanged.
+ *
+ * On persistence failure the data is unchanged (rollback) and a "Batch
+ * deletion failed" message is surfaced; no auto-retry. D-06-F1-A is
+ * irreversible: there is no undo affordance.
+ */
+export const BatchDeleteHoldingModal: React.FC<{
+  holdings: Holding[];
+  onClose: () => void;
+  onDeleted: () => void;
+}> = ({ holdings, onClose, onDeleted }) => {
+  const [stage, setStage] = useState<'review' | 'confirm'>('review');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Defensive eligibility filter: only `closed_absent` Holdings can be part
+  // of a batch. The authoritative re-validation happens store-side in
+  // `planDeleteMany`; this is a UI-level guard.
+  const eligible = holdings.filter((h) => h.status === 'closed_absent');
+  const aggregate = eligible.reduce((s, h) => s + (Number(h.currentValue) || 0), 0);
+
+  const handleConfirm = () => {
+    if (busy) return;
+    if (eligible.length === 0) {
+      setError('No closed_absent holdings are selected; nothing can be deleted.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const ids = eligible.map((h) => h.id);
+      const outcome = useCanonicalLedger.getState().commitBatchHoldingDeletion(ids);
+      if (outcome.persisted) {
+        outcome.persisted
+          .then(() => {
+            setBusy(false);
+            onDeleted();
+          })
+          .catch((e: unknown) => {
+            setBusy(false);
+            setError(
+              `Batch deletion failed; your data is unchanged. ${e instanceof Error ? e.message : String(e)}`,
+            );
+          });
+      } else {
+        setBusy(false);
+        setError('No persistence was attempted.');
+      }
+    } catch (e) {
+      // Pre-validation failure (INVALID_ID / DUPLICATE_ID / HOLDING_NOT_FOUND
+      // / HOLDING_NOT_CLOSED). The ENTIRE batch was rejected; the data is
+      // unchanged. Surface a clear message.
+      setBusy(false);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      data-testid="batch-delete-modal"
+      data-stage={stage}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="w-full max-w-xl rounded-lg border border-red-800 bg-[#161B22] p-5">
+        {stage === 'review' ? (
+          <>
+            <h3 className="text-lg font-semibold text-[#F0F6FC] flex items-center gap-2">
+              <Trash2 className="w-4 h-4 text-red-400" /> Review batch deletion
+            </h3>
+            <p className="mt-2 text-sm text-[#F0F6FC]">
+              You have selected{' '}
+              <strong data-testid="batch-modal-count">{eligible.length}</strong> closed_absent{' '}
+              holding{eligible.length === 1 ? '' : 's'} for permanent deletion. This action{' '}
+              <strong className="text-red-300">cannot be undone</strong>. Review the scope below.
+            </p>
+
+            <div className="mt-3 max-h-40 overflow-y-auto rounded border border-[#30363D] bg-[#0D1117]">
+              <table className="w-full text-xs">
+                <thead className="bg-[#21262D] text-[#8B949E]">
+                  <tr>
+                    <th className="text-left p-1.5">Instrument</th>
+                    <th className="text-left p-1.5">Broker / Account</th>
+                    <th className="text-right p-1.5">Current value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eligible.map((h) => (
+                    <tr key={h.id} className="border-t border-[#21262D]">
+                      <td className="p-1.5 font-mono" data-testid={`batch-modal-row-${h.id}`}>
+                        {h.instrumentName}
+                        {h.ticker ? ` (${h.ticker})` : ''}
+                      </td>
+                      <td className="p-1.5 font-mono">
+                        {h.broker}
+                        {h.account ? ` / ${h.account}` : ''}
+                      </td>
+                      <td className="p-1.5 text-right font-mono">{h.currentValue.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-3 rounded border border-red-700 bg-red-900/30 p-3 text-sm text-red-200">
+              <div>
+                Aggregate current value removed from live wealth:{' '}
+                <strong className="font-mono" data-testid="batch-modal-total">
+                  {aggregate.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </strong>
+              </div>
+              <div className="mt-1 text-xs">
+                All deletions are applied atomically as a single batch and recorded in the audit
+                log with a shared batch identifier.
+              </div>
+            </div>
+
+            {error && (
+              <div
+                className="mt-3 rounded border border-red-700 bg-red-900/30 p-3 text-xs text-red-200"
+                data-testid="batch-modal-error"
+              >
+                {error}
+              </div>
+            )}
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className="px-4 py-1.5 rounded bg-[#21262D] text-[#F0F6FC] text-sm font-medium hover:bg-[#30363D] disabled:opacity-50"
+                data-testid="batch-modal-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => setStage('confirm')}
+                disabled={busy || eligible.length === 0}
+                className="px-4 py-1.5 rounded bg-[#21262D] text-[#F0F6FC] text-sm font-medium hover:bg-[#30363D] disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="batch-modal-review-next"
+              >
+                Continue to confirmation
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h3 className="text-lg font-semibold text-[#F0F6FC] flex items-center gap-2">
+              <Trash2 className="w-4 h-4 text-red-400" /> Confirm permanent deletion
+            </h3>
+            <p className="mt-2 text-sm text-[#F0F6FC]">
+              You are about to <strong className="text-red-300">permanently delete</strong>{' '}
+              <strong data-testid="batch-confirm-count">{eligible.length}</strong> closed_absent{' '}
+              holding{eligible.length === 1 ? '' : 's'}. This{' '}
+              <strong className="text-red-300">cannot be undone</strong>. The deletion is applied
+              atomically as a single batch.
+            </p>
+
+            {error && (
+              <div
+                className="mt-3 rounded border border-red-700 bg-red-900/30 p-3 text-xs text-red-200"
+                data-testid="batch-modal-error"
+              >
+                {error}
+              </div>
+            )}
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setStage('review')}
+                disabled={busy}
+                className="px-4 py-1.5 rounded bg-[#21262D] text-[#F0F6FC] text-sm font-medium hover:bg-[#30363D] disabled:opacity-50"
+                data-testid="batch-modal-back"
+              >
+                Back to review
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className="px-4 py-1.5 rounded bg-[#21262D] text-[#F0F6FC] text-sm font-medium hover:bg-[#30363D] disabled:opacity-50"
+                data-testid="batch-modal-cancel-confirm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirm}
+                disabled={busy || eligible.length === 0}
+                className="px-4 py-1.5 rounded bg-red-700 text-white text-sm font-medium hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                data-testid="batch-modal-confirm"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                {busy ? 'Deleting…' : `Permanently delete ${eligible.length}`}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

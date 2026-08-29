@@ -804,6 +804,24 @@ export interface HoldingDeletionLogEntry {
   importedAt: string;
   /** ISO 8601 timestamp of the deletion event. */
   deletedAt: string;
+  /**
+   * D-06-F1-A — batch attribution. Present ONLY on audit entries created by
+   * a user-selected multi-select batch deletion (D-06-F1-A); every entry
+   * produced by one batch shares the same `batchId` (prefix `hdlb-`).
+   *
+   * ABSENT on entries created by the single-Holding deletion path (D-06-1),
+   * which remains unchanged. The field is optional: pre-existing serialized
+   * records without it remain fully readable, so no IndexedDB migration and
+   * no DB_VERSION change are required (the `holdingDeletionLog` store is
+   * schema-less JSON serialization).
+   */
+  batchId?: string;
+  /**
+   * D-06-F1-A — scope of the deletion event. Currently only `'MULTI_SELECT'`
+   * (user-selected multi-select batch). ABSENT on single-deletion entries.
+   * Optional for the same backward-compatibility reason as `batchId`.
+   */
+  batchScope?: 'MULTI_SELECT';
 }
 
 export interface HoldingDeletionLogRepository {

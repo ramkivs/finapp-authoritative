@@ -252,6 +252,43 @@ interface LedgerState {
    */
   commitHoldingDeletion: (id: string) => HoldingDeletionOutcome;
 
+  /**
+   * D-06-F1-A — user-selected multi-select BATCH deletion of `closed_absent`
+   * Holdings.
+   *
+   * Composes the removal of ALL selected Holdings and the creation of ALL
+   * corresponding audit records inside ONE `MemoryRepository.write` boundary
+   * via `HoldingDeletionService.planDeleteMany` +
+   * `buildAtomicMutationForBatch`. The whole batch succeeds or the whole
+   * batch rolls back — partial batch deletion is impossible.
+   *
+   * Pre-conditions enforced by `HoldingDeletionService.planDeleteMany`
+   * (the ENTIRE batch is rejected on ANY failure, before any mutation):
+   *   - `ids` is a non-empty array of non-empty strings (else `INVALID_ID`).
+   *   - No id appears twice (else `DUPLICATE_ID`).
+   *   - Every Holding exists (else `HOLDING_NOT_FOUND`).
+   *   - Every Holding's `status` is `closed_absent` (else `HOLDING_NOT_CLOSED`).
+   *
+   * On any pre-validation failure the call throws `HoldingDeletionError`
+   * synchronously; no memory or IndexedDB mutation has occurred.
+   *
+   * On persistence failure the existing `MemoryRepository.write` revertDelta
+   * mechanism restores both `holdingsData` and `holdingDeletionLogData` from
+   * the captured snapshot; `persisted` REJECTS with the failure.
+   *
+   * Every audit entry of the batch carries the shared `batchId` and
+   * `batchScope: 'MULTI_SELECT'` (D-06-F1-A batch attribution). Optional
+   * fields on `HoldingDeletionLogEntry` keep single-deletion records and
+   * pre-existing serialized records fully compatible: DB_VERSION stays 7,
+   * no migration, no new object store.
+   *
+   * D-06-F1-A scope is user-selected multi-select ONLY: no broker-wide,
+   * account-wide, or global deletion path exists (F1-B/C/D deferred). No
+   * Asset effect (F10-C), no transaction mutation, no snapshot
+   * recomputation, no undo.
+   */
+  commitBatchHoldingDeletion: (ids: readonly string[]) => HoldingBatchDeletionOutcome;
+
   // Account & Budget Actions (WP-18)
   /**
    * WP-FB-DATA-06c-6 / Decision 13-b. Returns the promise so a refusal is
@@ -425,6 +462,28 @@ export interface HoldingDeletionOutcome {
   /** ISO 8601 timestamp of the deletion event. */
   deletedAt: string;
   /** Resolves when the deletion is stored; rejects with the failure. */
+  persisted?: Promise<void>;
+}
+
+/**
+ * D-06-F1-A — user-selected multi-select BATCH deletion outcome.
+ *
+ * Same admission/persistence split as `HoldingDeletionOutcome`: the
+ * synchronous fields are computed by `HoldingDeletionService.planDeleteMany`
+ * BEFORE anything is written; `persisted` answers whether the single atomic
+ * write reached storage. Pre-validation failures throw synchronously and
+ * produce no outcome at all — there is no partial batch result.
+ */
+export interface HoldingBatchDeletionOutcome {
+  /** The deleted Holding ids, in selection order. */
+  holdingIds: string[];
+  /** Shared attribution id of the batch's audit entries. Prefix `hdlb-`. */
+  batchId: string;
+  /** The generated audit entry ids (one per deleted Holding). */
+  auditEntryIds: string[];
+  /** ISO 8601 timestamp of the deletion event. */
+  deletedAt: string;
+  /** Resolves when the whole batch is stored; rejects with the failure. */
   persisted?: Promise<void>;
 }
 
@@ -917,6 +976,44 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     );
     persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
     return { holdingId: id, auditEntryId, deletedAt: asOf, persisted };
+  },
+
+  /**
+   * D-06-F1-A — user-selected multi-select BATCH deletion of `closed_absent`
+   * Holdings. See the interface doc for the full contract.
+   *
+   * Flow (identical shape to `commitHoldingDeletion`, lifted to the batch):
+   *
+   *   complete validation (planDeleteMany, pure, synchronous throw on ANY
+   *   failure) → complete mutation plan → ONE MemoryRepository.write →
+   *   single atomic persistence boundary.
+   *
+   * D-06-F1-A is irreversible. There is no `undoBatchHoldingDeletion`
+   * action and no automatic deletion path: only an explicit user selection
+   * can reach this action.
+   */
+  commitBatchHoldingDeletion: (ids) => {
+    const { holdings, holdingDeletionLog } = get();
+    const asOf = new Date().toISOString();
+    // planDeleteMany is pure and synchronous; it throws HoldingDeletionError
+    // (INVALID_ID / DUPLICATE_ID / HOLDING_NOT_FOUND / HOLDING_NOT_CLOSED)
+    // when ANY selected item is invalid — rejecting the ENTIRE batch before
+    // any mutation. On success, `plan` is the complete pre-computed next
+    // state for every selected Holding plus every audit entry.
+    const plan = HoldingDeletionService.planDeleteMany(ids, asOf, holdings, holdingDeletionLog);
+    const batchId = plan.batchId;
+    const auditEntryIds = plan.auditEntries.map(e => e.id);
+    const holdingIds = plan.targets.map(t => t.id);
+    // Same wiring as commitHoldingDeletion: attach the live repository to
+    // the plan, then pass the atomic closure to MemoryRepository.write,
+    // which provides captureLedger, revertDelta, and the IndexedDB
+    // readwrite transaction for the single persistence boundary.
+    (plan as any).__memoryRepo = repository as any;
+    const persisted = (repository as any).write(
+      HoldingDeletionService.buildAtomicMutationForBatch(plan),
+    );
+    persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
+    return { holdingIds, batchId, auditEntryIds, deletedAt: asOf, persisted };
   },
 
   restoreImportBatch: (importBatchId) => {
