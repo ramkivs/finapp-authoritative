@@ -9,9 +9,15 @@
  *
  *   - The `Delete permanently` button is NOT rendered for an `active`
  *     Holding (defensive).
- *   - The closure table only renders `closed_absent` rows in
- *     production (the broker-import flow only marks holdings as
- *     `closed_absent` via the lifecycle service).
+ *   - D-06-F1-A sequencing (correction): the ClosureTable appears in two
+ *     phases, and deletion eligibility is ALWAYS resolved from the LIVE
+ *     canonical ledger by Holding id — never from the preview snapshot:
+ *       PRE-CONFIRM: closure candidates correspond to canonical Holdings
+ *       that are still `active` and WILL transition to `closed_absent`
+ *       when the import is confirmed → selection/single-delete DISABLED.
+ *       POST-CONFIRM: those same canonical Holdings ARE `closed_absent`
+ *       → selection/single-delete ENABLED. The predicate itself remains
+ *       exactly `status === 'closed_absent'` in both phases.
  *   - The `DeleteHoldingModal` displays the 5 mandatory fields
  *     (instrument, broker / account, current value, irreversible
  *     warning, audit-record notice).
@@ -33,7 +39,7 @@ import { BrokerImportSection, ClosureTable } from '../pages/BrokerImportSection'
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { repository } from '../repositories';
 import { Holding } from '../domain/types';
-import { BrokerImportPreviewClosure } from '../services/BrokerImportService';
+import { BrokerImportPreviewClosure, BrokerImportService } from '../services/BrokerImportService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 
 const makeHolding = (overrides: Partial<Holding> = {}): Holding => ({
@@ -182,6 +188,10 @@ describe('WP-FB-IMPORT-BROKER-01 / D-06 — BrokerImportSection destructive disc
       const closedA = makeHolding({ id: 'hld-a' });
       const closedB = makeHolding({ id: 'hld-b', instrumentName: 'Inst B' });
       const active = makeHolding({ id: 'hld-active', status: 'active' });
+      // Sequencing correction: eligibility resolves through the LIVE ledger,
+      // so the canonical Holdings must exist in the store for their rows to
+      // render and resolve.
+      seedBatch([closedA, closedB, active]);
       render(<ClosureTable title="Closures" closures={[closure(closedA), closure(closedB), closure(active)]} />);
 
       const cbA = screen.getByTestId('batch-select-checkbox-hld-a') as HTMLInputElement;
@@ -328,6 +338,161 @@ describe('WP-FB-IMPORT-BROKER-01 / D-06 — BrokerImportSection destructive disc
       expect(log[0].holdingId).toBe('hld-a');
       expect(log[0].batchId).toBeUndefined();
       expect(log[0].batchScope).toBeUndefined();
+    });
+  });
+
+  describe('D-06-F1-A — sequencing correction (live canonical status)', () => {
+    const closure = (h: Holding): BrokerImportPreviewClosure => ({
+      existing: h,
+      classification: 'CLOSED_ABSENT',
+    });
+
+    const seed = (holdings: Holding[]) => {
+      const repo = repository as any;
+      repo.holdingsData = holdings;
+      repo.holdingDeletionLogData = [];
+      repo.syncStore();
+      useCanonicalLedger.setState({ holdings, holdingDeletionLog: [] } as any);
+    };
+
+    it('Test A — pre-confirm: closure candidates whose live canonical status is active are NOT selectable', () => {
+      const e = makeHolding({ id: 'hld-e', broker: 'Groww', instrumentName: 'TATAAML-TATAGOLD', ticker: 'TATAGOLD', status: 'active' });
+      const f = makeHolding({ id: 'hld-f', broker: 'Groww', instrumentName: 'UTIAMC-UTIGOLDBETA', ticker: 'UTIGOLDBETA', status: 'active' });
+      seed([e, f]);
+      render(
+        <ClosureTable
+          title="Closures (will transition to closed_absent)"
+          closures={[closure(e), closure(f)]}
+          phase="preview"
+        />,
+      );
+      // Both rows visible but NOT selectable and NOT deletable: canonical
+      // status is still 'active'; the transition lands only at Confirm import.
+      expect((screen.getByTestId('batch-select-checkbox-hld-e') as HTMLInputElement).disabled).toBe(true);
+      expect((screen.getByTestId('batch-select-checkbox-hld-f') as HTMLInputElement).disabled).toBe(true);
+      expect((screen.getByTestId('delete-holding-button-hld-e') as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByTestId('delete-holding-button-hld-f') as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.queryByTestId('batch-delete-button')).toBeNull();
+      // The disclosure no longer claims the rows are already deletable.
+      expect(screen.getByTestId('closure-table-disclosure').textContent).toContain('AFTER confirmation');
+    });
+
+    it('Test B — post-confirm resolution: eligibility comes from the LIVE canonical ledger, not the preview snapshot', () => {
+      const closed = makeHolding({ id: 'hld-e', broker: 'Groww', instrumentName: 'TATAAML-TATAGOLD', ticker: 'TATAGOLD', status: 'closed_absent' });
+      seed([closed]);
+      // The closure snapshot still carries the PRE-transition status
+      // ('active'), exactly as a retained preview closure does after Confirm
+      // import. The live ledger carries 'closed_absent'. The row must resolve
+      // through the live ledger and become eligible — proving the snapshot
+      // field is not the eligibility source.
+      render(
+        <ClosureTable
+          title="Closures (transitioned to closed_absent — eligible for permanent deletion)"
+          closures={[closure({ ...closed, status: 'active' })]}
+          phase="confirmed"
+        />,
+      );
+      expect((screen.getByTestId('batch-select-checkbox-hld-e') as HTMLInputElement).disabled).toBe(false);
+      expect((screen.getByTestId('delete-holding-button-hld-e') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    /**
+     * Tests C + D drive the REAL component flow:
+     *   upload (detectAndParse mocked, reconcile REAL)
+     *     → pre-confirm preview (closures canonical 'active', disabled)
+     *     → Confirm import (real commitImportedHoldings → planClose)
+     *     → canonical 'closed_absent'
+     *     → closure surface remains (post-confirm instance)
+     *     → rows selectable → batch review → explicit confirmation
+     *     → atomic batch deletion via the real store/service path.
+     */
+    const setupFirstCloseImport = async () => {
+      const a = makeHolding({ id: 'hld-a', broker: 'Groww', instrumentName: 'Holding A', ticker: 'HOLD-A', status: 'active' });
+      const e = makeHolding({ id: 'hld-e', broker: 'Groww', instrumentName: 'TATAAML-TATAGOLD', ticker: 'TATAGOLD', status: 'active' });
+      const f = makeHolding({ id: 'hld-f', broker: 'Groww', instrumentName: 'UTIAMC-UTIGOLDBETA', ticker: 'UTIGOLDBETA', status: 'active' });
+      seed([a, e, f]);
+      // Candidate A (same identity, differing values) → UPDATED; E/F absent
+      // from the parse → closure candidates.
+      const candidateA = { ...a, quantity: a.quantity + 1, currentValue: a.currentValue + 100 };
+      vi.spyOn(BrokerImportService, 'detectAndParse').mockReturnValue({
+        broker: 'Groww',
+        account: candidateA.account,
+        sourceFile: 'groww_stocks.csv',
+        importedAt: '2026-08-29T00:00:00.000Z',
+        holdings: [candidateA],
+        issues: [],
+      } as any);
+      render(<BrokerImportSection />);
+      const file = new File(['dummy-content'], 'groww_stocks.csv', { type: 'text/csv' });
+      fireEvent.change(screen.getByTestId('broker-file-input'), { target: { files: [file] } });
+      await screen.findByTestId('batch-select-checkbox-hld-e');
+      return { a, e, f };
+    };
+
+    const confirmImport = async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Confirm import/ }));
+      // Preview tears down on success …
+      await waitFor(() => expect(screen.queryByRole('button', { name: /Confirm import/ })).toBeNull());
+      // … and the post-confirm closure surface carries the rows forward.
+      await screen.findByTestId('batch-select-checkbox-hld-e');
+    };
+
+    it('Test C — real sequencing: preview (disabled) → Confirm import → canonical closed_absent → surface remains → selectable', async () => {
+      await setupFirstCloseImport();
+
+      // PRE-CONFIRM: visible but not selectable (canonical status 'active').
+      expect((screen.getByTestId('batch-select-checkbox-hld-e') as HTMLInputElement).disabled).toBe(true);
+      expect((screen.getByTestId('batch-select-checkbox-hld-f') as HTMLInputElement).disabled).toBe(true);
+      expect(useCanonicalLedger.getState().holdings.find((h) => h.id === 'hld-e')!.status).toBe('active');
+
+      await confirmImport();
+
+      // POST-CONFIRM: the canonical transition has landed.
+      expect(useCanonicalLedger.getState().holdings.find((h) => h.id === 'hld-e')!.status).toBe('closed_absent');
+      expect(useCanonicalLedger.getState().holdings.find((h) => h.id === 'hld-f')!.status).toBe('closed_absent');
+      // The closure surface remains and the rows are now selectable.
+      expect((screen.getByTestId('batch-select-checkbox-hld-e') as HTMLInputElement).disabled).toBe(false);
+      expect((screen.getByTestId('batch-select-checkbox-hld-f') as HTMLInputElement).disabled).toBe(false);
+      expect((screen.getByTestId('delete-holding-button-hld-e') as HTMLButtonElement).disabled).toBe(false);
+      expect((screen.getByTestId('delete-holding-button-hld-f') as HTMLButtonElement).disabled).toBe(false);
+      // The commit-success notice is preserved.
+      expect(screen.getByTestId('broker-import-commit-notice')).toBeTruthy();
+      // Holding A was UPDATED (not closed) and remains active.
+      expect(useCanonicalLedger.getState().holdings.find((h) => h.id === 'hld-a')!.status).toBe('active');
+    });
+
+    it('Test D — post-confirm batch deletion of the newly transitioned rows through the existing service/store path', async () => {
+      await setupFirstCloseImport();
+      await confirmImport();
+
+      // Select both newly transitioned closed_absent rows.
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-e'));
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-f'));
+      expect(screen.getByTestId('batch-delete-count').textContent).toContain('2');
+
+      // Review stage → explicit confirmation stage → atomic deletion.
+      fireEvent.click(screen.getByTestId('batch-delete-button'));
+      expect(screen.getByTestId('batch-delete-modal').getAttribute('data-stage')).toBe('review');
+      expect(screen.getByTestId('batch-modal-count').textContent).toBe('2');
+      expect(screen.getByTestId('batch-modal-row-hld-e')).toBeTruthy();
+      expect(screen.getByTestId('batch-modal-row-hld-f')).toBeTruthy();
+      fireEvent.click(screen.getByTestId('batch-modal-review-next'));
+      expect(screen.getByTestId('batch-delete-modal').getAttribute('data-stage')).toBe('confirm');
+      fireEvent.click(screen.getByTestId('batch-modal-confirm'));
+
+      // The existing commitBatchHoldingDeletion path performed the deletion.
+      await waitFor(() =>
+        expect((repository as any).holdingsData.map((h: Holding) => h.id)).toEqual(['hld-a']),
+      );
+      const log = (repository as any).holdingDeletionLogData;
+      expect(log).toHaveLength(2);
+      expect(new Set(log.map((entry: any) => entry.batchId)).size).toBe(1);
+      expect(log.every((entry: any) => entry.batchScope === 'MULTI_SELECT')).toBe(true);
+      expect(log.map((entry: any) => entry.holdingId)).toEqual(['hld-e', 'hld-f']);
+      // The deleted rows disappear from the surface (live resolution).
+      await waitFor(() => expect(screen.queryByTestId('batch-select-checkbox-hld-e')).toBeNull());
+      expect(screen.queryByTestId('batch-select-checkbox-hld-f')).toBeNull();
+      expect(screen.queryByTestId('batch-delete-modal')).toBeNull();
     });
   });
 });
