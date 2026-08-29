@@ -226,6 +226,23 @@ export const BrokerImportSection: React.FC = () => {
   const [rawError, setRawError] = useState<string | null>(null);
   const [commitNotice, setCommitNotice] = useState<CommitNotice | null>(null);
   const [showParserIssues, setShowParserIssues] = useState(false);
+  /**
+   * D-06-F1-A sequencing correction — post-confirm closure surface.
+   *
+   * After a SUCCESSFUL import confirmation that contained closures, the
+   * confirmed preview's `closures` are retained here so the ClosureTable
+   * remains available after `setPreview(null)`. By that point the confirmed
+   * import has ALREADY transitioned these Holdings to canonical
+   * `closed_absent` (HoldingLifecycleService.planClose inside
+   * commitImportedHoldings), so they are now eligible for D-06-F1-A batch
+   * deletion. The ClosureTable resolves every row's eligibility from the
+   * LIVE canonical ledger — never from the stale preview snapshot — so the
+   * rows become selectable exactly when the canonical transition has landed.
+   *
+   * This is a surface/sequencing fix only: the eligibility predicate remains
+   * `status === 'closed_absent'` on canonical Holdings, unchanged.
+   */
+  const [confirmedClosures, setConfirmedClosures] = useState<BrokerImportPreviewClosure[] | null>(null);
 
   // Step 1 — broker selector. Component-local state. Default: Zerodha.
   const [selectedBroker, setSelectedBroker] = useState<SupportedBroker>('Zerodha');
@@ -242,11 +259,14 @@ export const BrokerImportSection: React.FC = () => {
    * preview update.
    */
   useEffect(() => {
-    if (preview || commitNotice || rawError || showParserIssues) {
+    if (preview || commitNotice || rawError || showParserIssues || confirmedClosures) {
       setPreview(null);
       setRawError(null);
       setCommitNotice(null);
       setShowParserIssues(false);
+      // D-06-F1-A sequencing correction: the post-confirm closure surface is
+      // bound to the previous import; switching brokers clears it.
+      setConfirmedClosures(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -264,6 +284,9 @@ export const BrokerImportSection: React.FC = () => {
     setRawError(null);
     setCommitNotice(null);
     setPreview(null);
+    // D-06-F1-A sequencing correction: starting a new import supersedes any
+    // post-confirm closure surface from the previous import.
+    setConfirmedClosures(null);
     try {
       const input: StatementInput = isBinarySpreadsheet(file.name)
         ? { kind: 'binary', content: new Uint8Array(await file.arrayBuffer()), fileName: file.name }
@@ -291,6 +314,9 @@ export const BrokerImportSection: React.FC = () => {
     setRawError(null);
     setCommitNotice(null);
     setShowParserIssues(false);
+    // D-06-F1-A sequencing correction: cancel clears the post-confirm closure
+    // surface as well (same clear-set semantics as the broker-switch reset).
+    setConfirmedClosures(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -344,6 +370,15 @@ export const BrokerImportSection: React.FC = () => {
                 .map((i) => `R${i.rowNumber} [${i.code}] ${i.field ? i.field + ': ' : ''}${i.message}`),
             });
             setBusy(false);
+            // D-06-F1-A sequencing correction: retain the closure surface
+            // AFTER a successful confirmation that contained closures. The
+            // confirmed import has just transitioned these Holdings to
+            // canonical closed_absent; ClosureTable resolves their status
+            // from the live ledger, so they become selectable immediately.
+            // A confirmed import WITHOUT closures clears any stale surface.
+            setConfirmedClosures(
+              preview.closures.length > 0 ? preview.closures : null,
+            );
             // Clear the preview so the user can start a new import.
             setPreview(null);
             if (fileInputRef.current) fileInputRef.current.value = '';
@@ -478,6 +513,19 @@ export const BrokerImportSection: React.FC = () => {
         selectedBroker={selectedBroker}
       />
       {noticeNode}
+      {/* D-06-F1-A sequencing correction: post-confirm closure surface.
+          Rendered only after a successful import confirmation that contained
+          closures. Driven by the LIVE canonical ledger inside ClosureTable:
+          the rows now resolve as canonical closed_absent and are selectable
+          for single or batch permanent deletion. No new screen and no second
+          deletion workflow — the same ClosureTable component is reused. */}
+      {confirmedClosures && confirmedClosures.length > 0 && (
+        <ClosureTable
+          title="Closures (transitioned to closed_absent — eligible for permanent deletion)"
+          closures={confirmedClosures}
+          phase="confirmed"
+        />
+      )}
     </>
   );
 };
@@ -693,7 +741,11 @@ const PreviewView: React.FC<{
         <EntryTable title="Parsed entries" entries={preview.entries} />
       )}
       {preview.closures.length > 0 && (
-        <ClosureTable title="Closures (will transition to closed_absent)" closures={preview.closures} />
+        <ClosureTable
+          title="Closures (will transition to closed_absent)"
+          closures={preview.closures}
+          phase="preview"
+        />
       )}
 
       {preview.issues.length > 0 && (
@@ -839,26 +891,62 @@ const EntryTable: React.FC<{ title: string; entries: BrokerImportPreviewEntry[] 
   );
 };
 
-export const ClosureTable: React.FC<{ title: string; closures: BrokerImportPreviewClosure[] }> = ({ title, closures }) => {
+export const ClosureTable: React.FC<{
+  title: string;
+  closures: BrokerImportPreviewClosure[];
+  /**
+   * D-06-F1-A sequencing correction:
+   *  - `'preview'`   — rendered inside the PRE-CONFIRM import preview. The
+   *                    closure rows correspond to canonical Holdings that WILL
+   *                    transition to closed_absent when the import is
+   *                    confirmed; they are NOT yet deletable.
+   *  - `'confirmed'` — rendered AFTER a successful import confirmation that
+   *                    contained closures. The same Holdings are now canonical
+   *                    closed_absent and ARE eligible for permanent deletion.
+   * In BOTH phases the deletion eligibility is resolved from the LIVE
+   * canonical ledger (never from the preview snapshot) and the predicate
+   * remains exactly `status === 'closed_absent'`.
+   */
+  phase?: 'preview' | 'confirmed';
+}> = ({ title, closures, phase = 'preview' }) => {
   const [open, setOpen] = useState(true);
   // WP-FB-IMPORT-BROKER-01 / D-06: modal state for the closed_absent
   // permanent deletion flow. `deletionTarget` is the holding whose delete
   // the user has clicked; the modal renders only when it is set.
   const [deletionTarget, setDeletionTarget] = useState<Holding | null>(null);
+  // D-06-F1-A sequencing correction: deletion eligibility is resolved from
+  // the LIVE canonical ledger, keyed by Holding id. The preview snapshot's
+  // `c.existing.status` is NOT authoritative: pre-confirmation it still
+  // reads 'active' for Holdings that the confirmed import will transition to
+  // closed_absent. Post-confirmation the live ledger carries the
+  // post-transition status, so the same rows become eligible at exactly the
+  // moment the canonical transition has landed. The eligibility predicate
+  // itself is unchanged: `status === 'closed_absent'` on the canonical
+  // Holding. Read-only subscription; no mutation from this component.
+  const liveHoldings = useCanonicalLedger((s) => s.holdings);
+  const liveById = new Map<string, Holding>(liveHoldings.map((h) => [h.id, h]));
+  const isDeletionEligible = (h: Holding) => h.status === 'closed_absent';
+  // Rows resolve through the live ledger. A closure whose Holding no longer
+  // exists in the canonical ledger (e.g. already permanently deleted) drops
+  // out of the table entirely — deleted rows disappear instead of lingering
+  // as stale UI state.
+  const rows: { live: Holding }[] = closures
+    .map((c) => ({ live: liveById.get(c.existing.id) }))
+    .filter((r): r is { live: Holding } => r.live !== undefined);
   // D-06-F1-A: user-selected multi-select batch deletion state.
   // `selectedIds` is the raw checkbox selection; `batchTargets` holds the
   // Holdings under review in the two-stage batch modal (null = closed).
   //
   // Stale-selection protection: the EFFECTIVE selection is always recomputed
-  // from the live `closures` rows and re-filtered to `closed_absent` — an id
-  // that disappeared or became ineligible drops out of the effective set
-  // automatically, and the store-side `planDeleteMany` re-validates every id
-  // against the live ledger at confirm time (throwing on ANY mismatch).
+  // from the live-resolved rows and re-filtered to canonical `closed_absent`
+  // — an id that disappeared or became ineligible drops out of the effective
+  // set automatically, and the store-side `planDeleteMany` re-validates every
+  // id against the live ledger at confirm time (throwing on ANY mismatch).
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
   const [batchTargets, setBatchTargets] = useState<Holding[] | null>(null);
-  const eligibleSelected: Holding[] = closures
-    .filter((c) => c.existing.status === 'closed_absent' && selectedIds.has(c.existing.id))
-    .map((c) => c.existing);
+  const eligibleSelected: Holding[] = rows
+    .filter((r) => isDeletionEligible(r.live) && selectedIds.has(r.live.id))
+    .map((r) => r.live);
   const selectedTotal = eligibleSelected.reduce((s, h) => s + (Number(h.currentValue) || 0), 0);
   const toggleSelected = (id: string, checked: boolean) => {
     setSelectedIds((prev) => {
@@ -868,6 +956,18 @@ export const ClosureTable: React.FC<{ title: string; closures: BrokerImportPrevi
       return next;
     });
   };
+  if (rows.length === 0 && !deletionTarget && !batchTargets) {
+    // All closure Holdings are gone from the canonical ledger (e.g. deleted).
+    // Nothing to display; avoids an empty shell around a vanished table.
+    //
+    // IMPORTANT: while a deletion modal is in flight the surface MUST stay
+    // mounted. During the atomic write the rows transiently disappear from
+    // the live ledger; if persistence then FAILS, revertDelta restores them
+    // and the open modal must still be there to surface the error. On
+    // success, the modal's onDeleted closes it, and this guard then
+    // collapses the table.
+    return null;
+  }
   return (
     <div className="mt-4">
       <button
@@ -876,26 +976,40 @@ export const ClosureTable: React.FC<{ title: string; closures: BrokerImportPrevi
         className="flex items-center gap-1 text-sm text-[#8B949E] hover:text-[#F0F6FC]"
       >
         {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-        {title} ({closures.length})
+        {title} ({rows.length})
       </button>
       {open && (
         <div className="mt-2 rounded border border-red-700 bg-red-900/20 p-2">
-          <p className="text-xs text-red-200 mb-2">
-            The following existing holdings are absent from the new parse. They
-            will be RETAINED in the ledger but their status will be transitioned
-            to <code className="text-red-300">closed_absent</code>. The record is
-            not removed. WP-FB-IMPORT-BROKER-01 / D-06: a <code className="text-red-300">closed_absent</code> row
-            may be PERMANENTLY DELETED via the per-row &quot;Delete permanently&quot; button. The
-            deletion is irreversible and writes an audit record. D-06-F1-A: multiple{' '}
-            <code className="text-red-300">closed_absent</code> rows can be selected via the
-            checkboxes and deleted together as one atomic batch.
-          </p>
+          {phase === 'preview' ? (
+            <p className="text-xs text-red-200 mb-2" data-testid="closure-table-disclosure">
+              These existing Holdings are absent from the new parse. They will
+              be RETAINED in the ledger, and their status will be transitioned
+              to <code className="text-red-300">closed_absent</code> WHEN THE
+              IMPORT IS CONFIRMED. The record is not removed. They become
+              eligible for permanent deletion only AFTER confirmation
+              (WP-FB-IMPORT-BROKER-01 / D-06, D-06-F1-A): until then the
+              selection checkboxes and the &quot;Delete permanently&quot; buttons stay
+              disabled. Deletion is irreversible and writes an audit record.
+            </p>
+          ) : (
+            <p className="text-xs text-red-200 mb-2" data-testid="closure-table-disclosure">
+              These Holdings were transitioned to{' '}
+              <code className="text-red-300">closed_absent</code> by the
+              confirmed import and are now eligible for permanent deletion.
+              WP-FB-IMPORT-BROKER-01 / D-06: a row may be PERMANENTLY DELETED
+              via the per-row &quot;Delete permanently&quot; button. D-06-F1-A: multiple
+              rows can be selected via the checkboxes and deleted together as
+              one atomic batch. The deletion is irreversible and writes an
+              audit record.
+            </p>
+          )}
           <div className="max-h-48 overflow-y-auto rounded border border-[#30363D] bg-[#0D1117]">
             <table className="w-full text-xs">
               <thead className="bg-[#21262D] text-[#8B949E]">
                 <tr>
-                  {/* D-06-F1-A: selection column. Only `closed_absent` rows
-                      carry an enabled checkbox (defensive guard below). */}
+                  {/* D-06-F1-A: selection column. Only rows whose LIVE
+                      canonical status is `closed_absent` carry an enabled
+                      checkbox (defensive live-status guard below). */}
                   <th className="text-left p-1.5">Select</th>
                   <th className="text-left p-1.5">Instrument</th>
                   <th className="text-right p-1.5">Qty</th>
@@ -904,38 +1018,41 @@ export const ClosureTable: React.FC<{ title: string; closures: BrokerImportPrevi
                 </tr>
               </thead>
               <tbody>
-                {closures.map((c, idx) => (
-                  <tr key={idx} className="border-t border-[#21262D]">
+                {rows.map(({ live }, idx) => (
+                  <tr key={live.id} className="border-t border-[#21262D]">
                     <td className="p-1.5">
                       <input
                         type="checkbox"
-                        data-testid={`batch-select-checkbox-${c.existing.id}`}
-                        aria-label={`Select ${c.existing.instrumentName} for batch deletion`}
-                        checked={c.existing.status === 'closed_absent' && selectedIds.has(c.existing.id)}
-                        disabled={c.existing.status !== 'closed_absent'}
-                        onChange={(e) => toggleSelected(c.existing.id, e.target.checked)}
+                        data-testid={`batch-select-checkbox-${live.id}`}
+                        aria-label={`Select ${live.instrumentName} for batch deletion`}
+                        checked={isDeletionEligible(live) && selectedIds.has(live.id)}
+                        disabled={!isDeletionEligible(live)}
+                        onChange={(e) => toggleSelected(live.id, e.target.checked)}
                         className="accent-red-600 disabled:opacity-40 disabled:cursor-not-allowed"
                         title={
-                          c.existing.status === 'closed_absent'
+                          isDeletionEligible(live)
                             ? 'Select this closed_absent holding for batch deletion (D-06-F1-A)'
-                            : 'Only closed_absent holdings can be selected for batch deletion'
+                            : phase === 'preview'
+                              ? 'Not yet closed_absent — becomes selectable after the import is confirmed'
+                              : 'Only closed_absent holdings can be selected for batch deletion'
                         }
                       />
                     </td>
-                    <td className="p-1.5">{c.existing.instrumentName}</td>
-                    <td className="p-1.5 text-right font-mono">{c.existing.quantity}</td>
-                    <td className="p-1.5 text-right font-mono">{c.existing.currentValue.toFixed(2)}</td>
+                    <td className="p-1.5">{live.instrumentName}</td>
+                    <td className="p-1.5 text-right font-mono">{live.quantity}</td>
+                    <td className="p-1.5 text-right font-mono">{live.currentValue.toFixed(2)}</td>
                     <td className="p-1.5 text-right">
-                      {/* D-06: only `closed_absent` rows carry the delete affordance.
-                          The `ClosureTable` only renders `closed_absent` rows
-                          (per the broker import flow), so the affordance is
-                          always shown here. The defensive `status === 'closed_absent'`
-                          guard below is the authoritative source of truth. */}
+                      {/* D-06: only rows whose LIVE canonical status is
+                          `closed_absent` carry the delete affordance. The
+                          live-status resolution above is the authoritative
+                          source of truth in both phases; pre-confirmation
+                          rows remain disabled until the confirmed import has
+                          actually transitioned them. */}
                       <button
                         type="button"
-                        data-testid={`delete-holding-button-${c.existing.id}`}
-                        onClick={() => setDeletionTarget(c.existing)}
-                        disabled={c.existing.status !== 'closed_absent'}
+                        data-testid={`delete-holding-button-${live.id}`}
+                        onClick={() => setDeletionTarget(live)}
+                        disabled={!isDeletionEligible(live)}
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-900/40 text-red-200 border border-red-800/60 hover:bg-red-800/60 disabled:opacity-50 disabled:cursor-not-allowed"
                         title="Permanently delete this closed_absent holding (D-06)"
                       >
@@ -988,11 +1105,10 @@ export const ClosureTable: React.FC<{ title: string; closures: BrokerImportPrevi
               holding={deletionTarget}
               onClose={() => setDeletionTarget(null)}
               onDeleted={() => {
-                // On successful deletion, the closure table is a snapshot
-                // of the pre-confirm preview; the deleted holding remains in
-                // the snapshot until the user closes / re-opens the import
-                // (which re-runs the preview). Closing the modal here is
-                // sufficient; the data is already committed atomically.
+                // The deleted Holding is gone from the live canonical ledger,
+                // so the live-status resolution above removes its row from
+                // this table automatically. Closing the modal is sufficient;
+                // the data is already committed atomically.
                 setDeletionTarget(null);
               }}
             />
@@ -1004,7 +1120,8 @@ export const ClosureTable: React.FC<{ title: string; closures: BrokerImportPrevi
               onDeleted={() => {
                 // The batch was committed atomically by
                 // commitBatchHoldingDeletion. Clear the selection (the ids
-                // no longer exist in the ledger) and close the modal.
+                // no longer exist in the live canonical ledger, so the rows
+                // also disappear from this table) and close the modal.
                 setSelectedIds(new Set());
                 setBatchTargets(null);
               }}
