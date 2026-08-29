@@ -29,10 +29,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
 import { render, fireEvent, screen, waitFor } from '@testing-library/react';
-import { BrokerImportSection } from '../pages/BrokerImportSection';
+import { BrokerImportSection, ClosureTable } from '../pages/BrokerImportSection';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { repository } from '../repositories';
 import { Holding } from '../domain/types';
+import { BrokerImportPreviewClosure } from '../services/BrokerImportService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 
 const makeHolding = (overrides: Partial<Holding> = {}): Holding => ({
@@ -160,6 +161,173 @@ describe('WP-FB-IMPORT-BROKER-01 / D-06 — BrokerImportSection destructive disc
       // The persisted promise rejected; rollback already happened.
       expect((repository as any).holdingsData.map((h: Holding) => h.id)).toContain('hld-fail');
       expect((repository as any).holdingDeletionLogData).toEqual([]);
+    });
+  });
+
+  describe('D-06-F1-A — user-selected multi-select batch deletion UI', () => {
+    const closure = (h: Holding): BrokerImportPreviewClosure => ({
+      existing: h,
+      classification: 'CLOSED_ABSENT',
+    });
+
+    const seedBatch = (holdings: Holding[]) => {
+      const repo = repository as any;
+      repo.holdingsData = holdings;
+      repo.holdingDeletionLogData = [];
+      repo.syncStore();
+      useCanonicalLedger.setState({ holdings, holdingDeletionLog: [] } as any);
+    };
+
+    it('selection: checkboxes are enabled only for closed_absent rows; batch action is hidden with an empty selection', () => {
+      const closedA = makeHolding({ id: 'hld-a' });
+      const closedB = makeHolding({ id: 'hld-b', instrumentName: 'Inst B' });
+      const active = makeHolding({ id: 'hld-active', status: 'active' });
+      render(<ClosureTable title="Closures" closures={[closure(closedA), closure(closedB), closure(active)]} />);
+
+      const cbA = screen.getByTestId('batch-select-checkbox-hld-a') as HTMLInputElement;
+      const cbB = screen.getByTestId('batch-select-checkbox-hld-b') as HTMLInputElement;
+      const cbActive = screen.getByTestId('batch-select-checkbox-hld-active') as HTMLInputElement;
+      expect(cbA.disabled).toBe(false);
+      expect(cbB.disabled).toBe(false);
+      // Active rows cannot be selected (only closed_absent is eligible).
+      expect(cbActive.disabled).toBe(true);
+      expect(cbActive.checked).toBe(false);
+      // Empty selection cannot trigger deletion: no batch action rendered.
+      expect(screen.queryByTestId('batch-delete-button')).toBeNull();
+      expect(screen.queryByTestId('batch-delete-action-bar')).toBeNull();
+    });
+
+    it('selected count and batch action appear when eligible rows are selected; clearing hides them', () => {
+      const closedA = makeHolding({ id: 'hld-a', currentValue: 1100 });
+      const closedB = makeHolding({ id: 'hld-b', instrumentName: 'Inst B', currentValue: 2200 });
+      seedBatch([closedA, closedB]);
+      render(<ClosureTable title="Closures" closures={[closure(closedA), closure(closedB)]} />);
+
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-a'));
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-b'));
+
+      expect(screen.getByTestId('batch-delete-count').textContent).toContain('2');
+      // Aggregate current value being removed from live wealth.
+      expect(screen.getByTestId('batch-delete-total').textContent).toContain('3,300.00');
+      expect(screen.getByTestId('batch-delete-button')).toBeTruthy();
+
+      fireEvent.click(screen.getByTestId('batch-delete-clear'));
+      expect(screen.queryByTestId('batch-delete-button')).toBeNull();
+      expect(screen.queryByTestId('batch-delete-action-bar')).toBeNull();
+    });
+
+    it('review stage: the batch action opens the review showing scope; nothing is deleted yet and no direct confirm exists', () => {
+      const closedA = makeHolding({ id: 'hld-a', currentValue: 1100 });
+      const closedB = makeHolding({ id: 'hld-b', instrumentName: 'Inst B', currentValue: 2200 });
+      seedBatch([closedA, closedB]);
+      render(<ClosureTable title="Closures" closures={[closure(closedA), closure(closedB)]} />);
+
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-a'));
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-b'));
+      fireEvent.click(screen.getByTestId('batch-delete-button'));
+
+      const modal = screen.getByTestId('batch-delete-modal');
+      expect(modal.getAttribute('data-stage')).toBe('review');
+      // The review clearly identifies the selected scope.
+      expect(screen.getByTestId('batch-modal-count').textContent).toBe('2');
+      expect(screen.getByTestId('batch-modal-row-hld-a')).toBeTruthy();
+      expect(screen.getByTestId('batch-modal-row-hld-b')).toBeTruthy();
+      expect(screen.getByTestId('batch-modal-total').textContent).toContain('3,300.00');
+      expect(modal.textContent).toContain('cannot be undone');
+      // Review stage performs no deletion.
+      expect((repository as any).holdingsData).toHaveLength(2);
+      // There is no destructive confirm control in the review stage.
+      expect(screen.queryByTestId('batch-modal-confirm')).toBeNull();
+    });
+
+    it('confirmation stage: explicit confirmation is required; back-navigation returns to review', () => {
+      const closedA = makeHolding({ id: 'hld-a' });
+      const closedB = makeHolding({ id: 'hld-b', instrumentName: 'Inst B' });
+      seedBatch([closedA, closedB]);
+      render(<ClosureTable title="Closures" closures={[closure(closedA), closure(closedB)]} />);
+
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-a'));
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-b'));
+      fireEvent.click(screen.getByTestId('batch-delete-button'));
+      fireEvent.click(screen.getByTestId('batch-modal-review-next'));
+
+      expect(screen.getByTestId('batch-delete-modal').getAttribute('data-stage')).toBe('confirm');
+      expect(screen.getByTestId('batch-modal-confirm')).toBeTruthy();
+      // Still nothing deleted before the explicit confirmation click.
+      expect((repository as any).holdingsData).toHaveLength(2);
+
+      fireEvent.click(screen.getByTestId('batch-modal-back'));
+      expect(screen.getByTestId('batch-delete-modal').getAttribute('data-stage')).toBe('review');
+      expect((repository as any).holdingsData).toHaveLength(2);
+    });
+
+    it('success: confirming deletes ALL selected Holdings atomically, writes batch-attributed audit, clears the selection', async () => {
+      const closedA = makeHolding({ id: 'hld-a', currentValue: 1100 });
+      const closedB = makeHolding({ id: 'hld-b', instrumentName: 'Inst B', currentValue: 2200 });
+      seedBatch([closedA, closedB]);
+      render(<ClosureTable title="Closures" closures={[closure(closedA), closure(closedB)]} />);
+
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-a'));
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-b'));
+      fireEvent.click(screen.getByTestId('batch-delete-button'));
+      fireEvent.click(screen.getByTestId('batch-modal-review-next'));
+      fireEvent.click(screen.getByTestId('batch-modal-confirm'));
+
+      await waitFor(() => expect((repository as any).holdingsData).toEqual([]));
+      // All selected Holdings disappeared; audit entries exist with shared batchId.
+      const log = (repository as any).holdingDeletionLogData;
+      expect(log).toHaveLength(2);
+      expect(new Set(log.map((e: any) => e.batchId)).size).toBe(1);
+      expect(log.every((e: any) => e.batchScope === 'MULTI_SELECT')).toBe(true);
+      expect(log.map((e: any) => e.holdingId)).toEqual(['hld-a', 'hld-b']);
+      // Assets were never involved: no asset mutation is reachable here.
+      expect(useCanonicalLedger.getState().holdings).toEqual([]);
+      // Modal closes and the batch action disappears (selection cleared).
+      await waitFor(() => expect(screen.queryByTestId('batch-delete-modal')).toBeNull());
+      expect(screen.queryByTestId('batch-delete-button')).toBeNull();
+    });
+
+    it('failure: a persistence failure rolls back the whole batch, surfaces the error, and leaves no partial deletion', async () => {
+      const closedA = makeHolding({ id: 'hld-a', currentValue: 100 });
+      const closedB = makeHolding({ id: 'hld-b', instrumentName: 'Inst B', currentValue: 200 });
+      seedBatch([closedA, closedB]);
+      render(<ClosureTable title="Closures" closures={[closure(closedA), closure(closedB)]} />);
+
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-a'));
+      fireEvent.click(screen.getByTestId('batch-select-checkbox-hld-b'));
+      fireEvent.click(screen.getByTestId('batch-delete-button'));
+      fireEvent.click(screen.getByTestId('batch-modal-review-next'));
+
+      IndexedDBStorageService.simulateFailureOnce = true;
+      fireEvent.click(screen.getByTestId('batch-modal-confirm'));
+
+      await waitFor(() => expect(screen.getByTestId('batch-modal-error')).toBeTruthy());
+      expect(screen.getByTestId('batch-modal-error').textContent).toContain('Batch deletion failed');
+      // No partial deletion: BOTH Holdings restored, ZERO audit entries.
+      expect((repository as any).holdingsData.map((h: Holding) => h.id)).toEqual(['hld-a', 'hld-b']);
+      expect((repository as any).holdingDeletionLogData).toEqual([]);
+    });
+
+    it('existing single deletion remains functional alongside the batch controls', async () => {
+      const closedA = makeHolding({ id: 'hld-a', currentValue: 1100 });
+      const closedB = makeHolding({ id: 'hld-b', instrumentName: 'Inst B', currentValue: 2200 });
+      seedBatch([closedA, closedB]);
+      render(<ClosureTable title="Closures" closures={[closure(closedA), closure(closedB)]} />);
+
+      // The per-row single-delete affordance is preserved.
+      fireEvent.click(screen.getByTestId('delete-holding-button-hld-a'));
+      expect(screen.getByTestId('delete-holding-modal')).toBeTruthy();
+      fireEvent.click(screen.getByTestId('delete-modal-confirm'));
+
+      await waitFor(() =>
+        expect((repository as any).holdingsData.map((h: Holding) => h.id)).toEqual(['hld-b']),
+      );
+      // Single-deletion audit entry carries NO batch attribution.
+      const log = (repository as any).holdingDeletionLogData;
+      expect(log).toHaveLength(1);
+      expect(log[0].holdingId).toBe('hld-a');
+      expect(log[0].batchId).toBeUndefined();
+      expect(log[0].batchScope).toBeUndefined();
     });
   });
 });
