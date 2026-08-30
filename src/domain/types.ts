@@ -790,15 +790,26 @@ export interface HoldingRepository {
  *                    canonical closed_absent set of one broker, from the
  *                    persistent closed-positions cleanup surface.
  *   'ACCOUNT_WIDE' — D-06-F1-C: same, scoped to the (broker, account) pair.
- *
- * No 'GLOBAL' member exists by design: D-06-F1-D is DEFERRED pending the
- * separate F6 product decision (authority:
- * FINBOOM-D-06-F1-BCD-PRODUCT-DECISION-AUTHORITY-REPORT.md).
- * Additive-only: MULTI_SELECT persisted records and call semantics are
- * unchanged; the field remains optional so no IndexedDB migration and no
- * DB_VERSION change is required.
+ *   'GLOBAL'       — D-06-F1-D (ACCEPTED at the combined F6/F1-D
+ *                    implementation-authority gate): whole-ledger explicit
+ *                    opt-in selection over the LIVE canonical
+ *                    closed_absent set — no broker/account predicate;
+ *                    undefined-account Holdings are included. GLOBAL
+ *                    deletion additionally REQUIRES the ratified F6 typed
+ *                    confirmation (Option D: type the LIVE effective batch
+ *                    count) at the modal's final stage.
+ * Additive-only, as with the F1-B/C widening: MULTI_SELECT/BROKER_WIDE/
+ * ACCOUNT_WIDE persisted records and call semantics are unchanged (no
+ * retro-fit — the typed gate applies to GLOBAL only); the field remains
+ * optional so no IndexedDB migration and no DB_VERSION change is required.
+ * (Authority: FINBOOM-D-06-F6-F1D-IMPLEMENTATION-AUTHORITY-REPORT.md;
+ * supersedes the earlier "no GLOBAL member by design" deferral note.)
  */
-export type HoldingDeletionBatchScope = 'MULTI_SELECT' | 'BROKER_WIDE' | 'ACCOUNT_WIDE';
+export type HoldingDeletionBatchScope =
+  | 'MULTI_SELECT'
+  | 'BROKER_WIDE'
+  | 'ACCOUNT_WIDE'
+  | 'GLOBAL';
 
 export interface HoldingDeletionLogEntry {
   /** Audit entry id, distinct from `holdingId`. Prefix `hdl-`. Storage key. */

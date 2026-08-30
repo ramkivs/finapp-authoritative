@@ -214,8 +214,10 @@ export class HoldingDeletionService {
    *                             only; fresh UUIDs make this unreachable).
    *
    * Every audit entry of one batch carries the SAME `batchId` (prefix
-   * `hdlb-`) and `batchScope: 'MULTI_SELECT'` so the batch is fully
-   * attributable in the audit log. Single-deletion entries (D-06-1) carry
+   * `hdlb-`) and the invoked `batchScope` tag (default 'MULTI_SELECT';
+   * 'BROKER_WIDE'/'ACCOUNT_WIDE' from the F1-B/C surface, 'GLOBAL' from
+   * F1-D — tag-only, never scope logic) so the batch is fully attributable
+   * in the audit log. Single-deletion entries (D-06-1) carry
    * neither field; both fields are optional, so existing records remain
    * readable and DB_VERSION stays 7 with no migration.
    */

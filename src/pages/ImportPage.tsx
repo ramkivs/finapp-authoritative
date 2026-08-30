@@ -7,6 +7,7 @@ import { DividendClassifier, DividendClassificationResult, DividendClassifyAllRe
 import { Transaction } from '../domain/types';
 import { BrokerImportSection } from './BrokerImportSection';
 import { ClosedPositionsCleanupSection } from './ClosedPositionsCleanupSection';
+import { GlobalLedgerCleanupSection } from './GlobalLedgerCleanupSection';
 import { StandardImportSection } from './StandardImportSection';
 import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -492,6 +493,10 @@ export const ImportPage: React.FC = () => {
               independent of the transient import preview/ClosureTable — and
               is a pure consumer of the store + the reused ratified modal. */}
           <ClosedPositionsCleanupSection />
+          {/* D-06-F1-D (authority §6: SEPARATE component — the F1-B/C
+              surface's DOM is pinned; GLOBAL gets its own persistent whole-
+              ledger control beside it, same ratified engine + F6 gate). */}
+          <GlobalLedgerCleanupSection />
         </div>
       )}
 

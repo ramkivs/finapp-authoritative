@@ -1522,10 +1522,24 @@ export const BatchDeleteHoldingModal: React.FC<{
    * UI copy and the two-stage review→confirm flow are shared unchanged.
    */
   batchScope?: HoldingDeletionBatchScope;
-}> = ({ holdings, onClose, onDeleted, batchScope }) => {
+  /**
+   * D-06-F6 (Option D — ratified): typed confirmation for GLOBAL batches.
+   * ABSENT (every F1-A / F1-B / F1-C call site) the modal behaves byte-
+   * identically to the promoted flow — no gate, no extra UI. PRESENT, the
+   * final confirm stage requires the user to type the LIVE effective batch
+   * count (exact digits after trim; paste allowed; Enter inert); confirmation
+   * is impossible while the typed value mismatches the live count. The
+   * expected count is enforced from the modal's own live-derived `eligible`
+   * set — the parent additionally passes its live count for a fail-closed
+   * integrity double-check. No audit or engine behavior changes.
+   */
+  typedConfirmExpectedCount?: number;
+}> = ({ holdings, onClose, onDeleted, batchScope, typedConfirmExpectedCount }) => {
   const [stage, setStage] = useState<'review' | 'confirm'>('review');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // F6 typed-confirmation input (GLOBAL only; inert everywhere else).
+  const [typedCount, setTypedCount] = useState('');
 
   // Defensive eligibility filter: only `closed_absent` Holdings can be part
   // of a batch. The authoritative re-validation happens store-side in
@@ -1533,10 +1547,24 @@ export const BatchDeleteHoldingModal: React.FC<{
   const eligible = holdings.filter((h) => h.status === 'closed_absent');
   const aggregate = eligible.reduce((s, h) => s + (Number(h.currentValue) || 0), 0);
 
+  // Enablement predicate for the F6 gate: matches the modal's OWN live
+  // derived count, recomputed on every render — any drift re-locks it.
+  const typedGate = typedConfirmExpectedCount !== undefined;
+  const typedOk =
+    !typedGate ||
+    (typedCount.trim() === String(eligible.length) &&
+      eligible.length === typedConfirmExpectedCount);
+
   const handleConfirm = () => {
     if (busy) return;
     if (eligible.length === 0) {
       setError('No closed_absent holdings are selected; nothing can be deleted.');
+      return;
+    }
+    if (typedGate && !typedOk) {
+      // Fail-closed: the typed value must equal the CURRENT live count at
+      // the exact moment of commit. There is no bypass path.
+      setError('Type the exact live count of holdings to enable permanent deletion.');
       return;
     }
     setBusy(true);
@@ -1673,6 +1701,41 @@ export const BatchDeleteHoldingModal: React.FC<{
               atomically as a single batch.
             </p>
 
+            {typedGate && (
+              <div className="mt-4 rounded border border-red-800 bg-[#0D1117] p-3">
+                <label
+                  className="block text-sm text-[#F0F6FC]"
+                  htmlFor="batch-modal-typed-input"
+                  data-testid="batch-modal-typed-hint"
+                >
+                  Whole-ledger (GLOBAL) deletion requires typed confirmation. Type{' '}
+                  <strong className="font-mono">{eligible.length}</strong> — the live count of
+                  holdings about to be permanently deleted — to enable the final action.
+                </label>
+                <input
+                  id="batch-modal-typed-input"
+                  data-testid="batch-modal-typed-input"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={typedCount}
+                  onChange={(e) => setTypedCount(e.target.value)}
+                  aria-describedby="batch-modal-typed-hint"
+                  aria-invalid={typedCount.trim() !== '' && !typedOk ? true : undefined}
+                  disabled={busy}
+                  className="mt-2 w-32 rounded border border-[#30363D] bg-[#161B22] px-2 py-1 font-mono text-[#F0F6FC]"
+                />
+                {!typedOk && (
+                  <span className="ml-2 text-xs text-red-300" data-testid="batch-modal-typed-state">
+                    {typedCount.trim() === ''
+                      ? 'Confirmation required — enter the count above.'
+                      : `Does not match the current live count (${eligible.length}).`}
+                  </span>
+                )}
+              </div>
+            )}
+
             {error && (
               <div
                 className="mt-3 rounded border border-red-700 bg-red-900/30 p-3 text-xs text-red-200"
@@ -1704,7 +1767,7 @@ export const BatchDeleteHoldingModal: React.FC<{
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={busy || eligible.length === 0}
+                disabled={busy || eligible.length === 0 || !typedOk}
                 className="px-4 py-1.5 rounded bg-red-700 text-white text-sm font-medium hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                 data-testid="batch-modal-confirm"
               >

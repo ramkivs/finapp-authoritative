@@ -303,11 +303,12 @@ interface LedgerState {
    *
    * D-06-F1-B/C widen ONLY the audit attribution via the additive `scope`
    * parameter ('BROKER_WIDE' / 'ACCOUNT_WIDE') used by the persistent
-   * closed-positions cleanup surface. The mutation path, validation, and
-   * whole-batch atomicity remain the single ratified engine. There is still
-   * NO global deletion path (F1-D deferred; 'GLOBAL' is not a valid tag). No
-   * Asset effect (F10-C), no transaction mutation, no snapshot
-   * recomputation, no undo.
+   * closed-positions cleanup surface; D-06-F1-D adds 'GLOBAL'
+   * (whole-ledger, F6 typed-confirmation gated at the UI layer —
+   * FINBOOM-D-06-F6-F1D-IMPLEMENTATION-AUTHORITY-REPORT.md). The mutation
+   * path, validation, and whole-batch atomicity remain the single ratified
+   * engine for every scope. No Asset effect (F10-C), no transaction
+   * mutation, no snapshot recomputation, no undo.
    */
   commitBatchHoldingDeletion: (
     ids: readonly string[],
