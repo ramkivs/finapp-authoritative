@@ -781,6 +781,25 @@ export interface HoldingRepository {
  * `id` (the audit entry's own storage key).
  * ========================================================================= */
 
+/**
+ * D-06-F1-A / F1-B / F1-C — audit scope of a batch deletion event.
+ *
+ *   'MULTI_SELECT' — ratified F1-A scope: row-by-row user selection inside
+ *                    the transient post-confirm import closure surface.
+ *   'BROKER_WIDE'  — D-06-F1-B: explicit opt-in selection over the LIVE
+ *                    canonical closed_absent set of one broker, from the
+ *                    persistent closed-positions cleanup surface.
+ *   'ACCOUNT_WIDE' — D-06-F1-C: same, scoped to the (broker, account) pair.
+ *
+ * No 'GLOBAL' member exists by design: D-06-F1-D is DEFERRED pending the
+ * separate F6 product decision (authority:
+ * FINBOOM-D-06-F1-BCD-PRODUCT-DECISION-AUTHORITY-REPORT.md).
+ * Additive-only: MULTI_SELECT persisted records and call semantics are
+ * unchanged; the field remains optional so no IndexedDB migration and no
+ * DB_VERSION change is required.
+ */
+export type HoldingDeletionBatchScope = 'MULTI_SELECT' | 'BROKER_WIDE' | 'ACCOUNT_WIDE';
+
 export interface HoldingDeletionLogEntry {
   /** Audit entry id, distinct from `holdingId`. Prefix `hdl-`. Storage key. */
   id: string;
@@ -817,11 +836,12 @@ export interface HoldingDeletionLogEntry {
    */
   batchId?: string;
   /**
-   * D-06-F1-A — scope of the deletion event. Currently only `'MULTI_SELECT'`
-   * (user-selected multi-select batch). ABSENT on single-deletion entries.
-   * Optional for the same backward-compatibility reason as `batchId`.
+   * D-06-F1-A — scope of the deletion event; widened ADDITIVELY by D-06-F1-B/C
+   * to the `HoldingDeletionBatchScope` union ('MULTI_SELECT' | 'BROKER_WIDE' |
+   * 'ACCOUNT_WIDE'). ABSENT on single-deletion entries. Optional for the same
+   * backward-compatibility reason as `batchId`.
    */
-  batchScope?: 'MULTI_SELECT';
+  batchScope?: HoldingDeletionBatchScope;
 }
 
 export interface HoldingDeletionLogRepository {

@@ -6,6 +6,7 @@ import {
   Liability,
   Holding,
   HoldingDeletionLogEntry,
+  HoldingDeletionBatchScope,
   NetWorthSnapshot,
   Account,
   ControlledAccountType,
@@ -294,18 +295,25 @@ interface LedgerState {
    * mechanism restores both `holdingsData` and `holdingDeletionLogData` from
    * the captured snapshot; `persisted` REJECTS with the failure.
    *
-   * Every audit entry of the batch carries the shared `batchId` and
-   * `batchScope: 'MULTI_SELECT'` (D-06-F1-A batch attribution). Optional
-   * fields on `HoldingDeletionLogEntry` keep single-deletion records and
-   * pre-existing serialized records fully compatible: DB_VERSION stays 7,
+   * Every audit entry of the batch carries the shared `batchId` and the
+   * `batchScope` tag (D-06-F1-A batch attribution; default 'MULTI_SELECT').
+   * Optional fields on `HoldingDeletionLogEntry` keep single-deletion records
+   * and pre-existing serialized records fully compatible: DB_VERSION stays 7,
    * no migration, no new object store.
    *
-   * D-06-F1-A scope is user-selected multi-select ONLY: no broker-wide,
-   * account-wide, or global deletion path exists (F1-B/C/D deferred). No
+   * D-06-F1-B/C widen ONLY the audit attribution via the additive `scope`
+   * parameter ('BROKER_WIDE' / 'ACCOUNT_WIDE') used by the persistent
+   * closed-positions cleanup surface. The mutation path, validation, and
+   * whole-batch atomicity remain the single ratified engine. There is still
+   * NO global deletion path (F1-D deferred; 'GLOBAL' is not a valid tag). No
    * Asset effect (F10-C), no transaction mutation, no snapshot
    * recomputation, no undo.
    */
-  commitBatchHoldingDeletion: (ids: readonly string[]) => HoldingBatchDeletionOutcome;
+  commitBatchHoldingDeletion: (
+    ids: readonly string[],
+    /** D-06-F1-B/C — additive audit-scope tag; default preserves F1-A. */
+    scope?: HoldingDeletionBatchScope,
+  ) => HoldingBatchDeletionOutcome;
 
   // Account & Budget Actions (WP-18)
   /**
@@ -1024,7 +1032,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
    * action and no automatic deletion path: only an explicit user selection
    * can reach this action.
    */
-  commitBatchHoldingDeletion: (ids) => {
+  commitBatchHoldingDeletion: (ids, scope) => {
     const { holdings, holdingDeletionLog } = get();
     const asOf = new Date().toISOString();
     // planDeleteMany is pure and synchronous; it throws HoldingDeletionError
@@ -1032,7 +1040,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     // when ANY selected item is invalid — rejecting the ENTIRE batch before
     // any mutation. On success, `plan` is the complete pre-computed next
     // state for every selected Holding plus every audit entry.
-    const plan = HoldingDeletionService.planDeleteMany(ids, asOf, holdings, holdingDeletionLog);
+    const plan = HoldingDeletionService.planDeleteMany(ids, asOf, holdings, holdingDeletionLog, scope);
     const batchId = plan.batchId;
     const auditEntryIds = plan.auditEntries.map(e => e.id);
     const holdingIds = plan.targets.map(t => t.id);

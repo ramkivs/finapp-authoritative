@@ -39,7 +39,7 @@
  * authority. The interface preserves them exactly.
  */
 
-import { Holding, HoldingDeletionLogEntry } from '../domain/types';
+import { Holding, HoldingDeletionLogEntry, HoldingDeletionBatchScope } from '../domain/types';
 
 export class HoldingDeletionError extends Error {
   constructor(
@@ -224,6 +224,12 @@ export class HoldingDeletionService {
     asOf: string,
     existing: readonly Holding[],
     existingLog: readonly HoldingDeletionLogEntry[],
+    // D-06-F1-B/C — ADDITIVE, default-preserving audit-scope parameter.
+    // Omitting it (every pre-existing caller, incl. the F1-A MULTI_SELECT
+    // path) yields behavior byte-identical to the ratified F1-A contract.
+    // It tags the audit records only; it does NOT alter validation,
+    // atomicity, or eligibility semantics. No scope bypasses validation.
+    scope: HoldingDeletionBatchScope = 'MULTI_SELECT',
   ): HoldingBatchDeletePlan {
     if (!Array.isArray(ids) || ids.length === 0) {
       throw new HoldingDeletionError(
@@ -299,7 +305,7 @@ export class HoldingDeletionService {
       importedAt: target.importedAt,
       deletedAt: asOf,
       batchId,
-      batchScope: 'MULTI_SELECT',
+      batchScope: scope,
     }));
 
     const auditIds = new Set<string>(existingLog.map(e => e.id));
@@ -319,7 +325,7 @@ export class HoldingDeletionService {
     const nextHoldings: Holding[] = existing.filter(h => !idSet.has(h.id));
     const nextLog: HoldingDeletionLogEntry[] = [...existingLog, ...auditEntries];
 
-    return { batchId, batchScope: 'MULTI_SELECT', targets, auditEntries, nextHoldings, nextLog };
+    return { batchId, batchScope: scope, targets, auditEntries, nextHoldings, nextLog };
   }
 
   /**
@@ -354,8 +360,9 @@ export class HoldingDeletionService {
 export interface HoldingBatchDeletePlan {
   /** Shared attribution id for every audit entry of this batch. Prefix `hdlb-`. */
   readonly batchId: string;
-  /** Scope of the batch. D-06-F1-A defines exactly one: user multi-select. */
-  readonly batchScope: 'MULTI_SELECT';
+  /** Scope of the batch: 'MULTI_SELECT' (D-06-F1-A), 'BROKER_WIDE' /
+   *  'ACCOUNT_WIDE' (D-06-F1-B/C cleanup surface). */
+  readonly batchScope: HoldingDeletionBatchScope;
   /** The selected Holdings, in selection order. All `closed_absent`. */
   readonly targets: Holding[];
   /** One audit entry per target; all share `batchId`. */

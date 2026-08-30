@@ -6,6 +6,7 @@ import { ImportHistoryService, ImportHistoryEntry } from '../services/ImportHist
 import { DividendClassifier, DividendClassificationResult, DividendClassifyAllResult } from '../services/DividendClassifier';
 import { Transaction } from '../domain/types';
 import { BrokerImportSection } from './BrokerImportSection';
+import { ClosedPositionsCleanupSection } from './ClosedPositionsCleanupSection';
 import { StandardImportSection } from './StandardImportSection';
 import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -486,6 +487,11 @@ export const ImportPage: React.FC = () => {
           {/* WP-FB-IMPORT-BROKER-01 — WP-08 broker-import section.
               Self-contained: file upload → detect → parse → preview → confirm / cancel. */}
           <BrokerImportSection />
+          {/* D-06-F1-B/C (placement candidate A, recorded at the execution
+              gate step 0): the cleanup surface is mounted HERE — persistent,
+              independent of the transient import preview/ClosureTable — and
+              is a pure consumer of the store + the reused ratified modal. */}
+          <ClosedPositionsCleanupSection />
         </div>
       )}
 

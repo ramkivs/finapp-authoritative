@@ -41,7 +41,7 @@ import { BrokerImportService, BrokerImportPreview, BrokerImportPreviewEntry, Bro
 import { ImportRowIssue, StatementInput } from '../services/import/ImportTypes';
 import { ImportHistoryService } from '../services/ImportHistoryService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
-import { Holding } from '../domain/types';
+import { Holding, HoldingDeletionBatchScope } from '../domain/types';
 
 interface CommitNotice {
   kind: 'success' | 'error';
@@ -1515,7 +1515,14 @@ export const BatchDeleteHoldingModal: React.FC<{
   holdings: Holding[];
   onClose: () => void;
   onDeleted: () => void;
-}> = ({ holdings, onClose, onDeleted }) => {
+  /**
+   * D-06-F1-B/C — additive audit-scope tag for the committed batch. Omitted
+   * (the ratified F1-A ClosureTable call site) it stays exactly
+   * 'MULTI_SELECT'; the cleanup surface passes 'BROKER_WIDE'/'ACCOUNT_WIDE'.
+   * UI copy and the two-stage review→confirm flow are shared unchanged.
+   */
+  batchScope?: HoldingDeletionBatchScope;
+}> = ({ holdings, onClose, onDeleted, batchScope }) => {
   const [stage, setStage] = useState<'review' | 'confirm'>('review');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1536,7 +1543,7 @@ export const BatchDeleteHoldingModal: React.FC<{
     setError(null);
     try {
       const ids = eligible.map((h) => h.id);
-      const outcome = useCanonicalLedger.getState().commitBatchHoldingDeletion(ids);
+      const outcome = useCanonicalLedger.getState().commitBatchHoldingDeletion(ids, batchScope);
       if (outcome.persisted) {
         outcome.persisted
           .then(() => {
