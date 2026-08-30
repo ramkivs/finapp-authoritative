@@ -21,7 +21,7 @@
  */
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { render, fireEvent, cleanup, screen } from '@testing-library/react';
 
 import { BrokerImportSection } from '../pages/BrokerImportSection';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
@@ -236,5 +236,142 @@ describe('WP-09 BrokerImportSection — reactivation UI disclosure', () => {
     // The data condition for the badge is met.
     expect(preview.entries[0].existing!.status).toBe('closed_absent');
     expect(preview.entries[0].classification).toBe('UPDATED');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D-12 (Option B) — blocking-error preview surface
+//
+// End-to-end UI tests using the same file-input harness pattern as
+// `BrokerImportSection.commitNotice.test.tsx` (real parse → real preview).
+// Fixtures are synthetic inline CSVs — hermetic, no /home/user/uploads
+// dependency. The panel is a pure function of preview.blockingErrors;
+// T12/T13 here are ISOLATION pins — the full D-06-F1-A protection remains
+// owned by the dedicated suites (destructiveDisclosure, D06F1A.*,
+// commitNotice), which must pass unmodified.
+// ---------------------------------------------------------------------------
+
+const D12_HEADER = '"Instrument","Qty.","Avg. cost","LTP","Invested","Cur. val","P&L","Net chg.","Day chg.",""';
+const D12_CLEAN_CSV = [
+  D12_HEADER,
+  '"TESTINSTR",10,100,110,1000,1100,100,10,1,""',
+].join('\n');
+const D12_BLOCKED_CSV = [
+  D12_HEADER,
+  '"BADQTY",abc,100,110,1000,1100,100,10,1,""',
+  '"",10,100,110,1000,1100,100,10,1,""',
+].join('\n');
+
+async function uploadCsv(fileInput: HTMLInputElement, filename: string, content: string) {
+  const file = new File([content], filename, { type: 'text/csv' });
+  Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+  fireEvent.change(fileInput);
+  // Allow async detection + parse to settle.
+  await new Promise((r) => setTimeout(r, 50));
+}
+
+function findButtonByText(text: string): HTMLButtonElement | undefined {
+  const buttons = Array.from(document.querySelectorAll('button'));
+  return buttons.find((b) => b.textContent && b.textContent.includes(text)) as
+    | HTMLButtonElement
+    | undefined;
+}
+
+describe('D-12 blocking-error preview surface', () => {
+  it('D12.UI.1 clean preview: no blocking panel; Confirm import enabled', async () => {
+    render(<BrokerImportSection />);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(fileInput).not.toBeNull();
+    await uploadCsv(fileInput, 'd12-clean.csv', D12_CLEAN_CSV);
+    // T11 — the empty-projection UI must be indistinguishable from before.
+    expect(screen.queryByTestId('broker-blocking-errors')).toBeNull();
+    const confirm = findButtonByText('Confirm import');
+    expect(confirm).toBeDefined();
+    expect(confirm!.disabled).toBe(false);
+  });
+
+  it('D12.UI.2 blocked preview: panel present with exact projected strings, reason copy, Confirm disabled', async () => {
+    // T8 + T9 + T10 / AC-08 + AC-11.
+    render(<BrokerImportSection />);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(fileInput).not.toBeNull();
+    await uploadCsv(fileInput, 'd12-blocked.csv', D12_BLOCKED_CSV);
+    const panel = await screen.findByTestId('broker-blocking-errors');
+    expect(panel.textContent).toContain(
+      'Import cannot be confirmed because blocking errors were found.',
+    );
+    expect(panel.textContent).toContain(
+      'Resolve the blocking errors before confirming this import.',
+    );
+    // Exact projected strings (the D12-a format, byte-for-byte).
+    expect(panel.textContent).toContain(
+      'R3 [BROKER_NUMERIC_INVALID] Qty.: Qty. is not a parseable number: "abc"',
+    );
+    expect(panel.textContent).toContain(
+      'R4 [BROKER_IDENTITY_MISSING] Instrument is empty for this row',
+    );
+    // Confirm disabled — and disabled BECAUSE of the existing eligibility
+    // flag (unchanged), not by any new blocking gate.
+    const confirm = findButtonByText('Confirm import');
+    expect(confirm).toBeDefined();
+    expect(confirm!.disabled).toBe(true);
+    // The no-mutations hint must NOT appear when blockers exist.
+    expect(document.body.textContent).not.toContain('No mutations needed');
+  });
+
+  it('D12.UI.3 existing parser-issues disclosure still renders (count semantics unchanged)', async () => {
+    // T8-adjacent regression pin: the disclosure keeps listing ALL issues.
+    render(<BrokerImportSection />);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(fileInput).not.toBeNull();
+    await uploadCsv(fileInput, 'd12-disclosure.csv', D12_BLOCKED_CSV);
+    await screen.findByTestId('broker-blocking-errors');
+    const toggle = findButtonByText('Parser issues (2)');
+    expect(toggle).toBeDefined();
+    fireEvent.click(toggle!);
+    expect(document.body.textContent).toContain(
+      'R4 [BROKER_IDENTITY_MISSING] Instrument is empty for this row',
+    );
+  });
+
+  it('D12.UI.4 blocking panel is isolated from storage recovery and the closure affordances', async () => {
+    // T12 + T13 — presence-check isolation in the D-12 surface. Full
+    // behavioral protection remains owned by the D-06-F1-A suites.
+    const legacy = makeHolding({
+      id: 'hld-d12-legacy',
+      broker: 'Zerodha',
+      instrumentName: 'LegacyCorp',
+      isin: 'INE999A01019',
+    });
+    repository.holdings.saveMany([legacy]);
+    S().syncWithRepository({
+      transactions: [],
+      assets: [],
+      liabilities: [],
+      holdings: repo.holdingsData,
+      snapshots: [],
+      accounts: [],
+      budgets: [],
+      policies: [],
+      goals: [],
+      profile: null,
+    });
+    render(<BrokerImportSection />);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(fileInput).not.toBeNull();
+    await uploadCsv(fileInput, 'd12-isolation.csv', D12_BLOCKED_CSV);
+    await screen.findByTestId('broker-blocking-errors');
+    // The closure surface for the (unaffected) closed-absent transition
+    // still renders alongside the blocking panel.
+    expect(document.body.textContent).toContain(
+      'Closures (will transition to closed_absent)',
+    );
+    // The D-06-F1-A storage-recovery panel must NOT co-render in a normal
+    // blocked preview (separate failure class, separate region).
+    expect(screen.queryByTestId('storage-recovery-panel')).toBeNull();
+    // Confirm stays disabled; nothing in the panel offers a destructive or
+    // partial-import affordance.
+    expect(findButtonByText('Confirm import')!.disabled).toBe(true);
+    expect(document.body.textContent).not.toContain('Import anyway');
   });
 });

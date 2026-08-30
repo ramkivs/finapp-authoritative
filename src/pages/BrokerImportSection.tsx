@@ -925,6 +925,41 @@ const PreviewView: React.FC<{
         </div>
       )}
 
+      {/* D-12 (Option B) — blocking-error panel. Pure function of
+          `preview.blockingErrors` (the deterministic INVALID projection from
+          BrokerImportService.reconcile). Informational only: confirmation
+          eligibility remains `preview.confirmationEligible`, unchanged.
+          Deliberately separate from the D-06-F1-A storage-recovery panel
+          above (different failure class) and it never renders when the
+          projection is empty, so the clean-preview UI is byte-identical to
+          before. */}
+      {preview.blockingErrors.length > 0 && (
+        <div
+          data-testid="broker-blocking-errors"
+          className="mt-4 rounded border border-red-700 bg-red-900/30 p-3 flex items-start gap-2"
+        >
+          <XCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+          <div className="text-sm text-red-200">
+            <div className="font-semibold">
+              Import cannot be confirmed because blocking errors were found.
+            </div>
+            <div className="text-red-300/80 text-xs mt-1">
+              Resolve the blocking errors before confirming this import.
+            </div>
+            <ul className="mt-2 max-h-48 overflow-y-auto">
+              {preview.blockingErrors.map((msg: string, idx: number) => (
+                <li
+                  key={idx}
+                  className="text-xs font-mono text-red-300 break-all py-0.5"
+                >
+                  {msg}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
       <div className="mt-4 flex items-center gap-2">
         <button
           type="button"

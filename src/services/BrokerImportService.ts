@@ -203,12 +203,29 @@ export class BrokerImportService {
     const closedAbsentCount = closures.length;
     const issueCount = parsed.issues.length;
 
+    // D-12 (Option B) — single source of truth: `invalidIssues` is the one
+    // deterministic INVALID collection feeding BOTH confirmation
+    // eligibility and the `blockingErrors` projection below, so the two
+    // can never diverge. `blockingErrors` is informational only; the
+    // eligibility semantics themselves are exactly unchanged.
+    const invalidIssues = parsed.issues.filter((i) => i.severity === 'INVALID');
+
     // Confirmation eligibility: no blocking errors AND at least one mutation
     // (NEW, UPDATED, or CLOSED_ABSENT). An all-UNCHANGED import is a no-op and
     // does not require confirmation.
     const confirmationEligible =
-      parsed.issues.filter((i) => i.severity === 'INVALID').length === 0 &&
+      invalidIssues.length === 0 &&
       (newCount + updatedCount + closedAbsentCount) > 0;
+
+    // D-12 projection: one entry per INVALID issue, source (emission) order
+    // preserved, no cap, no dedup beyond what `parsed.issues` itself carries.
+    // Format is the established repository issue rendering — identical to the
+    // parser-issue rows in `BrokerImportSection` and the `ImportHistoryService`
+    // errorSummary projection: `R{rowNumber} [{code}] {field}: {message}`.
+    const blockingErrors = invalidIssues.map(
+      (i) =>
+        `R${i.rowNumber} [${i.code}] ${i.field ? `${i.field}: ` : ''}${i.message}`,
+    );
 
     return {
       broker: parsed.broker,
@@ -218,7 +235,7 @@ export class BrokerImportService {
       entries,
       closures,
       issues: parsed.issues,
-      blockingErrors: [],
+      blockingErrors,
       counts: {
         new: newCount,
         updated: updatedCount,
