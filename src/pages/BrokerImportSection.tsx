@@ -40,6 +40,7 @@ import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { BrokerImportService, BrokerImportPreview, BrokerImportPreviewEntry, BrokerImportPreviewClosure } from '../services/BrokerImportService';
 import { ImportRowIssue, StatementInput } from '../services/import/ImportTypes';
 import { ImportHistoryService } from '../services/ImportHistoryService';
+import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { Holding } from '../domain/types';
 
 interface CommitNotice {
@@ -227,6 +228,30 @@ export const BrokerImportSection: React.FC = () => {
   const [commitNotice, setCommitNotice] = useState<CommitNotice | null>(null);
   const [showParserIssues, setShowParserIssues] = useState(false);
   /**
+   * D-06-F1-A recovery correction — the explicit storage-recovery affordance.
+   *
+   * When "Confirm import" fails BECAUSE the persistence guard refused the
+   * write after a failed IndexedDB load, the canonical mutation is rolled
+   * back (`revertDelta`) and the preview stays mounted with rows still
+   * `active` — a correct but, on its own, unrecoverable state: the only
+   * legitimate clear of the guard is a successful load, and there was no way
+   * to trigger one from here. This state turns that dead end into an explicit
+   * `Retry storage` action:
+   *
+   *  - shown ONLY while `IndexedDBStorageService.isLedgerLoadRefusal()` says
+   *    the refusal state is armed (never for other commit failures);
+   *  - the action runs the legitimate full load (`recoverStorage`, same load
+   *    as startup). No write bypass, no latch reset, no data clearing;
+   *  - success clears the refusal (inside loadAll) and the user re-clicks
+   *    "Confirm import" THEMSELVES — the failed mutation is NEVER replayed
+   *    automatically;
+   *  - failure is reported; the affordance stays available.
+   */
+  const [storageRecovery, setStorageRecovery] = useState<
+    'unavailable' | 'offered' | 'retrying' | 'recovered'
+  >('unavailable');
+  const [storageRecoveryError, setStorageRecoveryError] = useState<string | null>(null);
+  /**
    * D-06-F1-A sequencing correction — post-confirm closure surface.
    *
    * After a SUCCESSFUL import confirmation that contained closures, the
@@ -287,6 +312,8 @@ export const BrokerImportSection: React.FC = () => {
       setRawError(null);
       setCommitNotice(null);
       setShowParserIssues(false);
+      setStorageRecovery('unavailable');
+      setStorageRecoveryError(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -307,6 +334,11 @@ export const BrokerImportSection: React.FC = () => {
     // D-06-F1-A sequencing correction: starting a new import supersedes any
     // post-confirm closure surface from the previous import.
     setConfirmedClosures(null);
+    // D-06-F1-A recovery correction: a superseded preview discards its
+    // recovery affordance with it. The refusal STATE itself is untouched —
+    // it is storage state, not component state, and the guard still rules.
+    setStorageRecovery('unavailable');
+    setStorageRecoveryError(null);
     try {
       const input: StatementInput = isBinarySpreadsheet(file.name)
         ? { kind: 'binary', content: new Uint8Array(await file.arrayBuffer()), fileName: file.name }
@@ -334,6 +366,10 @@ export const BrokerImportSection: React.FC = () => {
     setRawError(null);
     setCommitNotice(null);
     setShowParserIssues(false);
+    // D-06-F1-A recovery correction: cancelling discards the affordance.
+    // The refusal STATE remains armed (correctly) until a load succeeds.
+    setStorageRecovery('unavailable');
+    setStorageRecoveryError(null);
     // D-06-F1-A sequencing correction: cancel clears the post-confirm closure
     // surface as well (same clear-set semantics as the broker-switch reset).
     setConfirmedClosures(null);
@@ -355,6 +391,9 @@ export const BrokerImportSection: React.FC = () => {
     if (!preview) return;
     setBusy(true);
     setCommitNotice(null);
+    // D-06-F1-A recovery correction: a fresh attempt starts from no-recovery.
+    setStorageRecovery('unavailable');
+    setStorageRecoveryError(null);
     try {
       const outcome = commitImportedHoldings(preview.entries.map((e) => e.candidate));
       // outcome.persisted is the atomic write promise. Await it so we can
@@ -419,6 +458,13 @@ export const BrokerImportSection: React.FC = () => {
               kind: 'error',
               text: e instanceof Error ? e.message : String(e),
             });
+            // D-06-F1-A recovery correction: if (and ONLY if) the write was
+            // refused by the failed-load guard, offer the explicit storage
+            // recovery. Other commit failures keep the existing plain error.
+            if (IndexedDBStorageService.isLedgerLoadRefusal()) {
+              setStorageRecovery('offered');
+              setStorageRecoveryError(null);
+            }
             setBusy(false);
           });
       } else {
@@ -434,6 +480,30 @@ export const BrokerImportSection: React.FC = () => {
         text: e instanceof Error ? e.message : String(e),
       });
       setBusy(false);
+    }
+  };
+
+  /**
+   * D-06-F1-A recovery correction — the `Retry storage` action.
+   *
+   * Runs the ONE legitimate recovery operation (a full ledger load through
+   * the existing store path) and reports what actually happened:
+   *  - recovered → the refusal cleared (it clears itself inside a successful
+   *    load). The preview stays mounted; the user re-clicks `Confirm import`
+   *    themselves. The failed mutation is never replayed automatically.
+   *  - failure   → the real error is surfaced, the refusal REMAINS armed,
+   *    and nothing was changed. No fabricated success, ever.
+   */
+  const handleStorageRecovery = async () => {
+    if (storageRecovery === 'retrying') return;
+    setStorageRecovery('retrying');
+    setStorageRecoveryError(null);
+    const outcome = await useCanonicalLedger.getState().recoverStorage();
+    if (outcome.recovered) {
+      setStorageRecovery('recovered');
+    } else {
+      setStorageRecovery('offered');
+      setStorageRecoveryError(outcome.error ?? 'The storage load failed again.');
     }
   };
 
@@ -510,6 +580,13 @@ export const BrokerImportSection: React.FC = () => {
           onConfirm={handleConfirm}
           onCancel={handleCancelWithHistory}
           selectedBroker={selectedBroker}
+          storageRecovery={storageRecovery}
+          storageRecoveryError={storageRecoveryError}
+          onRetryStorage={handleStorageRecovery}
+          onDismissStorageRecovery={() => {
+            setStorageRecovery('unavailable');
+            setStorageRecoveryError(null);
+          }}
         />
         {noticeNode}
       </>
@@ -717,7 +794,13 @@ const PreviewView: React.FC<{
   onConfirm: () => void;
   onCancel: () => void;
   selectedBroker: SupportedBroker;
-}> = ({ preview, busy, showParserIssues, onToggleParserIssues, onConfirm, onCancel, selectedBroker }) => {
+  /** D-06-F1-A recovery correction — storage-recovery affordance state. */
+  storageRecovery: 'unavailable' | 'offered' | 'retrying' | 'recovered';
+  storageRecoveryError: string | null;
+  onRetryStorage: () => void;
+  onDismissStorageRecovery: () => void;
+}> = ({ preview, busy, showParserIssues, onToggleParserIssues, onConfirm, onCancel, selectedBroker,
+       storageRecovery, storageRecoveryError, onRetryStorage, onDismissStorageRecovery }) => {
   const canConfirm = preview.confirmationEligible && !busy;
   return (
     <section
@@ -765,7 +848,59 @@ const PreviewView: React.FC<{
           title="Closures (will transition to closed_absent)"
           closures={preview.closures}
           phase="preview"
+          storageRecoveryPending={storageRecovery === 'offered' || storageRecovery === 'retrying'}
         />
+      )}
+
+      {/* D-06-F1-A recovery correction — CONFIRM FAILED / STORAGE RECOVERY
+          REQUIRED, rendered strictly inside the still-mounted failed preview
+          and strictly while the persistence guard has the ledger refused.
+          This never presents the import as successful. */}
+      {storageRecovery !== 'unavailable' && (
+        <div
+          className="mt-3 rounded border border-amber-500/60 bg-amber-950/40 p-3"
+          data-testid="storage-recovery-panel"
+          data-recovery-state={storageRecovery}
+          role="alert"
+        >
+          <p className="text-sm font-semibold text-amber-200">
+            {storageRecovery === 'recovered'
+              ? 'Local storage was read successfully. Your import was NOT saved — press “Confirm import” again to save it now.'
+              : 'Import could not be saved because local storage could not be read.'}
+          </p>
+          <p className="mt-1 text-xs text-amber-200/80">
+            {storageRecovery === 'recovered'
+              ? 'The storage refusal is cleared. Nothing was imported yet; the preview is unchanged and re-confirming runs the same whole-batch check.'
+              : 'Nothing was written and nothing was lost — your ledger is exactly as it was, and the preview is still here. Retry the storage read, then press “Confirm import” again. The rows do not become selectable until a Confirm actually saves.'}
+            {storageRecoveryError && (
+              <span className="block mt-1 font-mono text-red-300">
+                Recovery failed: {storageRecoveryError}
+              </span>
+            )}
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            {storageRecovery !== 'recovered' && (
+              <button
+                type="button"
+                data-testid="storage-retry-button"
+                onClick={onRetryStorage}
+                disabled={storageRecovery === 'retrying'}
+                aria-busy={storageRecovery === 'retrying'}
+                className="px-3 py-1 rounded bg-amber-600 text-white text-xs font-semibold hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {storageRecovery === 'retrying' ? 'Retrying storage…' : 'Retry storage'}
+              </button>
+            )}
+            <button
+              type="button"
+              data-testid="storage-recovery-dismiss"
+              onClick={onDismissStorageRecovery}
+              className="px-3 py-1 rounded bg-[#21262D] text-[#F0F6FC] text-xs font-medium hover:bg-[#30363D]"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
       )}
 
       {preview.issues.length > 0 && (
@@ -928,7 +1063,19 @@ export const ClosureTable: React.FC<{
    * remains exactly `status === 'closed_absent'`.
    */
   phase?: 'preview' | 'confirmed';
-}> = ({ title, closures, phase = 'preview' }) => {
+  /**
+   * D-06-F1-A recovery correction — TEXT ONLY affordance flag. True while a
+   * Confirm failed in the storage-refusal state and the user has not yet
+   * recovered. It NEVER participates in eligibility: `disabled` stays
+   * exactly `!isDeletionEligible(live)` and the predicate stays exactly
+   * `status === 'closed_absent'`. Its only job is to stop the row tooltip
+   * from promising "becomes selectable after the import is confirmed" when
+   * the confirmation actually FAILED — the honest copy is that the rows
+   * become selectable only after a Confirm ACTUALLY SAVES, which needs a
+   * successful storage read first.
+   */
+  storageRecoveryPending?: boolean;
+}> = ({ title, closures, phase = 'preview', storageRecoveryPending = false }) => {
   const [open, setOpen] = useState(true);
   // WP-FB-IMPORT-BROKER-01 / D-06: modal state for the closed_absent
   // permanent deletion flow. `deletionTarget` is the holding whose delete
@@ -1053,7 +1200,9 @@ export const ClosureTable: React.FC<{
                           isDeletionEligible(live)
                             ? 'Select this closed_absent holding for batch deletion (D-06-F1-A)'
                             : phase === 'preview'
-                              ? 'Not yet closed_absent — becomes selectable after the import is confirmed'
+                              ? storageRecoveryPending
+                                ? 'Not saved — the Confirm FAILED because local storage could not be read. Nothing was imported; these become selectable only after a Confirm actually saves.'
+                                : 'Not yet closed_absent — becomes selectable after the import is confirmed'
                               : 'Only closed_absent holdings can be selected for batch deletion'
                         }
                       />

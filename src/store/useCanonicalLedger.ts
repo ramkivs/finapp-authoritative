@@ -29,6 +29,7 @@ import { AccountAssetLinkService, LinkResult } from '../services/AccountAssetLin
 import { TransactionSignService } from '../services/TransactionSignService';
 import { BrokerImportService } from '../services/BrokerImportService';
 import { HoldingDeletionService } from '../services/HoldingDeletionService';
+import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { AssetLifecycleService } from '../services/AssetLifecycleService';
 import { repository } from '../repositories';
 
@@ -109,6 +110,23 @@ interface LedgerState {
   }) => void;
 
   initialize: () => Promise<void>;
+  /**
+   * D-06-F1-A recovery correction — the explicit, user-invoked storage
+   * recovery offered after a Confirm was REFUSED by the failed-load guard.
+   *
+   * Semantics, deliberately thin:
+   *  - it runs the ONE legitimate recovery operation (`repository.initialize()`
+   *    — the same load startup performs, which re-reads every store and
+   *    re-syncs memory). No new load path, no shortcut;
+   *  - success → `IndexedDBStorageService.loadFailed` clears inside
+   *    `loadAll()` and `initStatus` becomes 'ready' only after the load
+   *    actually resolved — success is never fabricated;
+   *  - failure → `initStatus`/`initError` carry the real error, the write
+   *    refusal REMAINS armed, and nothing in the ledger is touched;
+   *  - it never re-attempts the failed mutation itself — retrying "Confirm
+   *    import" stays an explicit user action (D-06 review → confirm).
+   */
+  recoverStorage: () => Promise<{ recovered: boolean; error: string | null }>;
   /**
    * WP-FB-DATA-10 — observable initialization outcome.
    *
@@ -554,6 +572,20 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
         initError: e instanceof Error ? e.message : String(e)
       });
       throw e;
+    }
+  },
+
+  recoverStorage: async () => {
+    // D-06-F1-A recovery correction. Runs the SAME legitimate load as
+    // `initialize` and reports the outcome without rethrowing, so the UI can
+    // render 'recovered' vs 'still refused' from the returned value alone.
+    // The write-refusal latch is cleared inside loadAll() strictly on a
+    // successful read — this function neither clears nor bypasses it.
+    try {
+      await get().initialize();
+      return { recovered: !IndexedDBStorageService.loadFailed, error: null };
+    } catch (e) {
+      return { recovered: false, error: e instanceof Error ? e.message : String(e) };
     }
   },
 

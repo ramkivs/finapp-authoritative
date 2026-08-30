@@ -188,6 +188,20 @@ export class IndexedDBStorageService {
   /** True when the most recent load attempt failed. */
   static get loadFailed(): boolean { return this.lastLoadFailed; }
 
+  /**
+   * D-06-F1-A recovery correction — is the ledger currently in the
+   * failed-load / write-refusal state the user can be offered recovery for?
+   *
+   * The write guard at `performSave` fires ONLY while `lastLoadFailed` is
+   * set, so this is the authoritative check behind a "Refusing to persist:
+   * the last IndexedDB load failed…" Confirm failure. It is intentionally
+   * not message-text sniffing: the latch is the state, the message is its
+   * echo.
+   */
+  static isLedgerLoadRefusal(): boolean {
+    return this.lastLoadFailed;
+  }
+
   static enqueueSave<T>(task: () => Promise<T>): Promise<T> {
     const resultPromise = this.mutex.then(() => task());
     this.mutex = resultPromise.then(() => {}).catch(() => {});
