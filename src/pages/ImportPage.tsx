@@ -8,6 +8,7 @@ import { Transaction } from '../domain/types';
 import { BrokerImportSection } from './BrokerImportSection';
 import { ClosedPositionsCleanupSection } from './ClosedPositionsCleanupSection';
 import { GlobalLedgerCleanupSection } from './GlobalLedgerCleanupSection';
+import { CloseActivePositionsSection } from './CloseActivePositionsSection';
 import { StandardImportSection } from './StandardImportSection';
 import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -497,6 +498,9 @@ export const ImportPage: React.FC = () => {
               surface's DOM is pinned; GLOBAL gets its own persistent whole-
               ledger control beside it, same ratified engine + F6 gate). */}
           <GlobalLedgerCleanupSection />
+          {/* D-06-F2-A (authority: F2 impl gate §3) — user-initiated close
+              pathway; separate component, zero changes to the promoted F1 surfaces. */}
+          <CloseActivePositionsSection />
         </div>
       )}
 

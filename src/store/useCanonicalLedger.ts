@@ -30,6 +30,7 @@ import { AccountAssetLinkService, LinkResult } from '../services/AccountAssetLin
 import { TransactionSignService } from '../services/TransactionSignService';
 import { BrokerImportService } from '../services/BrokerImportService';
 import { HoldingDeletionService } from '../services/HoldingDeletionService';
+import { HoldingLifecycleService, HoldingLifecycleError } from '../services/HoldingLifecycleService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { AssetLifecycleService } from '../services/AssetLifecycleService';
 import { repository } from '../repositories';
@@ -315,6 +316,27 @@ interface LedgerState {
     /** D-06-F1-B/C — additive audit-scope tag; default preserves F1-A. */
     scope?: HoldingDeletionBatchScope,
   ) => HoldingBatchDeletionOutcome;
+
+  /**
+   * D-06-F2-A — user-initiated close pathway. Transitions the given ACTIVE
+   * Holdings to `closed_absent` through the UNMODIFIED promoted
+   * `HoldingLifecycleService.planClose` planner, in ONE atomic
+   * `repository.write`. Whole-batch validation before any mutation (empty
+   * ids reject as INVALID_ID; unknown/duplicate/already-closed/drifted ids
+   * reject the ENTIRE batch via planClose's NOT_FOUND / ALREADY_CLOSED — no
+   * partial close). Creates NO deletion-audit record (D-06-F2 product
+   * decision C: no close audit, no reason field, no new persisted state);
+   * the deletion engine remains the sole audited destructive path and still
+   * accepts ONLY `closed_absent` rows — closed by import or by this action.
+   * No reopen action exists here by design: a later broker import that
+   * reports the identity reactivates it through the ratified import path;
+   * there is deliberately no tombstone/suppression state.
+   */
+  commitUserCloses: (ids: readonly string[]) => {
+    closedIds: string[];
+    closedAt: string;
+    persisted: Promise<void>;
+  };
 
   // Account & Budget Actions (WP-18)
   /**
@@ -1055,6 +1077,43 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     );
     persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
     return { holdingIds, batchId, auditEntryIds, deletedAt: asOf, persisted };
+  },
+
+  commitUserCloses: (ids) => {
+    const { holdings } = get();
+    if (ids.length === 0) {
+      throw new HoldingLifecycleError(
+        'INVALID_ID',
+        'commitUserCloses requires at least one Holding id; there is no whole-ledger or no-op path.',
+      );
+    }
+    const asOf = new Date().toISOString();
+    // Fold through the UNMODIFIED promoted planner; it throws synchronously
+    // on the first invalid id (MISSING_ID / NOT_FOUND / ALREADY_CLOSED) —
+    // before any mutation — so the ENTIRE batch is rejected atomically. A
+    // duplicate id throws on the second pass (already closed in `working`);
+    // a row that drifted out of `active` between review and confirm throws
+    // too — no stale row can be silently closed, and no partial close
+    // exists. This is the same validation-then-single-write architecture as
+    // commitBatchHoldingDeletion, for a NON-destructive status transition.
+    let working = [...holdings];
+    for (const id of ids) {
+      working = HoldingLifecycleService.planClose(id, working, asOf).next;
+    }
+    const memoryRepo = repository as unknown as {
+      holdingsData: Holding[];
+      syncStore: () => void;
+    };
+    // Single atomic write via the promoted repository boundary; persistence
+    // failure reverts through the ratified captureLedger/revertDelta
+    // machinery, and the `persisted` promise (attached to the store state by
+    // syncStore's caller contract) surfaces it honestly to the UI.
+    const persisted = (repository as any).write(() => {
+      memoryRepo.holdingsData = working;
+      memoryRepo.syncStore();
+    });
+    persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
+    return { closedIds: [...ids], closedAt: asOf, persisted };
   },
 
   restoreImportBatch: (importBatchId) => {
