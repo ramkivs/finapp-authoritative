@@ -257,16 +257,36 @@ export const BrokerImportSection: React.FC = () => {
    * Intentionally dependent ONLY on `selectedBroker` (not on `preview`),
    * so the effect fires only when the broker changes — not on every
    * preview update.
+   *
+   * D-06-F1-A runtime correction (Windows failure diagnosis): the
+   * post-confirm closure surface is deliberately NOT cleared here.
+   *
+   * The Step 1 chip is a hint for the "how to export" copy; the actual
+   * broker of an import is detected from file content. The
+   * `confirmedClosures` surface, on the other hand, is bound to a
+   * COMMITTED import whose Holdings are already canonical
+   * `closed_absent` — it is not bound to the chip. Clearing it on a chip
+   * click (including a click made after the import was confirmed, e.g. a
+   * user tapping "Groww" to check the selection) destroyed the only
+   * F1-A selection surface while the ledger still held closed_absent
+   * Holdings: the rows the user had just been told were eligible simply
+   * vanished, with no way to reach single or batch deletion until another
+   * import re-produced the same closure rows.
+   *
+   * Keeping the surface here is safe by construction: `ClosureTable`
+   * re-resolves every row's id and status from the LIVE canonical ledger
+   * on every render, so nothing stale can be deleted — rows that are no
+   * longer canonical `closed_absent` are disabled again, and rows that
+   * left the ledger drop out. The surface is still superseded by a new
+   * import (`handleFileChosen`) and still dropped by the explicit cancel
+   * (`handleCancel`), which remain the two real lifecycle boundaries.
    */
   useEffect(() => {
-    if (preview || commitNotice || rawError || showParserIssues || confirmedClosures) {
+    if (preview || commitNotice || rawError || showParserIssues) {
       setPreview(null);
       setRawError(null);
       setCommitNotice(null);
       setShowParserIssues(false);
-      // D-06-F1-A sequencing correction: the post-confirm closure surface is
-      // bound to the previous import; switching brokers clears it.
-      setConfirmedClosures(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
