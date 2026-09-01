@@ -9,6 +9,7 @@ import { AssetsWorkspace } from '../components/wealth/AssetsWorkspace';
 import { LiabilitiesWorkspace } from '../components/wealth/LiabilitiesWorkspace';
 import { NetWorthWorkspace } from '../components/wealth/NetWorthWorkspace';
 import { AllocationWorkspace } from '../components/wealth/AllocationWorkspace';
+import { HoldingsPositionsWorkspace } from './HoldingsPositionsWorkspace';
 import { WealthHealthCard } from '../components/wealth/WealthHealthCard';
 import { WealthInsightsCard } from '../components/wealth/WealthInsightsCard';
 import { AssetConcentrationCard } from '../components/wealth/AssetConcentrationCard';
@@ -28,7 +29,7 @@ import {
 } from 'lucide-react';
 
 export const WealthPage: React.FC = () => {
-  const [subTab, setSubTab] = useState<'assets' | 'liabilities' | 'networth' | 'allocation'>('assets');
+  const [subTab, setSubTab] = useState<'assets' | 'liabilities' | 'networth' | 'allocation' | 'holdings'>('assets');
   const { transactions, assets, liabilities, snapshots, holdings } = useCanonicalLedger();
 
   // Canonical queries & derived metrics (Strictly Read-Only)
@@ -549,7 +550,8 @@ export const WealthPage: React.FC = () => {
                 { id: 'assets', label: `Assets (${assets.length})`, icon: Landmark },
                 { id: 'liabilities', label: `Liabilities (${liabilities.length})`, icon: CreditCard },
                 { id: 'networth', label: `Net Worth (${snapshots.length})`, icon: LineChart },
-                { id: 'allocation', label: 'Allocation', icon: PieChart }
+                { id: 'allocation', label: 'Allocation', icon: PieChart },
+                { id: 'holdings', label: `Holdings (${holdings.length})`, icon: Layers }
               ] as const
             ).map((tab) => {
               const Icon = tab.icon;
@@ -586,6 +588,7 @@ export const WealthPage: React.FC = () => {
             />
           )}
           {subTab === 'allocation' && <AllocationWorkspace assets={assets} holdings={holdings} />}
+          {subTab === 'holdings' && <HoldingsPositionsWorkspace holdings={holdings} />}
         </div>
       </div>
 
