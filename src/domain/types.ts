@@ -928,6 +928,72 @@ export interface ProfileRepository {
   save(profile: FinancialProfile): Promise<void>;
 }
 
+export interface LocalBackupRecordCountsShape {
+  transactions: number;
+  assets: number;
+  liabilities: number;
+  holdings: number;
+  holdingDeletionLog: number;
+  snapshots: number;
+  accounts: number;
+  budgets: number;
+  policies: number;
+  goals: number;
+  hasProfile: boolean;
+}
+
+export interface LocalBackupManifestShape {
+  format: 'finboom.local-backup';
+  schemaVersion: 1;
+  dbVersion: number;
+  appVersion: string;
+  createdAt: string;
+  recordCounts: LocalBackupRecordCountsShape;
+}
+
+export interface LocalBackupExportShape {
+  envelope: {
+    manifest: LocalBackupManifestShape;
+    integrity: {
+      algorithm: string;
+      canonicalization: 'RFC-8785-JCS';
+      digest: string;
+    };
+    data: {
+      transactions: Transaction[];
+      assets: Asset[];
+      liabilities: Liability[];
+      holdings: Holding[];
+      holdingDeletionLog: HoldingDeletionLogEntry[];
+      snapshots: NetWorthSnapshot[];
+      accounts: Account[];
+      budgets: MonthlyBudget[];
+      policies: InsurancePolicy[];
+      goals: FinancialGoal[];
+      profile: FinancialProfile | null;
+    };
+  };
+  json: string;
+  fileName: string;
+  receipt: {
+    format: 'finboom.local-backup';
+    schemaVersion: 1;
+    dbVersion: number;
+    createdAt: string;
+    fileName: string;
+    algorithm: string;
+    digest: string;
+    recordCounts: LocalBackupRecordCountsShape;
+  };
+}
+
+export interface LocalBackupRestoreShape {
+  manifest: LocalBackupManifestShape;
+  digest: string;
+  restoredAt: string;
+  recordCounts: LocalBackupRecordCountsShape;
+}
+
 export interface FinancialRepositoryPort {
   transactions: TransactionRepository;
   assets: AssetRepository;
@@ -944,6 +1010,8 @@ export interface FinancialRepositoryPort {
   clearLocalData(): Promise<void> | void;
   loadDemoData(): Promise<void> | void;
   initialize(): Promise<void> | void;
+  exportBackup(options?: { createdAt?: string }): Promise<LocalBackupExportShape>;
+  restoreFromBackup(input: string | unknown): Promise<LocalBackupRestoreShape>;
 }
 
 /* =========================================================================

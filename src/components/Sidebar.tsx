@@ -202,8 +202,6 @@ export const Sidebar: React.FC<Props> = ({
       setActiveTab('money');
     } else if (id === 'insights') {
       setActiveTab('wealth');
-    } else if (id === 'settings') {
-      alert('Settings: FinBoom v3.0 Institutional Theme active. Local persistence verified.');
     } else {
       setActiveTab(id);
     }

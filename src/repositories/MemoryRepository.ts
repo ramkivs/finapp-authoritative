@@ -49,6 +49,13 @@ import {
   AmendmentRequest
 } from '../services/TransactionAmendmentService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
+import { LiabilityIdentityService } from '../services/LiabilityIdentityService';
+import {
+  BackupValidationError,
+  LocalBackupExportResult,
+  LocalBackupRestoreResult,
+  LocalBackupService,
+} from '../services/LocalBackupService';
 import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { demoTransactions, demoAssets, demoLiabilities, demoSnapshots } from '../domain/demoFixtures';
@@ -1191,5 +1198,89 @@ export class MemoryRepository implements FinancialRepositoryPort {
       this.goalsData = [];
       this.profileData = null;
     });
+  }
+
+  /**
+   * Exports the complete canonical financial dataset (all 11 persisted stores)
+   * into a local JSON backup envelope with format/schema metadata and a genuine
+   * 256-bit integrity digest computed via `crypto.subtle`.
+   */
+  async exportBackup(options?: { createdAt?: string }): Promise<LocalBackupExportResult> {
+    if (IndexedDBStorageService.loadFailed) {
+      throw new BackupValidationError(
+        'STORAGE_UNREADABLE',
+        'Cannot export backup while local storage is in a failed-load state. Recover storage before exporting so unread records are not omitted.'
+      );
+    }
+    return LocalBackupService.createBackup(this.currentLedger(), options);
+  }
+
+  /**
+   * Verifies backup format, schema version, cryptographic integrity digest, and
+   * complete per-record schema BEFORE atomically replacing local persistence
+   * across in-memory repositories, Zustand store, and IndexedDB.
+   *
+   * Any validation or IndexedDB failure aborts cleanly and leaves existing
+   * financial data completely unchanged.
+   */
+  async restoreFromBackup(input: string | unknown): Promise<LocalBackupRestoreResult> {
+    if (IndexedDBStorageService.loadFailed) {
+      throw new BackupValidationError(
+        'STORAGE_UNREADABLE',
+        'Cannot restore backup while local storage is in a failed-load state. Recover storage first so unread local records are not overwritten.'
+      );
+    }
+
+    const verified = await LocalBackupService.verifyAndParseBackup(input);
+
+    const normalizedAccounts = AccountAssetLinkService.migrate(verified.data.accounts).accounts;
+    const resolvedTransactions = AccountResolutionService.migrate(
+      verified.data.transactions,
+      normalizedAccounts
+    ).transactions;
+    const normalizedTransactions = TransactionSignService.migrate(resolvedTransactions).transactions;
+    const normalizedAssets = AssetIdentityService.migrate(verified.data.assets).assets;
+    const normalizedLiabilities = LiabilityIdentityService.migrate(verified.data.liabilities).liabilities;
+
+    const prevDiagnostics = {
+      duplicate: this.duplicateTransactionIdsAtLoad,
+      partial: this.partiallyExcludedTransfersAtLoad,
+      broken: this.brokenTransfersAtLoad,
+    };
+
+    try {
+      await this.write(() => {
+        this.transactionsData = normalizedTransactions;
+        this.assetsData = normalizedAssets;
+        this.liabilitiesData = normalizedLiabilities;
+        this.holdingsData = verified.data.holdings;
+        this.holdingDeletionLogData = verified.data.holdingDeletionLog;
+        this.snapshotsData = verified.data.snapshots;
+        this.accountsData = normalizedAccounts;
+        this.budgetsData = verified.data.budgets;
+        this.policiesData = verified.data.policies;
+        this.goalsData = verified.data.goals;
+        this.profileData = verified.data.profile;
+
+        this.duplicateTransactionIdsAtLoad =
+          TransactionIdentityService.findDuplicateIds(this.transactionsData);
+        this.partiallyExcludedTransfersAtLoad =
+          TransferIntegrityService.findPartiallyExcludedTransfers(this.transactionsData);
+        this.brokenTransfersAtLoad =
+          TransferIntegrityService.findBrokenTransfers(this.transactionsData);
+      });
+    } catch (err) {
+      this.duplicateTransactionIdsAtLoad = prevDiagnostics.duplicate;
+      this.partiallyExcludedTransfersAtLoad = prevDiagnostics.partial;
+      this.brokenTransfersAtLoad = prevDiagnostics.broken;
+      throw err;
+    }
+
+    return {
+      manifest: verified.manifest,
+      digest: verified.integrity.digest,
+      restoredAt: new Date().toISOString(),
+      recordCounts: verified.manifest.recordCounts,
+    };
   }
 }

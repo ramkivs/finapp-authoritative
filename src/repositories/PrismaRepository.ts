@@ -410,4 +410,12 @@ export class PrismaRepository implements FinancialRepositoryPort {
   async initialize(): Promise<void> {
     // Production implementation
   }
+
+  async exportBackup(): Promise<any> {
+    throw new Error('PrismaRepository.exportBackup not implemented');
+  }
+
+  async restoreFromBackup(_input: string | unknown): Promise<any> {
+    throw new Error('PrismaRepository.restoreFromBackup not implemented');
+  }
 }

@@ -7,6 +7,7 @@ import { MoneyPage } from './pages/MoneyPage';
 import { EssentialsPage } from './pages/EssentialsPage';
 import { ImportPage } from './pages/ImportPage';
 import { CalculatorsPage } from './pages/CalculatorsPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { IncomeModal, ExpenseModal, TransferModal } from './components/Modals';
 import { CustomDateModal } from './components/CustomDateModal';
 import { ShieldCheck } from 'lucide-react';
@@ -174,6 +175,7 @@ export function App() {
           )}
           {activeTab === 'import' && <ImportPage />}
           {activeTab === 'calculators' && <CalculatorsPage />}
+          {activeTab === 'settings' && <SettingsPage />}
         </main>
 
         {/* Global Institutional Footer */}

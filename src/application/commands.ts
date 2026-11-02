@@ -17,7 +17,9 @@ import {
   FinancialGoal,
   GoalTemplateType,
   GOAL_TEMPLATES,
-  FinancialProfile
+  FinancialProfile,
+  LocalBackupExportShape,
+  LocalBackupRestoreShape
 } from '../domain/types';
 import { formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
@@ -547,6 +549,14 @@ export class FinancialCommands {
 
   static async loadDemoData(): Promise<void> {
     await repository.loadDemoData();
+  }
+
+  static async exportLocalBackup(options?: { createdAt?: string }): Promise<LocalBackupExportShape> {
+    return repository.exportBackup(options);
+  }
+
+  static async restoreLocalBackup(input: string | unknown): Promise<LocalBackupRestoreShape> {
+    return repository.restoreFromBackup(input);
   }
 
   static togglePrivacy(): void {

@@ -19,7 +19,9 @@ import {
   BatchRollbackResultShape,
   BatchRestoreResultShape,
   AmendmentRequestShape,
-  AmendmentResultShape
+  AmendmentResultShape,
+  LocalBackupExportShape,
+  LocalBackupRestoreShape
 } from '../domain/types';
 import { formatDisplayDate, DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { TransactionIdentityService } from '../services/TransactionIdentityService';
@@ -151,6 +153,8 @@ interface LedgerState {
   initError: string | null;
   loadDemoData: () => Promise<void>;
   clearLocalData: () => Promise<void>;
+  exportLocalBackup: (options?: { createdAt?: string }) => Promise<LocalBackupExportShape>;
+  restoreLocalBackup: (input: string | unknown) => Promise<LocalBackupRestoreShape>;
 
   addIncome: (title: string, amount: number, account: string, category: string, notes?: string) => Promise<void>;
   addExpense: (title: string, amount: number, account: string, category: string, notes?: string) => Promise<void>;
@@ -647,6 +651,14 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
 
   clearLocalData: async () => {
     await repository.clearLocalData();
+  },
+
+  exportLocalBackup: async (options) => {
+    return repository.exportBackup(options);
+  },
+
+  restoreLocalBackup: async (input) => {
+    return repository.restoreFromBackup(input);
   },
 
   addIncome: (title, amount, account, category, notes) => {
