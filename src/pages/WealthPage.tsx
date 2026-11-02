@@ -31,7 +31,7 @@ import {
 
 export const WealthPage: React.FC = () => {
   const [subTab, setSubTab] = useState<'assets' | 'liabilities' | 'networth' | 'allocation' | 'holdings'>('assets');
-  const { transactions = [], assets = [], liabilities = [], snapshots = [], holdings = [] } = useCanonicalLedger();
+  const { transactions = [], assets = [], liabilities = [], snapshots = [], holdings = [], privacyMasked = false } = useCanonicalLedger();
 
   // Canonical queries & derived metrics (Strictly Read-Only)
   const asOfStr = getEffectiveAsOfDate();
@@ -59,10 +59,11 @@ export const WealthPage: React.FC = () => {
   const asOfDate = new Date(getEffectiveAsOfDate());
   const currentMonthLabel = asOfDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
-  // Sparkline data
+  // Sparkline data (only rendered when >= 2 canonical snapshots exist)
   const sparklineNetWorth = snapshots.length >= 2
     ? snapshots.map(s => s.netWorth)
-    : [currentNetWorth, currentNetWorth];
+    : undefined;
+  const totalPositionsCount = assets.length + holdings.length;
 
   // Solvency ratio (Net Worth / Total Assets) or Asset Ratio
   const solvencyRatioPct = totAssets > 0 ? Math.round((currentNetWorth / totAssets) * 100) : 0;
@@ -249,17 +250,17 @@ export const WealthPage: React.FC = () => {
             </defs>
             <line x1={paddingX} y1={paddingY} x2={width - paddingX} y2={paddingY} stroke="#21262D" strokeDasharray="3 3" />
             <text x={paddingX - 6} y={paddingY + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-              ₹{(maxVal / 100000).toFixed(0)}L
+              {privacyMasked ? '•••' : `₹${(maxVal / 100000).toFixed(0)}L`}
             </text>
 
             <line x1={paddingX} y1={height / 2} x2={width - paddingX} y2={height / 2} stroke="#21262D" strokeDasharray="3 3" />
             <text x={paddingX - 6} y={height / 2 + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-              ₹{(((maxVal + minVal) / 2) / 100000).toFixed(0)}L
+              {privacyMasked ? '•••' : `₹${(((maxVal + minVal) / 2) / 100000).toFixed(0)}L`}
             </text>
 
             <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="#21262D" />
             <text x={paddingX - 6} y={height - paddingY + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-              ₹{(minVal / 100000).toFixed(0)}L
+              {privacyMasked ? '•••' : `₹${(minVal / 100000).toFixed(0)}L`}
             </text>
 
             <path d={areaD} fill="url(#wealthNwGrad)" />
@@ -273,7 +274,7 @@ export const WealthPage: React.FC = () => {
               <g transform={`translate(${Math.min(width - 85, Math.max(80, lastPt.x))}, ${Math.max(22, lastPt.y - 12)})`}>
                 <rect x="-44" y="-18" width="88" height="20" rx="6" fill="#1F2937" stroke="#4F8CFF" strokeWidth="1" />
                 <text x="0" y="-4" textAnchor="middle" fill="#F0F6FC" fontSize="10" fontWeight="700">
-                  ₹{Number(nwMetric.value).toLocaleString('en-IN')}
+                  {privacyMasked ? '₹ ••••••' : `₹${Number(nwMetric.value).toLocaleString('en-IN')}`}
                 </text>
               </g>
             )}
@@ -377,8 +378,12 @@ export const WealthPage: React.FC = () => {
         <KpiCard
           label="Net Worth"
           value={<CurrencyValue value={currentNetWorth} />}
-          change={cagrMetric.status === 'RECONCILED' ? `+${cagrMetric.value}% vs last month` : undefined}
-          changeType="positive"
+          change={
+            cagrMetric.status === 'RECONCILED'
+              ? `${Number(cagrMetric.value) >= 0 ? '+' : ''}${cagrMetric.value}% annualized`
+              : undefined
+          }
+          changeType={Number(cagrMetric.value) >= 0 ? 'positive' : 'negative'}
           status={cagrMetric.status === 'NOT_CONFIGURED' ? undefined : cagrMetric.status}
           sparklineData={sparklineNetWorth}
           accentColor="emerald"
@@ -393,10 +398,16 @@ export const WealthPage: React.FC = () => {
         <KpiCard
           label="Total Assets"
           value={<CurrencyValue value={totAssets} />}
-          change={assets.length > 0 ? `${assets.length} Assets Registered` : undefined}
+          change={
+            holdings.length > 0
+              ? `${assets.length} Assets · ${holdings.length} Holdings`
+              : assets.length > 0
+              ? `${assets.length} Assets Registered`
+              : undefined
+          }
           changeType="positive"
           accentColor="emerald"
-          subtitle={`${assets.length} Active Asset Items`}
+          subtitle={`${totalPositionsCount} Active Asset Items`}
           tooltip="Sum total valuation across all registered asset holdings"
         />
 
@@ -412,9 +423,13 @@ export const WealthPage: React.FC = () => {
 
         <KpiCard
           label="Net Worth Growth"
-          value={cagrMetric.status === 'NOT_CONFIGURED' ? 'Not Configured' : `+${cagrMetric.value}%`}
-          change={cagrMetric.status === 'RECONCILED' ? '+12.45%' : undefined}
-          changeType="positive"
+          value={
+            cagrMetric.status === 'NOT_CONFIGURED'
+              ? 'Not Configured'
+              : `${Number(cagrMetric.value) >= 0 ? '+' : ''}${cagrMetric.value}%`
+          }
+          change={cagrMetric.status === 'RECONCILED' ? `${snapshots.length} Snapshot Anchors` : undefined}
+          changeType={Number(cagrMetric.value) >= 0 ? 'positive' : 'negative'}
           status={cagrMetric.status === 'NOT_CONFIGURED' ? undefined : cagrMetric.status}
           accentColor="cyan"
           subtitle={cagrMetric.status === 'NOT_CONFIGURED' ? 'Snapshot anchors required' : 'Annualized Snapshot CAGR'}
@@ -688,10 +703,10 @@ export const WealthPage: React.FC = () => {
               return (
                 <div key={b.month} className="flex-1 flex flex-col items-center h-full justify-end group relative">
                   <div className="absolute -top-10 opacity-0 group-hover:opacity-100 transition-opacity bg-[#1F2937] text-[10px] text-white px-2 py-0.5 rounded border border-[#30363D] pointer-events-none whitespace-nowrap z-20">
-                    ₹{b.amount.toLocaleString('en-IN')}
+                    {privacyMasked ? '₹ ••••••' : `₹${b.amount.toLocaleString('en-IN')}`}
                   </div>
                   <div
-                    title={`${b.month}: ₹${b.amount.toLocaleString()} (${b.payoutCount} payouts)`}
+                    title={privacyMasked ? `${b.month}: ₹ •••••• (${b.payoutCount} payouts)` : `${b.month}: ₹${b.amount.toLocaleString('en-IN')} (${b.payoutCount} payouts)`}
                     style={{ height: `${Math.max(heightPct, 6)}%` }}
                     className={`w-full rounded-t transition-all ${
                       b.amount === maxAmt

@@ -252,6 +252,10 @@ export interface Transaction {
   sourceProvider?: string;
   sourceFile?: string;
   sourceRowNumber?: number;
+  /** Optional bank statement reference / cheque / UTR identifier for duplicate disambiguation. */
+  referenceNumber?: string;
+  /** Optional post-transaction account balance reported by the source bank statement. */
+  closingBalance?: number;
   fingerprint?: string;
 }
 
@@ -1065,6 +1069,8 @@ export const TRANSACTION_TO_BUDGET_CATEGORY_MAP: Record<string, BudgetCategoryFa
   'ATM': 'Cash Withdrawal',
   'CHILDCARE': 'Childcare',
   'INVESTMENT': 'Investment',
+  'PPF': 'Investment',
+  'PPF_CONTRIBUTION': 'Investment',
   'OTHER': 'Other Expense',
   'OTHER_EXPENSE': 'Other Expense'
 };

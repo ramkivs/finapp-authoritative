@@ -112,6 +112,7 @@ export class FinancialQueries {
 
     for (const t of periodTxs) {
       if (t.type === 'Income') {
+        if (t.category === 'PPF_CONTRIBUTION') continue;
         totalIncome += t.amount;
       } else if (t.type === 'Expense') {
         totalExpenses += t.amount;
@@ -144,7 +145,7 @@ export class FinancialQueries {
     for (const t of allTxs) {
       const ym = t.date.slice(0, 7);
       if (!monthMap[ym]) monthMap[ym] = { income: 0, expense: 0 };
-      if (t.type === 'Income') monthMap[ym].income += t.amount;
+      if (t.type === 'Income' && t.category !== 'PPF_CONTRIBUTION') monthMap[ym].income += t.amount;
       if (t.type === 'Expense') monthMap[ym].expense += t.amount;
     }
 

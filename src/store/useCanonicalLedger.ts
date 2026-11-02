@@ -557,7 +557,15 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   profile: null,
   initStatus: 'loading',
   initError: null,
-  privacyMasked: typeof window !== 'undefined' ? localStorage.getItem('finapp.privacy.masked') === 'true' : false,
+  privacyMasked: (() => {
+    try {
+      return typeof window !== 'undefined' && window.localStorage
+        ? window.localStorage.getItem('finapp.privacy.masked') === 'true'
+        : false;
+    } catch {
+      return false;
+    }
+  })(),
   filterType: 'All',
   dateRange: 'This Month',
   searchQuery: '',
@@ -575,7 +583,13 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   setCustomRange: (customStart, customEnd) => set({ customStart, customEnd, dateRange: 'Custom' }),
   togglePrivacy: () => {
     const next = !get().privacyMasked;
-    localStorage.setItem('finapp.privacy.masked', String(next));
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('finapp.privacy.masked', String(next));
+      }
+    } catch {
+      /* ignore localStorage quota/privacy-mode errors */
+    }
     set({ privacyMasked: next });
   },
 
@@ -730,27 +744,24 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     const rejectedTransferReasons: string[] = [];
     const rejectedDuplicateIdReasons: string[] = [];
 
-    // WP-FB-DATA-06a: identity resolved through the single authority
-    // (TransactionIdentityService), which is now also what the import pipeline
-    // uses. Two dedup sites, one definition of "same row".
-    const existingByFingerprint = new Map<string, Transaction>();
-    for (const tx of transactions) {
-      const fp = TransactionIdentityService.fingerprintOf(tx);
-      if (!existingByFingerprint.has(fp)) existingByFingerprint.set(fp, tx);
-    }
+    // WP-FB-DATA-06a + DEF-14 / DEF-15: identity resolved through the single
+    // authority (TransactionIdentityService), excluding rolled-back / superseded
+    // rows and honouring distinct bank reference numbers / closing balances.
+    const existingPool = TransactionIdentityService.buildLiveDuplicatePool(transactions);
+    const batchPool = new Map<string, Transaction[]>();
 
     const candidateRows: Transaction[] = [];
 
     if (validRows && validRows.length > 0) {
       for (const row of validRows) {
-        // Fingerprint is computed from the UNCHANGED legacy fields
-        // (account|date|amount|narration). Introducing accountId does not and
-        // must not alter any fingerprint (WP-FB-DATA-04 §14), and neither does
-        // introducing origin/recordedAt (WP-FB-DATA-06a).
-        const fp = TransactionIdentityService.fingerprintOf(row);
-        const collision = existingByFingerprint.get(fp);
+        const collision =
+          TransactionIdentityService.consumeDuplicateFromPool(row, existingPool) ||
+          TransactionIdentityService.consumeDuplicateFromPool(row, batchPool);
         if (collision) {
           duplicates++;
+          if (candidateRows.some(c => c.id === collision.id)) {
+            TransactionIdentityService.addToDuplicatePool(collision, batchPool);
+          }
           // L-02 disclosure: the row is still dropped, but a drop that discards a
           // direction/type correction is now counted and reported, not silent.
           if (TransactionIdentityService.isDivergentDuplicate(row, collision)) {
@@ -758,7 +769,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
           }
           continue;
         }
-        existingByFingerprint.set(fp, row);
+        TransactionIdentityService.addToDuplicatePool(row, batchPool);
 
         // WP-FB-DATA-04: resolve the adapter's bank label to a registered
         // account. No deterministic match => explicitly unmapped (null), never

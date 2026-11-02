@@ -177,9 +177,9 @@ describe('E. MF preamble / header discovery (decoded-rows path)', () => {
     const adapter = new GrowwHoldingsAdapter();
     const rows: ParsedCsvRow[] = [
       { rowNumber: 1, data: {}, rawFields: ['Personal Details'] },
-      { rowNumber: 2, data: {}, rawFields: ['Name', 'Ramakrishnan Rajeswari'] },
-      { rowNumber: 3, data: {}, rawFields: ['Mobile Number', '7395930735'] },
-      { rowNumber: 4, data: {}, rawFields: ['PAN', 'DKOPR8056J'] },
+      { rowNumber: 2, data: {}, rawFields: ['Name', 'Synthetic Holder'] },
+      { rowNumber: 3, data: {}, rawFields: ['Mobile Number', '9000000000'] },
+      { rowNumber: 4, data: {}, rawFields: ['PAN', 'ABCDE1234F'] },
       { rowNumber: 5, data: {}, rawFields: ['HOLDING SUMMARY'] },
       { rowNumber: 6, data: {}, rawFields: ['Total Investments', 'Current Portfolio Value', 'Profit/Loss', 'Profit/Loss %', 'XIRR'] },
       { rowNumber: 7, data: {}, rawFields: ['29998.37', '30891.36', '892.98', '2.98%', '3.61%'] },

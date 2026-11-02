@@ -78,7 +78,14 @@ export interface LiquidReservesBreakdown {
 
 export class LiquidReservesService {
   private static isLiquidAccount(account: Account): boolean {
-    return (LIQUID_ACCOUNT_TYPES as readonly string[]).includes(String(account.type));
+    if (!(LIQUID_ACCOUNT_TYPES as readonly string[]).includes(String(account.type))) {
+      return false;
+    }
+    const label = `${account.name || ''} ${account.institution || ''} ${account.type || ''}`;
+    if (/\b(?:ppf|epf|nps|public\s+provident\s+fund)\b/i.test(label)) {
+      return false;
+    }
+    return true;
   }
 
   private static normalize(name: string | null | undefined): string {

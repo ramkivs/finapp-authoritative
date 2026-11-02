@@ -59,10 +59,12 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
     getFilteredTransactions,
     transactions,
     accounts,
-    budgets
+    budgets,
+    privacyMasked = false
   } = useCanonicalLedger();
 
   const filtered = getFilteredTransactions();
+  const liveTransactions = LedgerExclusionService.forDerivation(transactions);
   const insights = FinancialQueries.getMoneyInsights(dateRange);
 
   // WP-FB-DATA-06b / T1-b + T2-a: derived on every render from the current legs.
@@ -112,14 +114,15 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
     }
   };
 
-  // Real Transaction CSV Export
+  // Real Transaction CSV Export (active non-excluded rows)
   const handleExport = () => {
-    if (filtered.length === 0) {
+    const exportable = LedgerExclusionService.forDerivation(filtered);
+    if (exportable.length === 0) {
       alert('No transactions to export in currently filtered view.');
       return;
     }
     const header = ['Date', 'Title', 'Narration', 'Account', 'Type', 'Category', 'Amount', 'Status', 'Notes'];
-    const rows = filtered.map(t => [
+    const rows = exportable.map(t => [
       t.date,
       `"${(t.title || '').replace(/"/g, '""')}"`,
       `"${(t.narration || '').replace(/"/g, '""')}"`,
@@ -133,19 +136,47 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
     const csvContent = [header.join(','), ...rows.map(r => r.join(','))].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `finboom_transactions_${dateRange.toLowerCase().replace(/\s+/g, '_')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `finboom_transactions_${dateRange.toLowerCase().replace(/\s+/g, '_')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   };
 
-  // Sparkline sequences
+  // Sparkline sequences & truthful month-over-month deltas (when This Month has >= 2 months of history)
   const incomeSparkline = insights.monthlyTrends.map(t => t.income);
   const expenseSparkline = insights.monthlyTrends.map(t => t.expense);
   const netSparkline = insights.monthlyTrends.map(t => t.net);
   const savingsRateSparkline = insights.monthlyTrends.map(t => (t.income > 0 ? ((t.income - t.expense) / t.income) * 100 : 0));
+
+  const momDeltas = React.useMemo(() => {
+    if (dateRange !== 'This Month' || insights.monthlyTrends.length < 2) {
+      return { income: undefined, expense: undefined, net: undefined, rate: undefined };
+    }
+    const prev = insights.monthlyTrends[insights.monthlyTrends.length - 2];
+    const curr = insights.monthlyTrends[insights.monthlyTrends.length - 1];
+    const fmtPct = (c: number, p: number) => {
+      if (p === 0) return undefined;
+      const d = ((c - p) / Math.abs(p)) * 100;
+      return `${d >= 0 ? '+' : ''}${d.toFixed(1)}% vs last month`;
+    };
+    const prevRate = prev.income > 0 ? ((prev.income - prev.expense) / prev.income) * 100 : null;
+    const currRate = curr.income > 0 ? ((curr.income - curr.expense) / curr.income) * 100 : null;
+    const rateDelta = prevRate !== null && currRate !== null
+      ? `${currRate - prevRate >= 0 ? '+' : ''}${(currRate - prevRate).toFixed(1)}pp vs last month`
+      : undefined;
+    return {
+      income: fmtPct(curr.income, prev.income),
+      expense: fmtPct(curr.expense, prev.expense),
+      net: fmtPct(curr.net, prev.net),
+      rate: rateDelta
+    };
+  }, [dateRange, insights.monthlyTrends]);
 
   const categoryColors = ['#4F8CFF', '#06B6D4', '#F59E0B', '#23C55E', '#EC4899', '#8B5CF6'];
 
@@ -187,16 +218,16 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
           {/* Background Grid Lines & Scaled Y Ticks */}
           <line x1={paddingX} y1={paddingY} x2={width - paddingX} y2={paddingY} stroke="#21262D" strokeDasharray="3 3" />
           <text x={paddingX - 6} y={paddingY + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-            ₹{maxVal >= 100000 ? `${(maxVal / 100000).toFixed(0)}L` : `${(maxVal / 1000).toFixed(0)}K`}
+            {privacyMasked ? '•••' : `₹${maxVal >= 100000 ? `${(maxVal / 100000).toFixed(0)}L` : `${(maxVal / 1000).toFixed(0)}K`}`}
           </text>
 
           <line x1={paddingX} y1={height / 2} x2={width - paddingX} y2={height / 2} stroke="#21262D" strokeDasharray="3 3" />
           <text x={paddingX - 6} y={height / 2 + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-            ₹{maxVal >= 100000 ? `${((maxVal / 2) / 100000).toFixed(0)}L` : `${((maxVal / 2) / 1000).toFixed(0)}K`}
+            {privacyMasked ? '•••' : `₹${maxVal >= 100000 ? `${((maxVal / 2) / 100000).toFixed(0)}L` : `${((maxVal / 2) / 1000).toFixed(0)}K`}`}
           </text>
 
           <line x1={paddingX} y1={yBase} x2={width - paddingX} y2={yBase} stroke="#21262D" />
-          <text x={paddingX - 6} y={yBase + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">₹0</text>
+          <text x={paddingX - 6} y={yBase + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">{privacyMasked ? '•••' : '₹0'}</text>
 
           {/* Bar 1: Income (Green) */}
           <g>
@@ -210,7 +241,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
               className="hover:brightness-125 transition-all"
             />
             <text x={x1 + barWidth / 2} y={yBase - incHeight - 6} textAnchor="middle" fill="#23C55E" fontSize="10" fontWeight="700">
-              ₹{insights.totalIncome.toLocaleString('en-IN')}
+              {privacyMasked ? '₹ ••••••' : `₹${insights.totalIncome.toLocaleString('en-IN')}`}
             </text>
           </g>
 
@@ -226,7 +257,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
               className="hover:brightness-125 transition-all"
             />
             <text x={x2 + barWidth / 2} y={yBase - expHeight - 6} textAnchor="middle" fill="#EF4444" fontSize="10" fontWeight="700">
-              ₹{insights.totalExpenses.toLocaleString('en-IN')}
+              {privacyMasked ? '₹ ••••••' : `₹${insights.totalExpenses.toLocaleString('en-IN')}`}
             </text>
           </g>
 
@@ -242,7 +273,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
               className="hover:brightness-125 transition-all"
             />
             <text x={x3 + barWidth / 2} y={yBase - netHeight - 6} textAnchor="middle" fill="#06B6D4" fontSize="10" fontWeight="700">
-              ₹{insights.netCashFlow.toLocaleString('en-IN')}
+              {privacyMasked ? '₹ ••••••' : `₹${insights.netCashFlow.toLocaleString('en-IN')}`}
             </text>
           </g>
         </svg>
@@ -327,7 +358,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
           </svg>
           <div className="absolute text-center px-1">
             <div className="text-xs font-black text-[#F0F6FC] leading-tight">
-              ₹{totalExp.toLocaleString('en-IN')}
+              <CurrencyValue value={totalExp} />
             </div>
             <div className="text-[8px] uppercase font-bold text-[#8B949E] mt-0.5">
               Total Expenses
@@ -472,8 +503,8 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
         <KpiCard
           label="Income"
           value={<CurrencyValue value={insights.totalIncome} />}
-          change={insights.status === 'RECONCILED' ? '+8.45% vs last month' : undefined}
-          changeType="positive"
+          change={insights.status === 'RECONCILED' ? momDeltas.income : undefined}
+          changeType={momDeltas.income?.startsWith('-') ? 'negative' : 'positive'}
           status={insights.status}
           sparklineData={incomeSparkline.length > 1 ? incomeSparkline : undefined}
           accentColor="emerald"
@@ -483,8 +514,8 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
         <KpiCard
           label="Expenses"
           value={<CurrencyValue value={insights.totalExpenses} />}
-          change={insights.status === 'RECONCILED' ? '-5.32% vs last month' : undefined}
-          changeType="positive"
+          change={insights.status === 'RECONCILED' ? momDeltas.expense : undefined}
+          changeType={momDeltas.expense?.startsWith('-') ? 'positive' : momDeltas.expense ? 'negative' : 'neutral'}
           status={insights.status}
           sparklineData={expenseSparkline.length > 1 ? expenseSparkline : undefined}
           accentColor="rose"
@@ -494,7 +525,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
         <KpiCard
           label="Savings"
           value={<CurrencyValue value={insights.netCashFlow} />}
-          change={insights.status === 'RECONCILED' ? '+19.22% vs last month' : undefined}
+          change={insights.status === 'RECONCILED' ? momDeltas.net : undefined}
           changeType={insights.netCashFlow >= 0 ? 'positive' : 'negative'}
           status={insights.status}
           sparklineData={netSparkline.length > 1 ? netSparkline : undefined}
@@ -505,8 +536,8 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
         <KpiCard
           label="Savings Rate"
           value={insights.status === 'NOT_CONFIGURED' ? '0.0%' : `${insights.savingsRate.toFixed(1)}%`}
-          change={insights.status === 'RECONCILED' ? '+6.5pp vs last month' : undefined}
-          changeType="positive"
+          change={insights.status === 'RECONCILED' ? momDeltas.rate : undefined}
+          changeType={momDeltas.rate?.startsWith('-') ? 'negative' : 'positive'}
           status={insights.status}
           sparklineData={savingsRateSparkline.length > 1 ? savingsRateSparkline : undefined}
           accentColor="indigo"
@@ -559,7 +590,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
               </button>
             </div>
 
-            {transactions.length === 0 ? (
+            {liveTransactions.length === 0 ? (
               <div className="py-6 text-center text-xs text-[#8B949E] space-y-2">
                 <p>No transactions recorded in this period.</p>
                 <button
@@ -571,7 +602,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
               </div>
             ) : (
               <div className="space-y-2">
-                {transactions.slice(0, 5).map(t => {
+                {liveTransactions.slice(0, 5).map(t => {
                   const isInc = t.type === 'Income';
                   const isTr = t.type === 'Transfer';
                   return (
@@ -907,7 +938,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                                     title="This record was corrected. The corrected version is counted instead."
                                   >
                                     Corrected — replaced by{' '}
-                                    <span className="font-semibold">₹{correction.amount.toLocaleString('en-IN')}</span>
+                                    <span className="font-semibold"><CurrencyValue value={correction.amount} /></span>
                                     {' '}version below
                                   </div>
                                 );
@@ -922,7 +953,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
                                   >
                                     Corrects{' '}
                                     {original
-                                      ? <>the earlier ₹{original.amount.toLocaleString('en-IN')} record</>
+                                      ? <>the earlier <CurrencyValue value={original.amount} /> record</>
                                       : <>an earlier record</>}
                                   </div>
                                 );

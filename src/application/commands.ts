@@ -24,6 +24,7 @@ import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransactionFactory } from '../domain/TransactionFactory';
 import { TransactionSignService } from '../services/TransactionSignService';
+import { LedgerExclusionService } from '../services/LedgerExclusionService';
 
 const SAMPLE_DEFAULT_CSV = `Date,Title,Narration,Amount,Type,Account
 2026-08-06,ITC Limited,ACH/C-/ITC LTD DIVIDEND/NSE0098,2100,INCOME,HDFC Bank
@@ -317,7 +318,7 @@ export class FinancialCommands {
       precedingMonths.push(`${y}-${String(m).padStart(2, '0')}`);
     }
 
-    const allTxs = repository.transactions.findAllSync();
+    const allTxs = LedgerExclusionService.forDerivation(repository.transactions.findAllSync());
     const categoryTotals: Record<string, number> = {};
 
     for (const tx of allTxs) {

@@ -44,6 +44,11 @@ export interface BankStatementRecord {
   debitAmount: number;
   creditAmount: number;
   closingBalance?: number;
+  /** Optional raw amount diagnostics so corrupted non-numeric strings fail loudly as INVALID_AMOUNT. */
+  amountError?: string;
+  rawAmountText?: string;
+  /** True when the source statement represents a PPF (Public Provident Fund) account. */
+  isPpfAccount?: boolean;
   sourceRowNumber: number;
   sourceFile?: string;
   rawRecord?: Record<string, string>;
@@ -101,7 +106,7 @@ export interface BankStatementAdapter {
    * Detect if this adapter can handle the given binary-originated rows.
    * Eliminates the need for synthetic text reconstruction during format detection.
    */
-  canHandleRows(headers: string[], rows: ParsedCsvRow[]): DetectionResult;
+  canHandleRows(headers: string[], rows: ParsedCsvRow[], preambleText?: string): DetectionResult;
 
   /**
    * Parse a text-kind StatementInput into BankStatementRecords.
@@ -112,7 +117,7 @@ export interface BankStatementAdapter {
    * Parse pre-decoded ParsedCsvRow[] (from binary workbook decoding) into BankStatementRecords.
    * Used by the binary ingestion path so no synthetic CSV reconstruction is needed.
    */
-  parseRows(rows: ParsedCsvRow[], fileName: string): BankStatementRecord[];
+  parseRows(rows: ParsedCsvRow[], fileName: string, selectedProvider?: string, preambleText?: string): BankStatementRecord[];
 
   normalize(record: BankStatementRecord, context: { provider: string; fileName: string; batchId: string }): NormalizedBankTransaction;
 }
