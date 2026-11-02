@@ -37,7 +37,7 @@ import path from 'path';
 const PORT = 5300; // distinct from the existing acceptance suite (5200)
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const PROFILE_DIR = '/tmp/finboom_chrome_test_profile_wp09';
-const SAMPLE_PATH = '/home/user/uploads/Zerodha_holdings_10082026_1739.csv';
+const SAMPLE_PATH = path.resolve(__dirname, '../src/__tests__/fixtures/broker_samples/Zerodha_holdings_10082026_1739.csv');
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 

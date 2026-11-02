@@ -21,6 +21,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { BrokerImportService, BrokerImportPreview } from '../services/BrokerImportService';
 import { Holding, HoldingStatus } from '../domain/types';
@@ -34,12 +35,12 @@ import { repository } from '../repositories';
 // Real sample file loaders
 // ---------------------------------------------------------------------------
 
-const SAMPLE_ZERODHA = '/home/user/uploads/Zerodha_holdings_10082026_1739.csv';
-const SAMPLE_GROWW_STOCKS = '/home/user/uploads/Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx';
-const SAMPLE_GROWW_MF = '/home/user/uploads/Groww_Mutual_Funds_6995348108_24-08-2026.xlsx';
-const SAMPLE_DHAN_EQUITY = '/home/user/uploads/dhan holdings _capstewengine.csv';
-const SAMPLE_DHAN_MF_CSV = '/home/user/uploads/Dhan_MF_Report_23-08-2026.csv';
-const SAMPLE_DHAN_MF_XLSX = '/home/user/uploads/Dhan_MF_Report_23-08-2026.xlsx';
+const SAMPLE_ZERODHA = resolve(__dirname, 'fixtures/broker_samples/Zerodha_holdings_10082026_1739.csv');
+const SAMPLE_GROWW_STOCKS = resolve(__dirname, 'fixtures/broker_samples/Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx');
+const SAMPLE_GROWW_MF = resolve(__dirname, 'fixtures/broker_samples/Groww_Mutual_Funds_6995348108_24-08-2026.xlsx');
+const SAMPLE_DHAN_EQUITY = resolve(__dirname, 'fixtures/cr_broker_bank_import/dhan-equity-capstewengine.csv');
+const SAMPLE_DHAN_MF_CSV = resolve(__dirname, 'fixtures/broker_samples/Dhan_MF_Report_23-08-2026.csv');
+const SAMPLE_DHAN_MF_XLSX = resolve(__dirname, 'fixtures/broker_samples/Dhan_MF_Report_23-08-2026.xlsx');
 
 function loadText(path: string): string {
   return readFileSync(path, 'utf8');

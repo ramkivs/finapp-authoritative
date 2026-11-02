@@ -10,6 +10,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { DhanHoldingsAdapter } from '../services/import/adapters/DhanHoldingsAdapter';
 import { BrokerFormatDetector } from '../services/import/BrokerFormatDetector';
@@ -19,11 +20,14 @@ import { StatementInput, ParsedCsvRow } from '../services/import/ImportTypes';
 // Real-sample loaders
 // ---------------------------------------------------------------------------
 
-const SAMPLE_EQUITY_PATH = '/home/user/uploads/dhan holdings _capstewengine.csv';
-const SAMPLE_MF_CSV_PATH = '/home/user/uploads/Dhan_MF_Report_23-08-2026.csv';
-const SAMPLE_MF_XLSX_PATH = '/home/user/uploads/Dhan_MF_Report_23-08-2026.xlsx';
+const SAMPLE_EQUITY_PATH = resolve(__dirname, 'fixtures/cr_broker_bank_import/dhan-equity-capstewengine.csv');
+const SAMPLE_MF_CSV_PATH = resolve(__dirname, 'fixtures/broker_samples/Dhan_MF_Report_23-08-2026.csv');
+const SAMPLE_MF_XLSX_PATH = resolve(__dirname, 'fixtures/broker_samples/Dhan_MF_Report_23-08-2026.xlsx');
 // FINBOOM-CR — Dhan Stock Holdings (CR Variant D, 9 rows)
-const SAMPLE_STOCK_HOLDINGS_PATH = '/home/user/finboom-cr-impl/worktree/src/__tests__/fixtures/cr_broker_bank_import/dhan-stock-holdings.csv';
+const SAMPLE_STOCK_HOLDINGS_PATH = resolve(__dirname, 'fixtures/cr_broker_bank_import/dhan-stock-holdings.csv');
+const SAMPLE_ZERODHA_PATH = resolve(__dirname, 'fixtures/broker_samples/Zerodha_holdings_10082026_1739.csv');
+const SAMPLE_GROWW_STOCKS_PATH = resolve(__dirname, 'fixtures/broker_samples/Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx');
+const SAMPLE_GROWW_MF_PATH = resolve(__dirname, 'fixtures/broker_samples/Groww_Mutual_Funds_6995348108_24-08-2026.xlsx');
 
 function loadText(path: string): string {
   return readFileSync(path, 'utf8');
@@ -787,7 +791,7 @@ describe('Regression: WP-04 Zerodha and WP-06 Groww still work', () => {
   it('Zerodha still parses Sample 1', async () => {
     const { ZerodhaHoldingsAdapter } = await import('../services/import/adapters/ZerodhaHoldingsAdapter');
     const adapter = new ZerodhaHoldingsAdapter();
-    const csv = readFileSync('/home/user/uploads/Zerodha_holdings_10082026_1739.csv', 'utf8');
+    const csv = readFileSync(SAMPLE_ZERODHA_PATH, 'utf8');
     const out = adapter.parseHoldings({ kind: 'text', content: csv, fileName: 'Zerodha_holdings_10082026_1739.csv' });
     expect(out.holdings).toHaveLength(82);
   });
@@ -795,7 +799,7 @@ describe('Regression: WP-04 Zerodha and WP-06 Groww still work', () => {
   it('Groww still parses Sample 6 (Stocks)', async () => {
     const { GrowwHoldingsAdapter } = await import('../services/import/adapters/GrowwHoldingsAdapter');
     const adapter = new GrowwHoldingsAdapter();
-    const bytes = new Uint8Array(readFileSync('/home/user/uploads/Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx'));
+    const bytes = new Uint8Array(readFileSync(SAMPLE_GROWW_STOCKS_PATH));
     const out = adapter.parseHoldings({ kind: 'binary', content: bytes, fileName: 'Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx' });
     expect(out.holdings).toHaveLength(6);
   });
@@ -803,7 +807,7 @@ describe('Regression: WP-04 Zerodha and WP-06 Groww still work', () => {
   it('Groww still parses Sample 6b (MF)', async () => {
     const { GrowwHoldingsAdapter } = await import('../services/import/adapters/GrowwHoldingsAdapter');
     const adapter = new GrowwHoldingsAdapter();
-    const bytes = new Uint8Array(readFileSync('/home/user/uploads/Groww_Mutual_Funds_6995348108_24-08-2026.xlsx'));
+    const bytes = new Uint8Array(readFileSync(SAMPLE_GROWW_MF_PATH));
     const out = adapter.parseHoldings({ kind: 'binary', content: bytes, fileName: 'Groww_Mutual_Funds_6995348108_24-08-2026.xlsx' });
     expect(out.holdings).toHaveLength(3);
   });
@@ -887,7 +891,7 @@ describe('WP-09 detection tightening — Dhan full-column validation in binary p
     // detection succeeds.
     const adapter = new DhanHoldingsAdapter();
     const fs = await import('node:fs');
-    const path = '/home/user/uploads/Dhan_MF_Report_23-08-2026.xlsx';
+    const path = SAMPLE_MF_XLSX_PATH;
     const bytes = new Uint8Array(fs.readFileSync(path));
     const det = adapter.canHandle({ kind: 'binary', content: bytes, fileName: 'Dhan_MF_Report_23-08-2026.xlsx' });
     expect(det.matched).toBe(true);
@@ -899,7 +903,7 @@ describe('WP-09 detection tightening — Dhan full-column validation in binary p
   it('WP-09.D.2 Real Dhan MF XLSX parse still produces 6 holdings, account=IQCX28849K', async () => {
     const adapter = new DhanHoldingsAdapter();
     const fs = await import('node:fs');
-    const path = '/home/user/uploads/Dhan_MF_Report_23-08-2026.xlsx';
+    const path = SAMPLE_MF_XLSX_PATH;
     const bytes = new Uint8Array(fs.readFileSync(path));
     const out = adapter.parseHoldings({ kind: 'binary', content: bytes, fileName: 'Dhan_MF_Report_23-08-2026.xlsx' });
     expect(out.broker).toBe('Dhan');
@@ -913,7 +917,7 @@ describe('WP-09 detection tightening — Dhan full-column validation in binary p
     // still be detected and produce 6 holdings.
     const adapter = new DhanHoldingsAdapter();
     const fs = require('node:fs') as typeof import('node:fs');
-    const path = '/home/user/uploads/Dhan_MF_Report_23-08-2026.csv';
+    const path = SAMPLE_MF_CSV_PATH;
     const csv = fs.readFileSync(path, 'utf8');
     const out = adapter.parseHoldings({ kind: 'text', content: csv, fileName: 'Dhan_MF_Report_23-08-2026.csv' });
     expect(out.broker).toBe('Dhan');
@@ -927,7 +931,7 @@ describe('WP-09 detection tightening — Dhan full-column validation in binary p
     // path is text-based (parseFromText), not binary.
     const adapter = new DhanHoldingsAdapter();
     const fs = require('node:fs') as typeof import('node:fs');
-    const path = '/home/user/uploads/dhan holdings _capstewengine.csv';
+    const path = SAMPLE_EQUITY_PATH;
     const csv = fs.readFileSync(path, 'utf8');
     const out = adapter.parseHoldings({ kind: 'text', content: csv, fileName: 'dhan equity.csv' });
     expect(out.broker).toBe('Dhan');

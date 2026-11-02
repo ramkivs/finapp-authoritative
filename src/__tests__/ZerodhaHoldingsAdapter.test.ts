@@ -23,8 +23,8 @@ import { StatementInput } from '../services/import/ImportTypes';
 // Real-sample loaders
 // ---------------------------------------------------------------------------
 
-const SAMPLE_1_PATH = '/home/user/uploads/Zerodha_holdings_10082026_1739.csv';
-const SAMPLE_2_PATH = '/home/user/uploads/Zerodha_mutual_funds_holdings.csv';
+const SAMPLE_1_PATH = join(__dirname, 'fixtures/broker_samples/Zerodha_holdings_10082026_1739.csv');
+const SAMPLE_2_PATH = join(__dirname, 'fixtures/broker_samples/Zerodha_mutual_funds_holdings.csv');
 
 function loadSample(path: string): string {
   return readFileSync(path, 'utf8');

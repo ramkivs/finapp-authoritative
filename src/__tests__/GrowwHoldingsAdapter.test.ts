@@ -13,6 +13,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { GrowwHoldingsAdapter } from '../services/import/adapters/GrowwHoldingsAdapter';
 import { BrokerFormatDetector } from '../services/import/BrokerFormatDetector';
@@ -22,10 +23,18 @@ import { StatementInput, ParsedCsvRow } from '../services/import/ImportTypes';
 // Real-sample loaders
 // ---------------------------------------------------------------------------
 
-const SAMPLE_STOCKS_PATH =
-  '/home/user/uploads/Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx';
-const SAMPLE_MF_PATH =
-  '/home/user/uploads/Groww_Mutual_Funds_6995348108_24-08-2026.xlsx';
+const SAMPLE_STOCKS_PATH = resolve(
+  __dirname,
+  'fixtures/broker_samples/Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx',
+);
+const SAMPLE_MF_PATH = resolve(
+  __dirname,
+  'fixtures/broker_samples/Groww_Mutual_Funds_6995348108_24-08-2026.xlsx',
+);
+const SAMPLE_ZERODHA_PATH = resolve(
+  __dirname,
+  'fixtures/broker_samples/Zerodha_holdings_10082026_1739.csv',
+);
 
 function loadBytes(path: string): Uint8Array {
   const buf = readFileSync(path);
@@ -683,7 +692,7 @@ describe('Regression: WP-04 Zerodha still works after Groww registration', () =>
     const { ZerodhaHoldingsAdapter } = await import('../services/import/adapters/ZerodhaHoldingsAdapter');
     const adapter = new ZerodhaHoldingsAdapter();
     const fs = await import('node:fs');
-    const path = '/home/user/uploads/Zerodha_holdings_10082026_1739.csv';
+    const path = SAMPLE_ZERODHA_PATH;
     const csv = fs.readFileSync(path, 'utf8');
     const out = adapter.parseHoldings({ kind: 'text', content: csv, fileName: 'Zerodha_holdings_10082026_1739.csv' });
     expect(out.holdings).toHaveLength(82);

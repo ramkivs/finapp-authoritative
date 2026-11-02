@@ -19,11 +19,12 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { BrokerImportService } from '../services/BrokerImportService';
 import { repository } from '../repositories';
 
-const SAMPLE_ZERODHA = '/home/user/uploads/Zerodha_holdings_10082026_1739.csv';
+const SAMPLE_ZERODHA = resolve(__dirname, 'fixtures/broker_samples/Zerodha_holdings_10082026_1739.csv');
 
 function loadText(path: string): string {
   return readFileSync(path, 'utf8');

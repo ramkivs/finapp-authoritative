@@ -7,14 +7,15 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { AngelOneHoldingsAdapter } from '../services/import/adapters/AngelOneHoldingsAdapter';
 import { BrokerFormatDetector } from '../services/import/BrokerFormatDetector';
 import { StatementInput, ParsedCsvRow } from '../services/import/ImportTypes';
 
-const SAMPLE_ANGEL_ONE_PATH = '/home/user/finboom-cr-impl/worktree/src/__tests__/fixtures/cr_broker_bank_import/angel-one-stock-holdings.xlsx';
-const SAMPLE_DHAN_EQUITY_PATH = '/home/user/uploads/dhan holdings _capstewengine.csv';
-const SAMPLE_ZERODHA_PATH = '/home/user/uploads/Zerodha_holdings_10082026_1739.csv';
+const SAMPLE_ANGEL_ONE_PATH = resolve(__dirname, 'fixtures/cr_broker_bank_import/angel-one-stock-holdings.xlsx');
+const SAMPLE_DHAN_EQUITY_PATH = resolve(__dirname, 'fixtures/cr_broker_bank_import/dhan-equity-capstewengine.csv');
+const SAMPLE_ZERODHA_PATH = resolve(__dirname, 'fixtures/broker_samples/Zerodha_holdings_10082026_1739.csv');
 
 function loadText(path: string): string {
   return readFileSync(path, 'utf8');

@@ -66,6 +66,11 @@ export function formatDisplayDate(isoStr: string = APP_AS_OF_DATE): string {
 }
 
 export class DateRangeService {
+  static setAsOfDateOverride = setAsOfDateOverride;
+  static resetAsOfDateOverride = resetAsOfDateOverride;
+  static hasAsOfDateOverride = hasAsOfDateOverride;
+  static getEffectiveAsOfDate = getEffectiveAsOfDate;
+
   static getBounds(
     range: string,
     asOfDateStr: string = getEffectiveAsOfDate(),
