@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { queries } from '../application';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
+import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
 import { KpiCard } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { ProgressBar } from '../components/ui/ProgressBar';
@@ -47,14 +48,15 @@ export const EssentialsPage: React.FC<Props> = ({ initialSubTab, navSeq }) => {
 
 
   const {
-    assets,
-    liabilities,
-    accounts,
-    transactions,
-    budgets,
-    policies,
-    goals,
-    profile
+    assets = [],
+    liabilities = [],
+    holdings = [],
+    accounts = [],
+    transactions = [],
+    budgets = [],
+    policies = [],
+    goals = [],
+    profile = null
   } = useCanonicalLedger();
 
   const emergencyCoverage = queries.getMetric('EMERGENCY_FUND_COVERAGE');
@@ -78,9 +80,9 @@ export const EssentialsPage: React.FC<Props> = ({ initialSubTab, navSeq }) => {
       ? 'Not configured'
       : `${healthScore.score}`;
 
-  // Deterministic Debt to Assets Ratio
+  // Deterministic Debt to Assets Ratio (including imported Holdings per D-04 / DEF-08)
   const totalDebt = liabilities.reduce((s, l) => s + l.amount, 0);
-  const totalAssets = assets.reduce((s, a) => s + a.amount, 0);
+  const totalAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
   const isDebtConfigured = totalAssets > 0 || totalDebt > 0;
   const debtRatioPct = totalAssets > 0 ? Math.round((totalDebt / totalAssets) * 100) : (totalDebt > 0 ? 100 : 0);
 

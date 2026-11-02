@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { FinancialMetricService } from '../services/FinancialMetricService';
+import { classifyHolding } from '../services/HoldingAnalyticsClassifier';
 import { CurrencyValue } from '../components/CurrencyValue';
 import { KpiCard } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
@@ -30,16 +31,17 @@ import {
 
 export const WealthPage: React.FC = () => {
   const [subTab, setSubTab] = useState<'assets' | 'liabilities' | 'networth' | 'allocation' | 'holdings'>('assets');
-  const { transactions, assets, liabilities, snapshots, holdings } = useCanonicalLedger();
+  const { transactions = [], assets = [], liabilities = [], snapshots = [], holdings = [] } = useCanonicalLedger();
 
   // Canonical queries & derived metrics (Strictly Read-Only)
-  const nwMetric = FinancialMetricService.getMetric('NET_WORTH', transactions, assets, liabilities, snapshots);
-  const assetsMetric = FinancialMetricService.getMetric('TOTAL_ASSETS', transactions, assets, liabilities, snapshots);
-  const liabsMetric = FinancialMetricService.getMetric('TOTAL_LIABILITIES', transactions, assets, liabilities, snapshots);
-  const cagrMetric = FinancialMetricService.getMetric('NET_WORTH_CAGR', transactions, assets, liabilities, snapshots);
-  const ttmMetric = FinancialMetricService.getMetric('TTM_REALIZED_DIVIDEND', transactions, assets, liabilities, snapshots);
-  const avgMetric = FinancialMetricService.getMetric('MONTHLY_AVERAGE_DIVIDEND', transactions, assets, liabilities, snapshots);
-  const mtdMetric = FinancialMetricService.getMetric('MTD_REALIZED_DIVIDEND', transactions, assets, liabilities, snapshots);
+  const asOfStr = getEffectiveAsOfDate();
+  const nwMetric = FinancialMetricService.getMetric('NET_WORTH', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const assetsMetric = FinancialMetricService.getMetric('TOTAL_ASSETS', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const liabsMetric = FinancialMetricService.getMetric('TOTAL_LIABILITIES', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const cagrMetric = FinancialMetricService.getMetric('NET_WORTH_CAGR', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const ttmMetric = FinancialMetricService.getMetric('TTM_REALIZED_DIVIDEND', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const avgMetric = FinancialMetricService.getMetric('MONTHLY_AVERAGE_DIVIDEND', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const mtdMetric = FinancialMetricService.getMetric('MTD_REALIZED_DIVIDEND', transactions, assets, liabilities, snapshots, asOfStr, holdings);
   const histogramSeries = FinancialMetricService.getSeries('MONTHLY_DIVIDEND_HISTOGRAM', transactions);
 
   const buckets = histogramSeries?.points || [];
@@ -66,66 +68,70 @@ export const WealthPage: React.FC = () => {
   const solvencyRatioPct = totAssets > 0 ? Math.round((currentNetWorth / totAssets) * 100) : 0;
   const assetRatioPct = (totAssets + totLiabs) > 0 ? Math.round((totAssets / (totAssets + totLiabs)) * 100) : 0;
 
-  // Categorized Assets Breakdown for Tier 3
+  // Categorized Assets Breakdown for Tier 3 (includes both canonical Assets and imported Holdings)
   const categorizedAssets = React.useMemo(() => {
-    if (assets.length === 0) return [];
+    if (assets.length === 0 && holdings.length === 0) return [];
     const map: Record<string, { name: string; amount: number; icon: any; color: string }> = {};
+
+    const resolveCategoryVisuals = (cat: string) => {
+      if (cat === 'Equity' || cat === 'Alternatives' || cat === 'Crypto' || cat === 'Investments & Brokerage') {
+        return { icon: TrendingUp, color: '#4F8CFF' };
+      }
+      if (cat === 'Cash & Savings' || cat === 'Cash & Bank') {
+        return { icon: Wallet, color: '#06B6D4' };
+      }
+      if (cat === 'Real Estate' || cat === 'Real Estate Property') {
+        return { icon: Home, color: '#8B5CF6' };
+      }
+      if (cat === 'Commodities' || cat === 'Gold & Commodities') {
+        return { icon: Coins, color: '#F59E0B' };
+      }
+      if (cat === 'Debt') {
+        return { icon: Landmark, color: '#23C55E' };
+      }
+      return { icon: Layers, color: '#6E7681' };
+    };
 
     for (const a of assets) {
       let cat = a.type || '';
-      let icon = Landmark;
-      let color = '#4F8CFF';
 
       if (!cat) {
         const lower = a.name.toLowerCase();
         if (lower.includes('brokerage') || lower.includes('zerodha') || lower.includes('groww') || lower.includes('upstox')) {
           cat = 'Investments & Brokerage';
-          icon = TrendingUp;
-          color = '#4F8CFF';
         } else if (lower.includes('bank') || lower.includes('savings') || lower.includes('checking')) {
           cat = 'Cash & Bank';
-          icon = Wallet;
-          color = '#06B6D4';
         } else if (lower.includes('real estate') || lower.includes('property') || lower.includes('land')) {
           cat = 'Real Estate Property';
-          icon = Home;
-          color = '#8B5CF6';
         } else if (lower.includes('gold') || lower.includes('silver') || lower.includes('commodity')) {
           cat = 'Gold & Commodities';
-          icon = Coins;
-          color = '#F59E0B';
         } else {
           cat = a.name || 'Other Assets';
-          icon = Layers;
-          color = '#6E7681';
-        }
-      } else {
-        if (cat === 'Equity' || cat === 'Alternatives' || cat === 'Crypto') {
-          icon = TrendingUp;
-          color = '#4F8CFF';
-        } else if (cat === 'Cash & Savings') {
-          icon = Wallet;
-          color = '#06B6D4';
-        } else if (cat === 'Real Estate') {
-          icon = Home;
-          color = '#8B5CF6';
-        } else if (cat === 'Commodities') {
-          icon = Coins;
-          color = '#F59E0B';
         }
       }
 
+      const { icon, color } = resolveCategoryVisuals(cat);
       if (!map[cat]) {
         map[cat] = { name: cat, amount: 0, icon, color };
       }
       map[cat].amount += a.amount;
     }
 
+    for (const h of holdings) {
+      const cv = Number(h.currentValue) || 0;
+      const cat = classifyHolding(h);
+      const { icon, color } = resolveCategoryVisuals(cat);
+      if (!map[cat]) {
+        map[cat] = { name: cat, amount: 0, icon, color };
+      }
+      map[cat].amount += cv;
+    }
+
     return Object.values(map).map(item => ({
       ...item,
       pct: totAssets > 0 ? Math.round((item.amount / totAssets) * 1000) / 10 : 0
     })).sort((a, b) => b.amount - a.amount);
-  }, [assets, totAssets]);
+  }, [assets, holdings, totAssets]);
 
   // Categorized Liabilities Breakdown for Tier 3
   const categorizedLiabilities = React.useMemo(() => {
@@ -609,7 +615,7 @@ export const WealthPage: React.FC = () => {
         <WealthHealthCard assets={assets} liabilities={liabilities} snapshots={snapshots} holdings={holdings} />
 
         {/* Action Queue & Insights */}
-        <WealthInsightsCard assets={assets} liabilities={liabilities} snapshots={snapshots} />
+        <WealthInsightsCard assets={assets} liabilities={liabilities} snapshots={snapshots} holdings={holdings} />
 
         {/* Portfolio Concentration Analytics (if assets or holdings exist) */}
         {(assets.length > 0 || holdings.length > 0) && <AssetConcentrationCard assets={assets} holdings={holdings} />}

@@ -454,12 +454,12 @@ export class IndexedDBStorageService {
         // Not a failure: this environment has no IndexedDB by design.
         this.lastLoadFailed = false;
         return {
-          transactions: [...this.nodeFallbackStore.transactions],
-          assets: [...this.nodeFallbackStore.assets],
-          liabilities: [...this.nodeFallbackStore.liabilities],
-          holdings: [...this.nodeFallbackStore.holdings],
-          holdingDeletionLog: [...this.nodeFallbackStore.holdingDeletionLog],
-          snapshots: [...this.nodeFallbackStore.snapshots],
+          transactions: [...(this.nodeFallbackStore.transactions ?? [])],
+          assets: [...(this.nodeFallbackStore.assets ?? [])],
+          liabilities: [...(this.nodeFallbackStore.liabilities ?? [])],
+          holdings: [...(this.nodeFallbackStore.holdings ?? [])],
+          holdingDeletionLog: [...(this.nodeFallbackStore.holdingDeletionLog ?? [])],
+          snapshots: [...(this.nodeFallbackStore.snapshots ?? [])],
           accounts: [...this.nodeFallbackStore.accounts],
           budgets: [...this.nodeFallbackStore.budgets],
           policies: [...this.nodeFallbackStore.policies],
@@ -601,6 +601,8 @@ export class IndexedDBStorageService {
         );
       }
 
+      const holdings = state.holdings || [];
+      const holdingDeletionLog = state.holdingDeletionLog || [];
       const accounts = state.accounts || [];
       const budgets = state.budgets || [];
       const policies = state.policies || [];
@@ -631,6 +633,8 @@ export class IndexedDBStorageService {
         ['transactions', state.transactions],
         ['assets', state.assets],
         ['liabilities', state.liabilities],
+        ['holdings', holdings],
+        ['holdingDeletionLog', holdingDeletionLog],
         ['snapshots', state.snapshots],
         ['accounts', accounts],
         ['budgets', budgets],
@@ -644,8 +648,8 @@ export class IndexedDBStorageService {
           transactions: [...state.transactions],
           assets: [...state.assets],
           liabilities: [...state.liabilities],
-          holdings: [...(state.holdings ?? [])],
-          holdingDeletionLog: [...(state.holdingDeletionLog ?? [])],
+          holdings: [...holdings],
+          holdingDeletionLog: [...holdingDeletionLog],
           snapshots: [...state.snapshots],
           accounts: [...accounts],
           budgets: [...budgets],

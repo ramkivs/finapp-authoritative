@@ -20,6 +20,7 @@ import {
   FinancialProfile
 } from '../domain/types';
 import { formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
+import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransactionFactory } from '../domain/TransactionFactory';
 import { TransactionSignService } from '../services/TransactionSignService';
@@ -157,7 +158,10 @@ export class FinancialCommands {
 
   static createSnapshot(label?: string): Promise<void> {
     if (label) {
-      const totalAssets = repository.assets.findAllSync().reduce((sum, a) => sum + a.amount, 0);
+      const totalAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(
+        repository.assets.findAllSync(),
+        repository.holdings.findAllSync()
+      );
       const totalLiabilities = repository.liabilities.findAllSync().reduce((sum, l) => sum + l.amount, 0);
       const netWorth = totalAssets - totalLiabilities;
       return repository.snapshots.create({

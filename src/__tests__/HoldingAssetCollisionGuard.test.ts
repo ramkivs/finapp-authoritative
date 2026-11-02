@@ -136,4 +136,23 @@ describe('WP-FB-IMPORT-BROKER-01 — D-04 HoldingAssetCollisionGuard', () => {
       expect(e.code).toBe('HOLDING_COLLISION');
     }
   });
+
+  it('blocks a manual broker-summary Asset ("Zerodha Equity") when Zerodha holdings exist (DEF-12)', () => {
+    const existing = baseHolding({ broker: 'Zerodha', ticker: 'INFY', instrumentName: 'Infosys' });
+    const collision = HoldingAssetCollisionGuard.detect(
+      baseRequest({ name: 'Zerodha Equity', amount: 500000 }),
+      [existing],
+    );
+    expect(collision).not.toBeNull();
+    expect(collision?.holding.id).toBe('hld-1');
+  });
+
+  it('allows a manual broker-summary Asset for a different broker when only Zerodha holdings exist', () => {
+    const existing = baseHolding({ broker: 'Zerodha', ticker: 'INFY', instrumentName: 'Infosys' });
+    const collision = HoldingAssetCollisionGuard.detect(
+      baseRequest({ name: 'Groww Equity', amount: 500000 }),
+      [existing],
+    );
+    expect(collision).toBeNull();
+  });
 });

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { FinancialMetricService } from '../services/FinancialMetricService';
+import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
+import { classifyHolding } from '../services/HoldingAnalyticsClassifier';
 import { FinancialQueries } from '../application/queries';
 import { AccountBalanceService } from '../services/AccountBalanceService';
 import { getEffectiveAsOfDate } from '../services/DateRangeService';
@@ -34,30 +36,49 @@ interface Props {
 
 export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
   const {
-    assets,
-    liabilities,
-    snapshots,
-    transactions,
-    accounts,
-    goals,
+    assets = [],
+    liabilities = [],
+    holdings = [],
+    snapshots = [],
+    transactions = [],
+    accounts = [],
+    goals = [],
     addAsset,
     addLiability,
     captureSnapshot
   } = useCanonicalLedger();
 
   // Canonical queries & derived metrics (Strictly Read-Only)
-  const nwMetric = FinancialMetricService.getMetric('NET_WORTH', transactions, assets, liabilities, snapshots);
-  const cagrMetric = FinancialMetricService.getMetric('NET_WORTH_CAGR', transactions, assets, liabilities, snapshots);
+  const nwMetric = FinancialMetricService.getMetric(
+    'NET_WORTH',
+    transactions,
+    assets,
+    liabilities,
+    snapshots,
+    getEffectiveAsOfDate(),
+    holdings
+  );
+  const cagrMetric = FinancialMetricService.getMetric(
+    'NET_WORTH_CAGR',
+    transactions,
+    assets,
+    liabilities,
+    snapshots,
+    getEffectiveAsOfDate(),
+    holdings
+  );
   const cashflow = FinancialQueries.getMoneyInsights('This Month');
   const healthScore = FinancialQueries.getFinancialHealthScore();
 
-  // Compute total investments from market asset classes
+  // Compute total investments from market asset classes + imported holdings
   const investmentTypes = new Set(['Equity', 'Debt', 'Commodities', 'Crypto', 'Alternatives']);
-  const totalInvestments = assets
+  const manualInvestments = assets
     .filter(a => (a.type ? investmentTypes.has(a.type) : !a.name.toLowerCase().includes('bank')))
     .reduce((s, a) => s + a.amount, 0);
+  const holdingsTotal = holdings.reduce((s, h) => s + (Number(h.currentValue) || 0), 0);
+  const totalInvestments = manualInvestments + holdingsTotal;
 
-  const registeredAssetCount = assets.length;
+  const registeredAssetCount = assets.length + holdings.length;
 
   // Sparkline data from historical snapshots
   const sparklineNetWorth = snapshots.length >= 2
@@ -296,7 +317,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
 
   // Render pure SVG Concentric Donut Asset Allocation Chart (Prototype Multi-Category Composition)
   const renderAssetAllocationDonut = () => {
-    const totalAssetVal = assets.reduce((s, a) => s + a.amount, 0);
+    const totalAssetVal = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
 
     if (totalAssetVal === 0) {
       return (
@@ -332,6 +353,11 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
           : 'Other Assets'
       );
       categoryTotals[cat] = (categoryTotals[cat] || 0) + a.amount;
+    }
+    for (const h of holdings) {
+      const cv = Number(h.currentValue) || 0;
+      const cat = classifyHolding(h);
+      categoryTotals[cat] = (categoryTotals[cat] || 0) + cv;
     }
 
     const categories = Object.entries(categoryTotals).map(([cat, val]) => ({
@@ -396,7 +422,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
           </svg>
           <div className="absolute text-center">
             <div className="text-lg font-black text-[#F0F6FC]">
-              {assets.length}
+              {registeredAssetCount}
             </div>
             <div className="text-[9px] uppercase font-bold text-[#8B949E]">
               Holdings
@@ -449,7 +475,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
           changeType="positive"
           sparklineData={totalInvestments > 0 ? [totalInvestments * 0.9, totalInvestments * 0.95, totalInvestments] : undefined}
           accentColor="emerald"
-          subtitle={assets.length > 0 ? `${registeredAssetCount} Assets Registered` : 'No investments'}
+          subtitle={registeredAssetCount > 0 ? `${registeredAssetCount} Assets Registered` : 'No investments'}
           tooltip="Market and portfolio asset valuation"
         />
 
@@ -512,7 +538,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
         <div className="lg:col-span-5">
           <ChartCard
             title="Asset Allocation"
-            badgeText={assets.length > 0 ? `${assets.length} Holdings` : undefined}
+            badgeText={registeredAssetCount > 0 ? `${registeredAssetCount} Holdings` : undefined}
             action={
               /* WP-FB-DATA-07c / F-07a-1 — the liability trigger is BACK.
                  The v2.11.2 baseline rendered "Asset" and "Liability" quick-add

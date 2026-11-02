@@ -999,7 +999,11 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
           // MemoryAssetRepository.add implementation at
           // src/services/IndexedDBStorageService.ts:359-366.
           (repository as any).assetsData =
-            AssetLifecycleService.planCreate(asset, (repository as any).assetsData).next;
+            AssetLifecycleService.planCreate(
+              asset,
+              (repository as any).assetsData,
+              (repository as any).holdingsData
+            ).next;
         }
       });
       // The caller awaits `persisted`; a rejection here is the single

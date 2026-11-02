@@ -49,6 +49,7 @@ import {
   AmendmentRequest
 } from '../services/TransactionAmendmentService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
+import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { demoTransactions, demoAssets, demoLiabilities, demoSnapshots } from '../domain/demoFixtures';
 
@@ -359,9 +360,14 @@ export class MemoryAssetRepository implements AssetRepository {
   async add(asset: Asset): Promise<void> {
     return this.parent.write(() => {
       // Planned inside the write boundary so the judgement is made against the
-      // state that is actually mutated (WP-FB-DATA-07c).
+      // state that is actually mutated (WP-FB-DATA-07c), including D-04
+      // collision detection against imported Holdings (DEF-12).
       this.parent.assetsData =
-        AssetLifecycleService.planCreate(asset as any, this.parent.assetsData).next;
+        AssetLifecycleService.planCreate(
+          asset as any,
+          this.parent.assetsData,
+          this.parent.holdingsData
+        ).next;
     });
   }
 
@@ -375,7 +381,11 @@ export class MemoryAssetRepository implements AssetRepository {
   async update(asset: Asset): Promise<void> {
     return this.parent.write(() => {
       this.parent.assetsData =
-        AssetLifecycleService.planUpdate(asset as any, this.parent.assetsData).next;
+        AssetLifecycleService.planUpdate(
+          asset as any,
+          this.parent.assetsData,
+          this.parent.holdingsData
+        ).next;
     });
   }
 
@@ -507,7 +517,10 @@ export class MemorySnapshotRepository implements SnapshotRepository {
           next = [snapshot, ...prev];
         }
       } else {
-        const totAssets = this.parent.assetsData.reduce((sum, a) => sum + a.amount, 0);
+        const totAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(
+          this.parent.assetsData,
+          this.parent.holdingsData
+        );
         const totLiabs = this.parent.liabilitiesData.reduce((sum, l) => sum + l.amount, 0);
         const netWorth = totAssets - totLiabs;
 
@@ -760,10 +773,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
   public liabilities: LiabilityRepository = new MemoryLiabilityRepository(this);
   public holdings: HoldingRepository = new MemoryHoldingRepository(this);
   /** WP-FB-IMPORT-BROKER-01 / D-06: audit log for permanent holding deletions. */
-  public holdingDeletionLog: HoldingDeletionLogRepository = new MemoryHoldingDeletionLogRepository({
-    holdingDeletionLogData: this.holdingDeletionLogData,
-    syncStore: () => this.syncStore(),
-  });
+  public holdingDeletionLog: HoldingDeletionLogRepository = new MemoryHoldingDeletionLogRepository(this);
   public snapshots: SnapshotRepository = new MemorySnapshotRepository(this);
   public accounts: AccountRepository = new MemoryAccountRepository(this);
   public budgets: BudgetRepository = new MemoryBudgetRepository(this);

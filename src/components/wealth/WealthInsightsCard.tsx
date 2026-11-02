@@ -1,5 +1,5 @@
 import React from 'react';
-import { Asset, Liability, NetWorthSnapshot } from '../../domain/types';
+import { Asset, Holding, Liability, NetWorthSnapshot } from '../../domain/types';
 import { WealthIntelligenceService } from '../../services/WealthIntelligenceService';
 import { Lightbulb, Info, AlertTriangle } from 'lucide-react';
 
@@ -7,10 +7,11 @@ interface Props {
   assets: Asset[];
   liabilities: Liability[];
   snapshots: NetWorthSnapshot[];
+  holdings?: Holding[];
 }
 
-export const WealthInsightsCard: React.FC<Props> = ({ assets, liabilities, snapshots }) => {
-  const insights = WealthIntelligenceService.generateInsights(assets, liabilities, snapshots);
+export const WealthInsightsCard: React.FC<Props> = ({ assets, liabilities, snapshots, holdings = [] }) => {
+  const insights = WealthIntelligenceService.generateInsights(assets, liabilities, snapshots, holdings);
 
   if (insights.length === 0) {
     return null;

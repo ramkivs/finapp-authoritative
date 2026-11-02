@@ -39,23 +39,135 @@ export interface HoldingCollision {
   reason: string;
 }
 
+const BROKER_SUMMARY_TOKENS = new Set([
+  'equity',
+  'equities',
+  'stock',
+  'stocks',
+  'share',
+  'shares',
+  'mf',
+  'mutual',
+  'fund',
+  'funds',
+  'etf',
+  'etfs',
+  'demat',
+  'brokerage',
+  'brokerages',
+  'portfolio',
+  'holding',
+  'holdings',
+  'investment',
+  'investments',
+  'account',
+  'accounts',
+  'kite',
+  'coin',
+  'wealth',
+  'direct',
+  'india',
+  'indian',
+  'domestic',
+]);
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeManualLabel(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[-_/()[\],:&+]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export class HoldingAssetCollisionGuard {
   /**
    * Returns a non-null collision if the candidate request would create or
    * update a manual Asset that collides with an imported Holding. Returns
    * null if no collision.
    *
-   * A request without `broker?` is treated as a non-broker manual Asset
-   * and is never blocked. A request WITH `broker?` but without
-   * `account?` is treated as account-undefined (per D-02 broker-conditional
-   * identity: identity = (broker, instrument) when account is absent).
+   * Two collision paths are enforced:
+   *   1. Explicit `broker?` DTO: checks exact `(broker, account?, instrument)`
+   *      identity via `HoldingIdentityService.sameIdentity` (preserving D-02
+   *      undefined-vs-explicit account semantics).
+   *   2. Manual Asset label (`!request.broker`): refuses broker-summary manual
+   *      assets (e.g. `"Zerodha Equity"`, `"Groww Mutual Funds"`, `"Zerodha"`)
+   *      and broker-prefixed position labels matching an imported Holding for
+   *      any broker that already has imported Holdings, preventing double
+   *      counting while leaving non-broker manual Assets (`"HDFC Savings"`,
+   *      `"My House"`, `"Gold"`) untouched.
    */
   static detect(
     request: AssetWriteRequestWithCollisionIdentity,
     holdings: readonly Holding[],
   ): HoldingCollision | null {
+    if (!holdings || holdings.length === 0) {
+      return null;
+    }
+
     if (!request.broker || request.broker.trim() === '') {
-      // Non-broker manual Asset: never blocked.
+      const rawName = typeof request.name === 'string' ? request.name.trim() : '';
+      if (!rawName) return null;
+      const nameClean = normalizeManualLabel(rawName);
+      if (!nameClean) return null;
+
+      for (const h of holdings) {
+        const brokerRaw = typeof h.broker === 'string' ? h.broker.trim() : '';
+        if (!brokerRaw) continue;
+        const brokerClean = normalizeManualLabel(brokerRaw);
+        if (!brokerClean) continue;
+
+        const brokerWordRe = new RegExp(`(^|\\s)${escapeRegExp(brokerClean)}(\\s|$)`, 'g');
+        if (!brokerWordRe.test(nameClean)) continue;
+
+        const remainder = nameClean.replace(brokerWordRe, ' ').replace(/\s+/g, ' ').trim();
+        const remainderTokens = remainder ? remainder.split(' ') : [];
+
+        const isBrokerSummary =
+          remainderTokens.length === 0 ||
+          remainderTokens.every(tok => BROKER_SUMMARY_TOKENS.has(tok)) ||
+          nameClean.includes('brokerage');
+
+        if (isBrokerSummary) {
+          return {
+            holding: h,
+            reason:
+              `Cannot save manual asset "${rawName}" because imported ${brokerRaw} ` +
+              `holdings already exist in your ledger (e.g. id="${h.id}"). Adding a ` +
+              `manual ${brokerRaw} summary asset would double-count your portfolio.`,
+          };
+        }
+
+        if (remainder) {
+          const syntheticHolding: Holding = {
+            id: '__candidate__',
+            broker: brokerRaw,
+            account: h.account,
+            instrumentName: remainder,
+            quantity: 0,
+            averageCost: 0,
+            investedValue: 0,
+            currentPrice: 0,
+            currentValue: 0,
+            unrealisedPnL: 0,
+            sourceFile: '__candidate__',
+            importedAt: '',
+            status: 'active',
+          };
+          if (HoldingIdentityService.sameIdentity(syntheticHolding, h)) {
+            return {
+              holding: h,
+              reason:
+                `Cannot save manual asset "${rawName}" because an imported ${brokerRaw} ` +
+                `Holding (id="${h.id}") already represents the same economic position.`,
+            };
+          }
+        }
+      }
+
       return null;
     }
 
