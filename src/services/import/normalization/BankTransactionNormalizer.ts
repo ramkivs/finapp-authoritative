@@ -4,10 +4,45 @@ import { DateNormalizer } from './DateNormalizer';
 import { NarrationNormalizer } from './NarrationNormalizer';
 import { TransactionIdentityService } from '../../TransactionIdentityService';
 
+const PPF_NARRATION_PATTERN = /\bppf\b|public\s+provident\s+fund/i;
+const PPF_INTEREST_PATTERN = /\b(?:interest|int\.?\s*paid|int\.?\s*credit|credit\s*interest|by\s+interest)\b/i;
+
 export class BankTransactionNormalizer {
   /**
+   * Resolves the canonical category for a normalized bank or PPF statement row (`DEF-17`).
+   * - Regular bank statement debits to PPF are categorized as `'INVESTMENT'` so they
+   *   track under Investments rather than distorting general household expenses.
+   * - PPF account statement credits distinguish tax-free `'INTEREST'` from principal
+   *   `'PPF_CONTRIBUTION'` deposits.
+   * - Explicit categories supplied by Generic CSV rows are always honoured first.
+   */
+  static resolveCategory(params: {
+    type: 'Income' | 'Expense';
+    narration: string;
+    explicitCategory?: string;
+    isPpfAccount?: boolean;
+  }): string {
+    const explicit = params.explicitCategory?.trim();
+    if (explicit) return explicit;
+
+    if (params.isPpfAccount) {
+      if (params.type === 'Income') {
+        return PPF_INTEREST_PATTERN.test(params.narration) ? 'INTEREST' : 'PPF_CONTRIBUTION';
+      }
+      return 'GENERAL';
+    }
+
+    if (params.type === 'Expense' && PPF_NARRATION_PATTERN.test(params.narration)) {
+      return 'INVESTMENT';
+    }
+
+    return 'GENERAL';
+  }
+
+  /**
    * Transforms an ingestion-layer BankStatementRecord into a canonical FinBoom Transaction.
-   * Enforces debit/credit rules, date validation, narration security sanitization, and deterministic fingerprinting.
+   * Enforces debit/credit rules, date validation, strict amount validation, narration
+   * security sanitization, PPF classification, and deterministic fingerprinting.
    */
   static normalize(
     record: BankStatementRecord,
@@ -22,6 +57,18 @@ export class BankTransactionNormalizer {
         message: `Invalid or unparseable source date: "${record.transactionDate}"`,
         field: 'Date',
         rawValue: record.transactionDate
+      };
+      return { candidate: null, issue };
+    }
+
+    if (record.amountError) {
+      const issue: ImportRowIssue = {
+        rowNumber: record.sourceRowNumber,
+        severity: 'INVALID',
+        code: 'INVALID_AMOUNT',
+        message: record.amountError,
+        field: 'Amount',
+        rawValue: record.rawAmountText || ''
       };
       return { candidate: null, issue };
     }
@@ -60,14 +107,26 @@ export class BankTransactionNormalizer {
 
     if (credit > 0) {
       type = 'Income';
-      amount = credit;
+      amount = Math.round(credit * 10000) / 10000;
     } else {
       type = 'Expense';
-      amount = debit;
+      amount = Math.round(debit * 10000) / 10000;
     }
 
     const sanitizedNarration = NarrationNormalizer.normalize(record.narration);
     const accountVal = record.sourceBank || context.provider;
+    const isPpf = Boolean(
+      record.isPpfAccount ||
+      PPF_NARRATION_PATTERN.test(accountVal) ||
+      PPF_NARRATION_PATTERN.test(context.provider)
+    );
+    const category = this.resolveCategory({
+      type,
+      narration: sanitizedNarration,
+      isPpfAccount: isPpf
+    });
+
+    const normalizedRef = TransactionIdentityService.normalizeReferenceNumber(record.referenceNumber);
 
     const candidate: Transaction = {
       id: `tx-import-${context.batchId}-${record.sourceRowNumber}`,
@@ -78,7 +137,7 @@ export class BankTransactionNormalizer {
       account: accountVal,
       type,
       direction: type === 'Income' ? 'CREDIT' : 'DEBIT',
-      category: 'GENERAL',
+      category,
       amount,
       status: 'CLEARED',
       notes: `Imported from ${context.fileName}`,
@@ -89,7 +148,11 @@ export class BankTransactionNormalizer {
       importBatchId: context.batchId,
       sourceProvider: context.provider,
       sourceFile: context.fileName,
-      sourceRowNumber: record.sourceRowNumber
+      sourceRowNumber: record.sourceRowNumber,
+      ...(normalizedRef ? { referenceNumber: normalizedRef } : {}),
+      ...(typeof record.closingBalance === 'number' && Number.isFinite(record.closingBalance)
+        ? { closingBalance: record.closingBalance }
+        : {})
     };
 
     candidate.fingerprint = TransactionIdentityService.fingerprint({

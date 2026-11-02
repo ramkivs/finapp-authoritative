@@ -140,7 +140,7 @@ export class ImportPipelineService {
     const batchId = 'batch-' + Date.now();
 
     // Decode binary workbook bytes → ParsedCsvRow[] using SheetJS
-    const { headers, rows, error } = SpreadsheetStatementParser.parseBytes(bytes, fileName);
+    const { headers, rows, preambleText, error } = SpreadsheetStatementParser.parseBytes(bytes, fileName);
 
     if (error || headers.length === 0) {
       return {
@@ -165,15 +165,15 @@ export class ImportPipelineService {
       };
     }
 
-    // Detection operates on decoded headers + first sample row — NOT on raw binary bytes
-    const { adapter, detection } = ImportFormatDetector.detectFromRows(headers, rows, fileName, provider);
+    // Detection operates on decoded headers + sample rows + preamble — NOT on raw binary bytes
+    const { adapter, detection } = ImportFormatDetector.detectFromRows(headers, rows, fileName, provider, preambleText);
 
     if (!detection.matched || !adapter) {
       return this.unsupportedFormatResult(batchId);
     }
 
     // Parse decoded rows directly — no synthetic CSV reconstruction
-    const records = adapter.parseRows(rows, fileName);
+    const records = adapter.parseRows(rows, fileName, provider, preambleText);
     return this.processRecords(records, adapter, existingTransactions, provider, fileName, batchId);
   }
 
@@ -196,19 +196,12 @@ export class ImportPipelineService {
     let duplicateCount = 0;
     const divergentDuplicateRows: DivergentDuplicate[] = [];
 
-    // WP-FB-DATA-06a: fingerprints are resolved through the single identity
-    // authority, which PREFERS the persisted fingerprint over a recomputed one.
-    // Pre-06a this site recomputed unconditionally while the store preferred the
-    // persisted value — two dedup sites disagreeing about how to identify a row.
-    // They now agree. (No outcome changes: every fingerprint this application has
-    // ever written uses the same canonical string, so persisted == recomputed.)
-    const existingByFingerprint = new Map<string, Transaction>();
-    for (const tx of existingTransactions) {
-      const fp = TransactionIdentityService.fingerprintOf(tx);
-      if (!existingByFingerprint.has(fp)) existingByFingerprint.set(fp, tx);
-    }
-
-    const seenInBatch = new Map<string, Transaction>();
+    // WP-FB-DATA-06a + DEF-14 / DEF-15: fingerprints are resolved through the
+    // single identity authority, excluding rolled-back / superseded rows and
+    // disambiguating distinct bank reference numbers / closing balances via
+    // 1-to-1 multiset pool consumption.
+    const existingPool = TransactionIdentityService.buildLiveDuplicatePool(existingTransactions);
+    const batchPool = new Map<string, Transaction[]>();
 
     records.forEach(record => {
       const normResult = adapter.normalize(record, {
@@ -231,20 +224,19 @@ export class ImportPipelineService {
       const candidate = normResult.candidate;
       const fp = TransactionIdentityService.fingerprintOf(candidate);
 
-      const collision = existingByFingerprint.get(fp) || seenInBatch.get(fp);
+      const collision =
+        TransactionIdentityService.consumeDuplicateFromPool(candidate, existingPool) ||
+        TransactionIdentityService.consumeDuplicateFromPool(candidate, batchPool);
       if (collision) {
         duplicateCount++;
 
+        // If matched against batchPool (an intra-batch duplicate), restore the
+        // batch entry so a 3rd identical copy in the same batch also deduplicates.
+        if (validRows.includes(collision)) {
+          TransactionIdentityService.addToDuplicatePool(collision, batchPool);
+        }
+
         // WP-FB-DATA-06a / finding L-02 — DISCLOSURE ONLY, NOT A BEHAVIOUR CHANGE.
-        //
-        // The row is still dropped, exactly as before. But when the colliding
-        // rows disagree on `direction` or `type` — the two fields that decide the
-        // SIGN of the money — the drop is no longer silent. Discovery scenario G
-        // showed a user correcting a row's direction and re-importing it, and the
-        // application discarding the correction without a word.
-        //
-        // Making such a row APPEND instead is a product decision (it changes a
-        // balance by twice the amount) and is deferred to DATA-06c decision #12.
         if (TransactionIdentityService.isDivergentDuplicate(candidate, collision)) {
           divergentDuplicateRows.push({
             rowNumber: record.sourceRowNumber,
@@ -265,8 +257,7 @@ export class ImportPipelineService {
         return;
       }
 
-      seenInBatch.set(fp, candidate);
-      existingByFingerprint.set(fp, candidate);
+      TransactionIdentityService.addToDuplicatePool(candidate, batchPool);
       validRows.push(candidate);
     });
 

@@ -6,6 +6,9 @@ import { ImportHistoryService, ImportHistoryEntry } from '../services/ImportHist
 import { DividendClassifier, DividendClassificationResult, DividendClassifyAllResult } from '../services/DividendClassifier';
 import { Transaction } from '../domain/types';
 import { BrokerImportSection } from './BrokerImportSection';
+import { ClosedPositionsCleanupSection } from './ClosedPositionsCleanupSection';
+import { GlobalLedgerCleanupSection } from './GlobalLedgerCleanupSection';
+import { CloseActivePositionsSection } from './CloseActivePositionsSection';
 import { StandardImportSection } from './StandardImportSection';
 import { Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ShieldAlert, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -90,6 +93,11 @@ export const ImportPage: React.FC = () => {
   // per-row `<select>`, and the import-level summary line. Reset
   // whenever a new import is processed.
   const [classification, setClassification] = useState<DividendClassificationResult[] | null>(null);
+
+  // DEF-15 — pre-commit per-row exclusion map so users can exclude unwanted rows
+  // (e.g. accidental personal reimbursements or misparsed statement noise) during review.
+  const [excludedRowIds, setExcludedRowIds] = useState<Record<string, boolean>>({});
+  const { privacyMasked = false } = useCanonicalLedger();
 
   const { transactions, commitImportedRows, rollbackImportBatch, restoreImportBatch } = useCanonicalLedger();
 
@@ -229,6 +237,7 @@ export const ImportPage: React.FC = () => {
     setClassification(classified.perRow);
     setCategoryOverrides({});
     setMediumConfirmations({});
+    setExcludedRowIds({});
     setSelectedFileName(fileName);
     setShowReview(true);
     setShowDiagnostics(result.unsupportedFormat || (result.invalidRows && result.invalidRows.length > 0) || (result.ambiguousRows && result.ambiguousRows.length > 0));
@@ -257,6 +266,7 @@ export const ImportPage: React.FC = () => {
           setClassification(classified.perRow);
           setCategoryOverrides({});
           setMediumConfirmations({});
+          setExcludedRowIds({});
           setSelectedFileName(file.name);
           setShowReview(true);
           setShowDiagnostics(result.unsupportedFormat || (result.invalidRows && result.invalidRows.length > 0) || (result.ambiguousRows && result.ambiguousRows.length > 0));
@@ -309,25 +319,28 @@ export const ImportPage: React.FC = () => {
     // survives all the way through the commit. The classifier is
     // NOT re-run here; the override is the user's authoritative
     // choice.
-    const validRowsWithOverrides: Transaction[] = importResult.validRows.map((r) => {
-      // Build the effective override for this row, checking the
-      // per-row `<select>` first and then the per-row MEDIUM
-      // confirmation (which is a special case of "override to
-      // DIVIDEND").
-      let effectiveOverride: string | undefined = categoryOverrides[r.id];
-      if (effectiveOverride === undefined && classification) {
-        // The per-row MEDIUM checkbox promotes the row to DIVIDEND.
-        // This is conditional on the classifier having produced a
-        // MEDIUM result for this row (defence-in-depth: the
-        // checkbox is only meaningful for MEDIUM rows).
-        const perRow = classification.find((c) => c.candidate.id === r.id);
-        if (perRow && perRow.confidence === 'MEDIUM' && mediumConfirmations[r.id]) {
-          effectiveOverride = 'DIVIDEND';
+    const userExcludedCount = importResult.validRows.filter(r => excludedRowIds[r.id]).length;
+    const validRowsWithOverrides: Transaction[] = importResult.validRows
+      .filter((r) => !excludedRowIds[r.id])
+      .map((r) => {
+        // Build the effective override for this row, checking the
+        // per-row `<select>` first and then the per-row MEDIUM
+        // confirmation (which is a special case of "override to
+        // DIVIDEND").
+        let effectiveOverride: string | undefined = categoryOverrides[r.id];
+        if (effectiveOverride === undefined && classification) {
+          // The per-row MEDIUM checkbox promotes the row to DIVIDEND.
+          // This is conditional on the classifier having produced a
+          // MEDIUM result for this row (defence-in-depth: the
+          // checkbox is only meaningful for MEDIUM rows).
+          const perRow = classification.find((c) => c.candidate.id === r.id);
+          if (perRow && perRow.confidence === 'MEDIUM' && mediumConfirmations[r.id]) {
+            effectiveOverride = 'DIVIDEND';
+          }
         }
-      }
-      if (effectiveOverride === undefined) return r;
-      return { ...r, category: effectiveOverride };
-    });
+        if (effectiveOverride === undefined) return r;
+        return { ...r, category: effectiveOverride };
+      });
 
     const {
       appended, duplicates, divergentDuplicates,
@@ -371,9 +384,15 @@ export const ImportPage: React.FC = () => {
     setClassification(null);
     setCategoryOverrides({});
     setMediumConfirmations({});
+    setExcludedRowIds({});
+    const totalDuplicates = (importResult.duplicateCount ?? 0) + duplicates;
+    const totalDivergent = (importResult.divergentDuplicateCount ?? 0) + divergentDuplicates;
+    const userExcludedNote = userExcludedCount > 0
+      ? ` Skipped ${userExcludedCount} user-excluded row${userExcludedCount === 1 ? '' : 's'}.`
+      : '';
     // WP-FB-DATA-06a: an excluded row may be reported, but never silently dropped.
-    const divergentNote = divergentDuplicates > 0
-      ? ` Note: ${divergentDuplicates} of the excluded duplicates disagreed with the stored row on direction/type; those differences were NOT applied.`
+    const divergentNote = totalDivergent > 0
+      ? ` Note: ${totalDivergent} of the excluded duplicates disagreed with the stored row on direction/type; those differences were NOT applied.`
       : '';
     // WP-FB-DATA-06b / T3-b: a rejected transfer row is never silently discarded.
     const transferNote = rejectedTransferRows > 0
@@ -388,13 +407,13 @@ export const ImportPage: React.FC = () => {
     setCommitNotice({
       kind: 'success',
       headline: 'Import committed.',
-      text: `Appended ${appended} new rows. Automatically excluded ${duplicates} exact duplicates.${divergentNote}${transferNote}${duplicateIdNote}`
+      text: `Appended ${appended} new rows. Automatically excluded ${totalDuplicates} exact duplicates.${userExcludedNote}${divergentNote}${transferNote}${duplicateIdNote}`
     });
     // CR-04: record the successful bank import. The recording is
     // best-effort; a failure here does not affect the import
     // outcome (which has already been committed atomically by
     // `commitImportedRows`).
-    const totalRejected = (importResult.duplicateCount ?? 0) + divergentDuplicates
+    const totalRejected = totalDuplicates + userExcludedCount
       + rejectedTransferRows + rejectedDuplicateIdRows
       + (importResult.invalidCount ?? 0) + (importResult.ambiguousCount ?? 0);
     const result: 'success' | 'partial' | 'failure' =
@@ -486,6 +505,18 @@ export const ImportPage: React.FC = () => {
           {/* WP-FB-IMPORT-BROKER-01 — WP-08 broker-import section.
               Self-contained: file upload → detect → parse → preview → confirm / cancel. */}
           <BrokerImportSection />
+          {/* D-06-F1-B/C (placement candidate A, recorded at the execution
+              gate step 0): the cleanup surface is mounted HERE — persistent,
+              independent of the transient import preview/ClosureTable — and
+              is a pure consumer of the store + the reused ratified modal. */}
+          <ClosedPositionsCleanupSection />
+          {/* D-06-F1-D (authority §6: SEPARATE component — the F1-B/C
+              surface's DOM is pinned; GLOBAL gets its own persistent whole-
+              ledger control beside it, same ratified engine + F6 gate). */}
+          <GlobalLedgerCleanupSection />
+          {/* D-06-F2-A (authority: F2 impl gate §3) — user-initiated close
+              pathway; separate component, zero changes to the promoted F1 surfaces. */}
+          <CloseActivePositionsSection />
         </div>
       )}
 
@@ -957,10 +988,13 @@ export const ImportPage: React.FC = () => {
                         <thead className="bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400 font-bold sticky top-0">
                           <tr>
                             <th className="text-left py-1.5 px-2">Row</th>
+                            <th className="text-left py-1.5 px-2">Date</th>
                             <th className="text-left py-1.5 px-2">Narration</th>
+                            <th className="text-right py-1.5 px-2">Amount</th>
                             <th className="text-left py-1.5 px-2">Classification</th>
                             <th className="text-left py-1.5 px-2">Override (Category)</th>
                             <th className="text-left py-1.5 px-2">Confirm</th>
+                            <th className="text-center py-1.5 px-2">Exclude</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200 dark:divide-gray-800 text-gray-700 dark:text-gray-300">
@@ -968,13 +1002,22 @@ export const ImportPage: React.FC = () => {
                             const perRow = classification[idx];
                             const conf = perRow ? perRow.confidence : 'NONE';
                             const ruleId = perRow ? perRow.ruleId : null;
+                            const isExcluded = !!excludedRowIds[r.id];
                             const currentOverride = categoryOverrides[r.id] !== undefined
                               ? categoryOverrides[r.id]
                               : r.category;
                             return (
-                              <tr key={r.id} data-testid={`classification-row-${r.id}`}>
+                              <tr
+                                key={r.id}
+                                data-testid={`classification-row-${r.id}`}
+                                className={isExcluded ? 'opacity-50 line-through bg-gray-50 dark:bg-gray-900/50' : ''}
+                              >
                                 <td className="py-1.5 px-2 font-mono">{idx + 1}</td>
-                                <td className="py-1.5 px-2 truncate max-w-[280px]">{r.narration}</td>
+                                <td className="py-1.5 px-2 font-mono whitespace-nowrap">{r.date}</td>
+                                <td className="py-1.5 px-2 truncate max-w-[240px]">{r.narration}</td>
+                                <td className={`py-1.5 px-2 font-mono text-right whitespace-nowrap ${r.type === 'Income' ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+                                  {privacyMasked ? '₹ ••••••' : `${r.type === 'Income' ? '+' : '-'}₹${r.amount.toLocaleString('en-IN')}`}
+                                </td>
                                 <td className="py-1.5 px-2">
                                   <span
                                     data-classification={conf}
@@ -995,6 +1038,7 @@ export const ImportPage: React.FC = () => {
                                   <select
                                     data-row-category={r.id}
                                     value={currentOverride}
+                                    disabled={isExcluded}
                                     onChange={(e) => {
                                       const newValue = e.target.value;
                                       setCategoryOverrides((prev) => {
@@ -1012,6 +1056,8 @@ export const ImportPage: React.FC = () => {
                                     <option value="SALARY">SALARY</option>
                                     <option value="BONUS">BONUS</option>
                                     <option value="INVESTMENT">INVESTMENT</option>
+                                    <option value="PPF_CONTRIBUTION">PPF_CONTRIBUTION</option>
+                                    <option value="INTEREST">INTEREST</option>
                                     <option value="OTHER">OTHER</option>
                                   </select>
                                 </td>
@@ -1020,6 +1066,7 @@ export const ImportPage: React.FC = () => {
                                     <input
                                       type="checkbox"
                                       data-confirm-dividend={r.id}
+                                      disabled={isExcluded}
                                       checked={!!mediumConfirmations[r.id]}
                                       onChange={(e) => {
                                         setMediumConfirmations((prev) => ({
@@ -1029,6 +1076,24 @@ export const ImportPage: React.FC = () => {
                                       }}
                                     />
                                   )}
+                                </td>
+                                <td className="py-1.5 px-2 text-center">
+                                  <input
+                                    type="checkbox"
+                                    aria-label={`Exclude row ${idx + 1}`}
+                                    data-exclude-row={r.id}
+                                    checked={isExcluded}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setExcludedRowIds((prev) => {
+                                        if (!checked) {
+                                          const { [r.id]: _, ...rest } = prev;
+                                          return rest;
+                                        }
+                                        return { ...prev, [r.id]: true };
+                                      });
+                                    }}
+                                  />
                                 </td>
                               </tr>
                             );
@@ -1043,16 +1108,16 @@ export const ImportPage: React.FC = () => {
                   <button
                     id="btn-commit-import"
                     onClick={handleCommit}
-                    disabled={importResult.validRows.length === 0 || commitBusy}
+                    disabled={importResult.validRows.filter(r => !excludedRowIds[r.id]).length === 0 || commitBusy}
                     className={`px-5 py-2.5 rounded-lg font-bold text-sm shadow-sm transition ${
-                      importResult.validRows.length === 0
+                      importResult.validRows.filter(r => !excludedRowIds[r.id]).length === 0
                         ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 cursor-not-allowed'
                         : 'bg-green-700 hover:bg-green-800 text-white'
                     }`}
                   >
                     {commitBusy
                       ? 'Committing…'
-                      : `Review & Commit ${importResult.validRows.length} Valid Rows to Canonical Ledger (Append Mode)`}
+                      : `Review & Commit ${importResult.validRows.filter(r => !excludedRowIds[r.id]).length} Valid Rows to Canonical Ledger (Append Mode)`}
                   </button>
                 </div>
               </>

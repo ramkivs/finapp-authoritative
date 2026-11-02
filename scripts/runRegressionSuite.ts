@@ -9,6 +9,10 @@ import { WealthIntelligenceService } from '../src/services/WealthIntelligenceSer
 import { Asset, BUDGET_CATEGORY_FAMILIES, ControlledAccountType } from '../src/domain/types';
 import { ImportPipelineService } from '../src/services/ImportPipelineService';
 import { useCanonicalLedger } from '../src/store/useCanonicalLedger';
+import { DateRangeService } from '../src/services/DateRangeService';
+
+// Pin effective as-of date to the canonical regression anchor ('2026-08-09').
+DateRangeService.setAsOfDateOverride('2026-08-09');
 import { CanonicalNormalizationService } from '../src/services/mathematics/CanonicalNormalizationService';
 import { JcsSerializationService } from '../src/services/mathematics/JcsSerializationService';
 import { ProvenanceService } from '../src/services/mathematics/ProvenanceService';
@@ -173,7 +177,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   console.log('\n4. [2-Leg Transfer Semantics & Zero Net Impact]');
-  commands.recordTransfer('HDFC Bank', 'ICICI Bank', 50000);
+  await commands.recordTransfer('HDFC Bank', 'ICICI Bank', 50000);
   const transferTxs = queries.queryTransactions({ type: 'Transfer', dateRange: '12M' });
   const latestTrs = transferTxs.slice(0, 2);
   assert(
@@ -197,8 +201,8 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   console.log('\n5. [Domain Financial Metrics Integrity]');
-  commands.recordAsset('Test Brokerage Account', 1500000);
-  commands.recordLiability('Test Personal Loan', 200000);
+  await commands.recordAsset('Test Brokerage Account', 1500000);
+  await commands.recordLiability('Test Personal Loan', 200000);
   const netWorthMetric = queries.getMetric('NET_WORTH');
   assert(
     netWorthMetric.status === 'RECONCILED' && typeof netWorthMetric.value === 'number' && netWorthMetric.value === 1300000,
@@ -360,7 +364,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
     'TEST-33'
   );
 
-  commands.recordAsset('Test Brokerage', 100000);
+  await commands.recordAsset('Test Brokerage', 100000);
   const mutYield = queries.getMetric('DIVIDEND_YIELD_TTM');
   assert(
     mutYield.status === 'RECONCILED' && mutYield.value === 0,
@@ -440,7 +444,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // WP17-W03: Asset persists via recordAssetWithMetadata with controlled type, tag, currency, geography
-  commands.recordAssetWithMetadata({
+  await commands.recordAssetWithMetadata({
     name: 'HDFC Equity Mutual Fund',
     amount: 150000,
     type: 'Equity',
@@ -471,7 +475,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // WP17-W06: Liability persists via recordLiabilityWithMetadata with controlled loan type
-  commands.recordLiabilityWithMetadata({
+  await commands.recordLiabilityWithMetadata({
     name: 'HDFC Home Loan',
     amount: 50000,
     type: 'Home Loan',
@@ -493,7 +497,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // WP17-W08: Add Past Entry records historical date, deterministic netWorth, and label
-  commands.addPastSnapshot({
+  await commands.addPastSnapshot({
     dateStr: '09-08-2025',
     totalAssets: 100000,
     totalLiabilities: 20000,
@@ -509,7 +513,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   // WP17-W09: Add Past Entry rejects future dates without throwing unhandled exceptions
   let rejectedFuture = false;
   try {
-    commands.addPastSnapshot({
+    await commands.addPastSnapshot({
       dateStr: '01-01-2030',
       totalAssets: 500000,
       totalLiabilities: 0
@@ -524,7 +528,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // WP17-W10: Add Past Entry enforces duplicate-date replacement (idempotency by dateStr)
-  commands.addPastSnapshot({
+  await commands.addPastSnapshot({
     dateStr: '09-08-2025',
     totalAssets: 120000,
     totalLiabilities: 20000,
@@ -546,7 +550,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // WP17-W12: Geography view renders explicit domestic vs international exposure without currency inference
-  commands.recordAssetWithMetadata({
+  await commands.recordAssetWithMetadata({
     name: 'US Tech ETF (INR Denominated)',
     amount: 100000,
     type: 'Equity',
@@ -569,8 +573,8 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // WP17-W14: Backwards Compatibility: Existing Asset, Liability, and Snapshot records without WP-17 metadata load as undefined and calculate identical totals
-  commands.recordAsset('Legacy WP15 Asset', 25000);
-  commands.recordLiability('Legacy WP15 Liability', 5000);
+  await commands.recordAsset('Legacy WP15 Asset', 25000);
+  await commands.recordLiability('Legacy WP15 Liability', 5000);
   const legacyAsset = repository.assets.findAllSync().find(a => a.name === 'Legacy WP15 Asset');
   const legacyLiab = repository.liabilities.findAllSync().find(l => l.name === 'Legacy WP15 Liability');
   assert(
@@ -636,7 +640,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // WP17-BUX-08: Assets added in Phase A remain visible
-  commands.recordAssetWithMetadata({
+  await commands.recordAssetWithMetadata({
     name: 'Phase B Gold Asset',
     amount: 175000,
     type: 'Commodities',
@@ -651,7 +655,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // WP17-BUX-09: Liabilities added in Phase A remain visible
-  commands.recordLiabilityWithMetadata({
+  await commands.recordLiabilityWithMetadata({
     name: 'Phase B Vehicle Loan',
     amount: 220000,
     type: 'Vehicle Loan',
@@ -665,7 +669,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // WP17-BUX-10: Historical snapshots remain visible
-  commands.addPastSnapshot({
+  await commands.addPastSnapshot({
     dateStr: '15-05-2025',
     totalAssets: 400000,
     totalLiabilities: 100000,
@@ -1233,7 +1237,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // M07 — Transfer remains two-leg
-  commands.recordTransfer('HDFC Bank (...4921)', 'Zerodha Trading Account', 25000);
+  await commands.recordTransfer('HDFC Bank (...4921)', 'Zerodha Trading Account', 25000);
   const transferTxsM07 = repository.transactions.findAllSync().filter(t => t.notes?.includes('Bank-to-Bank Transfer'));
   assert(
     transferTxsM07.length >= 2 && transferTxsM07.some(t => t.type === 'Transfer' && t.account === 'HDFC Bank (...4921)') &&
@@ -1282,7 +1286,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // M13 — Budget can be saved to canonical store
-  const savedBudget = commands.saveMonthlyBudget('2026-08', testAllocations);
+  const savedBudget = await commands.saveMonthlyBudget('2026-08', testAllocations);
   const foundSavedBudget = repository.budgets.findForMonthSync('2026-08');
   assert(
     foundSavedBudget !== null && foundSavedBudget.totalBudget === 67000 && foundSavedBudget.allocations['Housing'] === 40000,
@@ -1299,8 +1303,8 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // M15 — Copy previous month works ($M-1$)
-  commands.saveMonthlyBudget('2026-07', { 'Housing': 38000, 'Transport': 5000 });
-  const copiedBudget = commands.copyBudgetFromPreviousMonth('2026-08', '2026-07');
+  await commands.saveMonthlyBudget('2026-07', { 'Housing': 38000, 'Transport': 5000 });
+  const copiedBudget = await commands.copyBudgetFromPreviousMonth('2026-08', '2026-07');
   assert(
     copiedBudget !== null && copiedBudget.allocations['Housing'] === 38000 && copiedBudget.allocations['Transport'] === 5000,
     'Copy Previous Month duplicates budget allocations from preceding month to target month',
@@ -1323,7 +1327,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // M18 — Account persists to canonical store (enforcing unique account names)
-  const testAcc = commands.recordAccount({
+  const testAcc = await commands.recordAccount({
     name: 'HDFC Salary Premium Account',
     type: 'Bank',
     institution: 'HDFC Bank',
@@ -1338,7 +1342,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // M19 — Account metadata persists without default 'INR' fabrication
-  const noCurrAcc = commands.recordAccount({
+  const noCurrAcc = await commands.recordAccount({
     name: 'Petty Cash Desk Drawer',
     type: 'Cash',
     openingBalance: 5000
@@ -1394,12 +1398,12 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // M25 — Refresh preserves canonical Money state
-  commands.recordAccount({
+  await commands.recordAccount({
     name: 'Persistent Test Bank Account',
     type: 'Bank',
     openingBalance: 50000
   });
-  commands.saveMonthlyBudget('2026-08', { 'Groceries': 8000 });
+  await commands.saveMonthlyBudget('2026-08', { 'Groceries': 8000 });
   const reloadedAccounts = repository.accounts.findAllSync();
   const reloadedBudgets = repository.budgets.findAllSync();
   assert(
@@ -1445,12 +1449,12 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
 
   // E02 — Emergency Fund runway computation from liquid assets & monthly expenses
   // Record cash asset & profile
-  commands.recordAssetWithMetadata({
+  await commands.recordAssetWithMetadata({
     name: 'Emergency Savings Account',
     amount: 300000,
     type: 'Cash & Savings'
   });
-  commands.saveProfile({
+  await commands.saveProfile({
     id: 'default-profile',
     age: 30,
     monthlyIncome: 100000,
@@ -1484,7 +1488,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // E04 — Add Policy modal / command validates policy parameters
-  const termPolicy = commands.recordPolicy({
+  const termPolicy = await commands.recordPolicy({
     policyNumber: 'HDFC-LIFE-998822',
     provider: 'HDFC Life',
     type: 'Term Life',
@@ -1521,7 +1525,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // E07 — Health Insurance policy calculates cover amount, premium, and member breakdown
-  const healthPolicy = commands.recordPolicy({
+  const healthPolicy = await commands.recordPolicy({
     policyNumber: 'STAR-HEALTH-443311',
     provider: 'Star Health',
     type: 'Health',
@@ -1541,7 +1545,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // E08 — Delete policy removes policy from repository and updates total cover reactively
-  commands.deletePolicy(healthPolicy.id);
+  await commands.deletePolicy(healthPolicy.id);
   const afterDeleteInsurance = queries.getMetric('ACTIVE_INSURANCE_POLICY_TOTAL');
   assert(
     repository.policies.findAllSync().length === 1 &&
@@ -1567,7 +1571,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // E10 — Goal milestone persists to canonical repository with target amount, date, and SIP allocation
-  const retirementGoal = commands.recordGoal({
+  const retirementGoal = await commands.recordGoal({
     name: 'Retirement Corpus 2050',
     template: 'Retirement',
     targetAmount: 25000000,
@@ -1577,7 +1581,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
     status: 'In Progress'
   });
 
-  const educationGoal = commands.recordGoal({
+  const educationGoal = await commands.recordGoal({
     name: 'Higher Education Fund',
     template: 'Education',
     targetAmount: 3000000,
@@ -1624,7 +1628,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // E14 — Delete goal removes goal from repository and updates SIP commitments reactively
-  commands.deleteGoal(educationGoal.id);
+  await commands.deleteGoal(educationGoal.id);
   const sipAfterDelete = queries.getMetric('SIP_COMMITMENT_MONTHLY');
   assert(
     repository.goals.findAllSync().length === 1 &&
@@ -1634,7 +1638,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // E15 — Financial Profile inputs persist to canonical repository and compute savings rate dynamically
-  const updatedProfile = commands.saveProfile({
+  await commands.saveProfile({
     id: 'default-profile',
     age: 34,
     monthlyIncome: 200000,
@@ -1685,7 +1689,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
 
   // E19 — Browser refresh preserves all canonical policies, goals, and profile in real storage
-  commands.recordPolicy({
+  await commands.recordPolicy({
     policyNumber: 'POL-PERSIST-01',
     provider: 'Max Life',
     type: 'Term Life',
@@ -1693,7 +1697,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
     premiumAmount: 12000,
     status: 'Active'
   });
-  commands.recordGoal({
+  await commands.recordGoal({
     name: 'Persistent Goal 2030',
     template: 'Vacation',
     targetAmount: 500000,
@@ -1701,7 +1705,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
     monthlyContribution: 10000,
     status: 'In Progress'
   });
-  commands.saveProfile({
+  await commands.saveProfile({
     id: 'default-profile',
     age: 28,
     monthlyIncome: 120000,
@@ -1735,7 +1739,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
 
   // C01 — Liquid reserve canonical semantics (Sum of distinct Cash assets & Bank accounts)
   const analysisDistinct = EssentialsService.calculateEmergencyFundAnalysis(
-    [{ name: 'Emergency Liquid Asset', amount: 300000, type: 'Cash & Savings' }],
+    [{ id: 'asset-liq-1', name: 'Emergency Liquid Asset', amount: 300000, type: 'Cash & Savings' }],
     [{ id: 'acc-1', name: 'Primary HDFC Checking', type: 'Bank', openingBalance: 200000 }],
     [],
     [],
@@ -1768,7 +1772,7 @@ not-a-date,Broken Row,ACH/BROKEN,invalid-amount,INCOME,HDFC Bank
   );
   // Case 3: Same-name asset & account prevents double counting
   const analysisSameName = EssentialsService.calculateEmergencyFundAnalysis(
-    [{ name: 'HDFC Bank', amount: 100000, type: 'Cash & Savings' }],
+    [{ id: 'asset-hdfc-1', name: 'HDFC Bank', amount: 100000, type: 'Cash & Savings' }],
     [{ id: 'acc-1', name: 'HDFC Bank', type: 'Bank', openingBalance: 100000 }],
     [], [], 6, { id: 'p', monthlyIncome: 100000, monthlyExpenses: 50000, savingsRate: 50, updatedAt: '' }
   );

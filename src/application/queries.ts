@@ -3,6 +3,7 @@ import { LedgerExclusionService } from '../services/LedgerExclusionService';
 import { FinancialMetricService } from '../services/FinancialMetricService';
 import { WealthIntelligenceService } from '../services/WealthIntelligenceService';
 import { EssentialsService } from '../services/EssentialsService';
+import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
 import { DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { Wp20Adapters } from '../services/mathematics/adapters/Wp20Adapters';
 import { XirrEngine, XirrFlowInput } from '../services/mathematics/solvers/XirrEngine';
@@ -52,7 +53,16 @@ export class FinancialQueries {
     const assets = repository.assets.findAllSync();
     const liabilities = repository.liabilities.findAllSync();
     const snapshots = repository.snapshots.findAllSync();
-    return FinancialMetricService.getMetric(metricName, transactions, assets, liabilities, snapshots);
+    const holdings = repository.holdings.findAllSync();
+    return FinancialMetricService.getMetric(
+      metricName,
+      transactions,
+      assets,
+      liabilities,
+      snapshots,
+      getEffectiveAsOfDate(),
+      holdings
+    );
   }
 
   static getSeries(seriesName: string): FinancialSeries | null {
@@ -102,6 +112,7 @@ export class FinancialQueries {
 
     for (const t of periodTxs) {
       if (t.type === 'Income') {
+        if (t.category === 'PPF_CONTRIBUTION') continue;
         totalIncome += t.amount;
       } else if (t.type === 'Expense') {
         totalExpenses += t.amount;
@@ -134,7 +145,7 @@ export class FinancialQueries {
     for (const t of allTxs) {
       const ym = t.date.slice(0, 7);
       if (!monthMap[ym]) monthMap[ym] = { income: 0, expense: 0 };
-      if (t.type === 'Income') monthMap[ym].income += t.amount;
+      if (t.type === 'Income' && t.category !== 'PPF_CONTRIBUTION') monthMap[ym].income += t.amount;
       if (t.type === 'Expense') monthMap[ym].expense += t.amount;
     }
 
@@ -223,7 +234,8 @@ export class FinancialQueries {
     const assets = repository.assets.findAllSync();
     const liabilities = repository.liabilities.findAllSync();
     const snapshots = repository.snapshots.findAllSync();
-    return WealthIntelligenceService.generateInsights(assets, liabilities, snapshots);
+    const holdings = repository.holdings.findAllSync();
+    return WealthIntelligenceService.generateInsights(assets, liabilities, snapshots, holdings);
   }
 
   /* =========================================================================
@@ -255,7 +267,8 @@ export class FinancialQueries {
     const emergencyAnalysis = this.getEmergencyFundAnalysis(6);
     const assets = repository.assets.findAllSync();
     const liabilities = repository.liabilities.findAllSync();
-    const totalAssets = assets.reduce((s, a) => s + a.amount, 0);
+    const holdings = repository.holdings.findAllSync();
+    const totalAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
     const totalDebt = liabilities.reduce((s, l) => s + l.amount, 0);
     const policies = repository.policies.findAllSync();
     const totalInsuranceCover = EssentialsService.calculateActiveInsuranceTotal(policies);

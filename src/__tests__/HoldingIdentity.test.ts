@@ -83,13 +83,13 @@ describe('WP-FB-IMPORT-BROKER-01 — D-02 Holding identity', () => {
     it('2. Dhan MF + account + instrument name', () => {
       const h = base({
         broker: 'Dhan',
-        account: 'IQCX28849K',
+        account: 'SYNTHUCC01',
         instrumentName: 'Axis Nifty Midcap 50 Index Fund Direct Growth',
       });
       const id = HoldingIdentityService.identityOf(h);
       expect(id).toEqual({
         broker: 'Dhan',
-        account: 'IQCX28849K',
+        account: 'SYNTHUCC01',
         instrument: 'axis nifty midcap 50 index fund direct growth',
         instrumentKind: 'NAME',
       });

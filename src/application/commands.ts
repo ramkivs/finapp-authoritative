@@ -17,12 +17,16 @@ import {
   FinancialGoal,
   GoalTemplateType,
   GOAL_TEMPLATES,
-  FinancialProfile
+  FinancialProfile,
+  LocalBackupExportShape,
+  LocalBackupRestoreShape
 } from '../domain/types';
 import { formatDisplayDate, getEffectiveAsOfDate } from '../services/DateRangeService';
+import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { TransactionFactory } from '../domain/TransactionFactory';
 import { TransactionSignService } from '../services/TransactionSignService';
+import { LedgerExclusionService } from '../services/LedgerExclusionService';
 
 const SAMPLE_DEFAULT_CSV = `Date,Title,Narration,Amount,Type,Account
 2026-08-06,ITC Limited,ACH/C-/ITC LTD DIVIDEND/NSE0098,2100,INCOME,HDFC Bank
@@ -157,7 +161,10 @@ export class FinancialCommands {
 
   static createSnapshot(label?: string): Promise<void> {
     if (label) {
-      const totalAssets = repository.assets.findAllSync().reduce((sum, a) => sum + a.amount, 0);
+      const totalAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(
+        repository.assets.findAllSync(),
+        repository.holdings.findAllSync()
+      );
       const totalLiabilities = repository.liabilities.findAllSync().reduce((sum, l) => sum + l.amount, 0);
       const netWorth = totalAssets - totalLiabilities;
       return repository.snapshots.create({
@@ -313,7 +320,7 @@ export class FinancialCommands {
       precedingMonths.push(`${y}-${String(m).padStart(2, '0')}`);
     }
 
-    const allTxs = repository.transactions.findAllSync();
+    const allTxs = LedgerExclusionService.forDerivation(repository.transactions.findAllSync());
     const categoryTotals: Record<string, number> = {};
 
     for (const tx of allTxs) {
@@ -542,6 +549,14 @@ export class FinancialCommands {
 
   static async loadDemoData(): Promise<void> {
     await repository.loadDemoData();
+  }
+
+  static async exportLocalBackup(options?: { createdAt?: string }): Promise<LocalBackupExportShape> {
+    return repository.exportBackup(options);
+  }
+
+  static async restoreLocalBackup(input: string | unknown): Promise<LocalBackupRestoreShape> {
+    return repository.restoreFromBackup(input);
   }
 
   static togglePrivacy(): void {

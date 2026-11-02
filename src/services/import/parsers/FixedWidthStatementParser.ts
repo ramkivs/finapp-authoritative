@@ -27,7 +27,7 @@ export class FixedWidthStatementParser {
     let colWithdrawal = 65;
     let colDeposit = 85;
 
-    const dateRegex = /^(\d{2}\/\d{2}\/\d{2,4})/;
+    const dateRegex = /^(\d{1,2}[/-](?:\d{1,2}|[A-Za-z]{3})[/-]\d{2,4})/;
 
     for (let i = 0; i < rawLines.length; i++) {
       const rawLine = rawLines[i];
@@ -53,6 +53,7 @@ export class FixedWidthStatementParser {
         (upperLine.startsWith('STATEMENT SUMMARY') ||
           upperLine.startsWith('TOTAL DEPOSITS') ||
           upperLine.startsWith('CLOSING BALANCE') ||
+          upperLine.startsWith('TRANSACTION TOTAL') ||
           upperLine.startsWith('END OF STATEMENT'))
       ) {
         if (currentRecord) {
@@ -190,7 +191,7 @@ export class FixedWidthStatementParser {
 
     // Process non-amount tokens for date, ref, and narration
     nonAmountTokens.forEach(tok => {
-      if (/^\d{2}\/\d{2}\/\d{2,4}$/.test(tok.text)) {
+      if (/^\d{1,2}[/-](?:\d{1,2}|[A-Za-z]{3})[/-]\d{2,4}$/.test(tok.text)) {
         valueDateStr = tok.text;
       } else if (/^\d{6,}$/.test(tok.text)) {
         refNumber = tok.text;

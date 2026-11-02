@@ -49,6 +49,14 @@ import {
   AmendmentRequest
 } from '../services/TransactionAmendmentService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
+import { LiabilityIdentityService } from '../services/LiabilityIdentityService';
+import {
+  BackupValidationError,
+  LocalBackupExportResult,
+  LocalBackupRestoreResult,
+  LocalBackupService,
+} from '../services/LocalBackupService';
+import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { demoTransactions, demoAssets, demoLiabilities, demoSnapshots } from '../domain/demoFixtures';
 
@@ -359,9 +367,14 @@ export class MemoryAssetRepository implements AssetRepository {
   async add(asset: Asset): Promise<void> {
     return this.parent.write(() => {
       // Planned inside the write boundary so the judgement is made against the
-      // state that is actually mutated (WP-FB-DATA-07c).
+      // state that is actually mutated (WP-FB-DATA-07c), including D-04
+      // collision detection against imported Holdings (DEF-12).
       this.parent.assetsData =
-        AssetLifecycleService.planCreate(asset as any, this.parent.assetsData).next;
+        AssetLifecycleService.planCreate(
+          asset as any,
+          this.parent.assetsData,
+          this.parent.holdingsData
+        ).next;
     });
   }
 
@@ -375,7 +388,11 @@ export class MemoryAssetRepository implements AssetRepository {
   async update(asset: Asset): Promise<void> {
     return this.parent.write(() => {
       this.parent.assetsData =
-        AssetLifecycleService.planUpdate(asset as any, this.parent.assetsData).next;
+        AssetLifecycleService.planUpdate(
+          asset as any,
+          this.parent.assetsData,
+          this.parent.holdingsData
+        ).next;
     });
   }
 
@@ -507,7 +524,10 @@ export class MemorySnapshotRepository implements SnapshotRepository {
           next = [snapshot, ...prev];
         }
       } else {
-        const totAssets = this.parent.assetsData.reduce((sum, a) => sum + a.amount, 0);
+        const totAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(
+          this.parent.assetsData,
+          this.parent.holdingsData
+        );
         const totLiabs = this.parent.liabilitiesData.reduce((sum, l) => sum + l.amount, 0);
         const netWorth = totAssets - totLiabs;
 
@@ -760,10 +780,7 @@ export class MemoryRepository implements FinancialRepositoryPort {
   public liabilities: LiabilityRepository = new MemoryLiabilityRepository(this);
   public holdings: HoldingRepository = new MemoryHoldingRepository(this);
   /** WP-FB-IMPORT-BROKER-01 / D-06: audit log for permanent holding deletions. */
-  public holdingDeletionLog: HoldingDeletionLogRepository = new MemoryHoldingDeletionLogRepository({
-    holdingDeletionLogData: this.holdingDeletionLogData,
-    syncStore: () => this.syncStore(),
-  });
+  public holdingDeletionLog: HoldingDeletionLogRepository = new MemoryHoldingDeletionLogRepository(this);
   public snapshots: SnapshotRepository = new MemorySnapshotRepository(this);
   public accounts: AccountRepository = new MemoryAccountRepository(this);
   public budgets: BudgetRepository = new MemoryBudgetRepository(this);
@@ -1181,5 +1198,89 @@ export class MemoryRepository implements FinancialRepositoryPort {
       this.goalsData = [];
       this.profileData = null;
     });
+  }
+
+  /**
+   * Exports the complete canonical financial dataset (all 11 persisted stores)
+   * into a local JSON backup envelope with format/schema metadata and a genuine
+   * 256-bit integrity digest computed via `crypto.subtle`.
+   */
+  async exportBackup(options?: { createdAt?: string }): Promise<LocalBackupExportResult> {
+    if (IndexedDBStorageService.loadFailed) {
+      throw new BackupValidationError(
+        'STORAGE_UNREADABLE',
+        'Cannot export backup while local storage is in a failed-load state. Recover storage before exporting so unread records are not omitted.'
+      );
+    }
+    return LocalBackupService.createBackup(this.currentLedger(), options);
+  }
+
+  /**
+   * Verifies backup format, schema version, cryptographic integrity digest, and
+   * complete per-record schema BEFORE atomically replacing local persistence
+   * across in-memory repositories, Zustand store, and IndexedDB.
+   *
+   * Any validation or IndexedDB failure aborts cleanly and leaves existing
+   * financial data completely unchanged.
+   */
+  async restoreFromBackup(input: string | unknown): Promise<LocalBackupRestoreResult> {
+    if (IndexedDBStorageService.loadFailed) {
+      throw new BackupValidationError(
+        'STORAGE_UNREADABLE',
+        'Cannot restore backup while local storage is in a failed-load state. Recover storage first so unread local records are not overwritten.'
+      );
+    }
+
+    const verified = await LocalBackupService.verifyAndParseBackup(input);
+
+    const normalizedAccounts = AccountAssetLinkService.migrate(verified.data.accounts).accounts;
+    const resolvedTransactions = AccountResolutionService.migrate(
+      verified.data.transactions,
+      normalizedAccounts
+    ).transactions;
+    const normalizedTransactions = TransactionSignService.migrate(resolvedTransactions).transactions;
+    const normalizedAssets = AssetIdentityService.migrate(verified.data.assets).assets;
+    const normalizedLiabilities = LiabilityIdentityService.migrate(verified.data.liabilities).liabilities;
+
+    const prevDiagnostics = {
+      duplicate: this.duplicateTransactionIdsAtLoad,
+      partial: this.partiallyExcludedTransfersAtLoad,
+      broken: this.brokenTransfersAtLoad,
+    };
+
+    try {
+      await this.write(() => {
+        this.transactionsData = normalizedTransactions;
+        this.assetsData = normalizedAssets;
+        this.liabilitiesData = normalizedLiabilities;
+        this.holdingsData = verified.data.holdings;
+        this.holdingDeletionLogData = verified.data.holdingDeletionLog;
+        this.snapshotsData = verified.data.snapshots;
+        this.accountsData = normalizedAccounts;
+        this.budgetsData = verified.data.budgets;
+        this.policiesData = verified.data.policies;
+        this.goalsData = verified.data.goals;
+        this.profileData = verified.data.profile;
+
+        this.duplicateTransactionIdsAtLoad =
+          TransactionIdentityService.findDuplicateIds(this.transactionsData);
+        this.partiallyExcludedTransfersAtLoad =
+          TransferIntegrityService.findPartiallyExcludedTransfers(this.transactionsData);
+        this.brokenTransfersAtLoad =
+          TransferIntegrityService.findBrokenTransfers(this.transactionsData);
+      });
+    } catch (err) {
+      this.duplicateTransactionIdsAtLoad = prevDiagnostics.duplicate;
+      this.partiallyExcludedTransfersAtLoad = prevDiagnostics.partial;
+      this.brokenTransfersAtLoad = prevDiagnostics.broken;
+      throw err;
+    }
+
+    return {
+      manifest: verified.manifest,
+      digest: verified.integrity.digest,
+      restoredAt: new Date().toISOString(),
+      recordCounts: verified.manifest.recordCounts,
+    };
   }
 }

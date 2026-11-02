@@ -117,7 +117,9 @@ export class FinancialMetricService {
       const invAsset = assets
         .filter(a => a.name.toLowerCase().includes('brokerage') || a.name.toLowerCase().includes('invest') || a.name.toLowerCase().includes('zerodha') || a.name.toLowerCase().includes('groww') || a.name.toLowerCase().includes('upstox') || a.name.includes('3 Brokerages'))
         .reduce((sum, a) => sum + a.amount, 0);
-      const y = invAsset > 0 ? Math.round((ttmVal / invAsset) * 10000) / 100 : 0;
+      const holdingsVal = holdings.reduce((sum, h) => sum + (Number(h.currentValue) || 0), 0);
+      const investedPortfolio = invAsset + holdingsVal;
+      const y = investedPortfolio > 0 ? Math.round((ttmVal / investedPortfolio) * 10000) / 100 : 0;
       return {
         metric: 'DIVIDEND_YIELD_TTM',
         value: y,
@@ -126,8 +128,8 @@ export class FinancialMetricService {
         source: 'CanonicalLedger -> Portfolio Yield',
         filters: {},
         formula: '(TTM_REALIZED_DIVIDEND / InvestedPortfolio) * 100',
-        status: invAsset > 0 ? 'RECONCILED' : 'NOT_CONFIGURED',
-        displayLabel: invAsset > 0 ? undefined : 'Not configured (Requires Portfolio Registry)'
+        status: investedPortfolio > 0 ? 'RECONCILED' : 'NOT_CONFIGURED',
+        displayLabel: investedPortfolio > 0 ? undefined : 'Not configured (Requires Portfolio Registry)'
       };
     } else if (metricName === 'NET_WORTH_CAGR') {
       return WealthIntelligenceService.calculateNetWorthCAGR(snapshots, asOfDateStr);

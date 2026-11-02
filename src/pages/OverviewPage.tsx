@@ -1,8 +1,12 @@
 import React, { useState } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { FinancialMetricService } from '../services/FinancialMetricService';
+import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
+import { classifyHolding } from '../services/HoldingAnalyticsClassifier';
 import { FinancialQueries } from '../application/queries';
 import { AccountBalanceService } from '../services/AccountBalanceService';
+import { LedgerExclusionService } from '../services/LedgerExclusionService';
+import { TransactionSignService } from '../services/TransactionSignService';
 import { getEffectiveAsOfDate } from '../services/DateRangeService';
 import { CurrencyValue } from '../components/CurrencyValue';
 import { KpiCard } from '../components/ui/KpiCard';
@@ -34,35 +38,74 @@ interface Props {
 
 export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
   const {
-    assets,
-    liabilities,
-    snapshots,
-    transactions,
-    accounts,
-    goals,
+    assets = [],
+    liabilities = [],
+    holdings = [],
+    snapshots = [],
+    transactions = [],
+    accounts = [],
+    goals = [],
+    privacyMasked = false,
     addAsset,
     addLiability,
     captureSnapshot
   } = useCanonicalLedger();
 
+  const liveTransactions = LedgerExclusionService.forDerivation(transactions);
+
   // Canonical queries & derived metrics (Strictly Read-Only)
-  const nwMetric = FinancialMetricService.getMetric('NET_WORTH', transactions, assets, liabilities, snapshots);
-  const cagrMetric = FinancialMetricService.getMetric('NET_WORTH_CAGR', transactions, assets, liabilities, snapshots);
+  const nwMetric = FinancialMetricService.getMetric(
+    'NET_WORTH',
+    liveTransactions,
+    assets,
+    liabilities,
+    snapshots,
+    getEffectiveAsOfDate(),
+    holdings
+  );
+  const cagrMetric = FinancialMetricService.getMetric(
+    'NET_WORTH_CAGR',
+    liveTransactions,
+    assets,
+    liabilities,
+    snapshots,
+    getEffectiveAsOfDate(),
+    holdings
+  );
   const cashflow = FinancialQueries.getMoneyInsights('This Month');
   const healthScore = FinancialQueries.getFinancialHealthScore();
 
-  // Compute total investments from market asset classes
+  // Compute total investments from market asset classes + imported holdings
   const investmentTypes = new Set(['Equity', 'Debt', 'Commodities', 'Crypto', 'Alternatives']);
-  const totalInvestments = assets
-    .filter(a => (a.type ? investmentTypes.has(a.type) : !a.name.toLowerCase().includes('bank')))
+  const manualInvestments = assets
+    .filter(a => {
+      if (a.type) return investmentTypes.has(a.type);
+      const lower = a.name.toLowerCase();
+      return !lower.includes('bank') && !lower.includes('cash') && !lower.includes('savings') && !lower.includes('real estate') && !lower.includes('property');
+    })
     .reduce((s, a) => s + a.amount, 0);
+  const holdingsTotal = holdings.reduce((s, h) => s + (Number(h.currentValue) || 0), 0);
+  const holdingsInvested = holdings.reduce((s, h) => s + (Number(h.investedValue) || 0), 0);
+  const totalInvestments = manualInvestments + holdingsTotal;
+  const holdingsGainPct = holdingsInvested > 0
+    ? ((holdingsTotal - holdingsInvested) / holdingsInvested) * 100
+    : null;
 
-  const registeredAssetCount = assets.length;
+  const registeredAssetCount = assets.length + holdings.length;
 
-  // Sparkline data from historical snapshots
+  // Truthful sparkline & MoM deltas from canonical snapshots / monthly trends (no fabricated flat/synthetic curves)
   const sparklineNetWorth = snapshots.length >= 2
     ? snapshots.map(s => s.netWorth)
-    : [nwMetric.value, nwMetric.value];
+    : undefined;
+
+  const cashflowMomDelta = (() => {
+    const trends = cashflow.monthlyTrends;
+    if (trends.length < 2) return null;
+    const prev = trends[trends.length - 2].net;
+    const curr = trends[trends.length - 1].net;
+    if (prev === 0) return null;
+    return ((curr - prev) / Math.abs(prev)) * 100;
+  })();
 
   // Inline Quick Asset/Liability Form Modal State (Preserving Functional Contracts)
   const [showAssetForm, setShowAssetForm] = useState(false);
@@ -250,17 +293,17 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
             {/* Background Grid Lines & Scaled Y Ticks */}
             <line x1={paddingX} y1={paddingY} x2={width - paddingX} y2={paddingY} stroke="#21262D" strokeDasharray="3 3" />
             <text x={paddingX - 6} y={paddingY + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-              ₹{(maxVal / 100000).toFixed(0)}L
+              {privacyMasked ? '•••' : `₹${(maxVal / 100000).toFixed(0)}L`}
             </text>
 
             <line x1={paddingX} y1={height / 2} x2={width - paddingX} y2={height / 2} stroke="#21262D" strokeDasharray="3 3" />
             <text x={paddingX - 6} y={height / 2 + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-              ₹{(((maxVal + minVal) / 2) / 100000).toFixed(0)}L
+              {privacyMasked ? '•••' : `₹${(((maxVal + minVal) / 2) / 100000).toFixed(0)}L`}
             </text>
 
             <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="#21262D" />
             <text x={paddingX - 6} y={height - paddingY + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-              ₹{(minVal / 100000).toFixed(0)}L
+              {privacyMasked ? '•••' : `₹${(minVal / 100000).toFixed(0)}L`}
             </text>
 
             {/* Gradient Area Fill & Smooth Curve Line */}
@@ -277,7 +320,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
               <g transform={`translate(${Math.min(width - 85, Math.max(80, lastPt.x))}, ${Math.max(22, lastPt.y - 12)})`}>
                 <rect x="-44" y="-18" width="88" height="20" rx="6" fill="#1F2937" stroke="#4F8CFF" strokeWidth="1" />
                 <text x="0" y="-4" textAnchor="middle" fill="#F0F6FC" fontSize="10" fontWeight="700">
-                  ₹{Number(nwMetric.value).toLocaleString('en-IN')}
+                  {privacyMasked ? '₹ ••••••' : `₹${Number(nwMetric.value).toLocaleString('en-IN')}`}
                 </text>
               </g>
             )}
@@ -296,7 +339,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
 
   // Render pure SVG Concentric Donut Asset Allocation Chart (Prototype Multi-Category Composition)
   const renderAssetAllocationDonut = () => {
-    const totalAssetVal = assets.reduce((s, a) => s + a.amount, 0);
+    const totalAssetVal = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
 
     if (totalAssetVal === 0) {
       return (
@@ -332,6 +375,11 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
           : 'Other Assets'
       );
       categoryTotals[cat] = (categoryTotals[cat] || 0) + a.amount;
+    }
+    for (const h of holdings) {
+      const cv = Number(h.currentValue) || 0;
+      const cat = classifyHolding(h);
+      categoryTotals[cat] = (categoryTotals[cat] || 0) + cv;
     }
 
     const categories = Object.entries(categoryTotals).map(([cat, val]) => ({
@@ -396,7 +444,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
           </svg>
           <div className="absolute text-center">
             <div className="text-lg font-black text-[#F0F6FC]">
-              {assets.length}
+              {registeredAssetCount}
             </div>
             <div className="text-[9px] uppercase font-bold text-[#8B949E]">
               Holdings
@@ -429,8 +477,12 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
         <KpiCard
           label="Net Worth"
           value={<CurrencyValue value={nwMetric.value} />}
-          change={cagrMetric.status === 'RECONCILED' ? `+${cagrMetric.value}% vs last month` : undefined}
-          changeType="positive"
+          change={
+            cagrMetric.status === 'RECONCILED'
+              ? `${Number(cagrMetric.value) >= 0 ? '+' : ''}${cagrMetric.value}% annualized`
+              : undefined
+          }
+          changeType={Number(cagrMetric.value) >= 0 ? 'positive' : 'negative'}
           status={cagrMetric.status === 'NOT_CONFIGURED' ? undefined : cagrMetric.status}
           sparklineData={sparklineNetWorth}
           accentColor="emerald"
@@ -445,11 +497,14 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
         <KpiCard
           label="Investments"
           value={<CurrencyValue value={totalInvestments} />}
-          change={totalInvestments > 0 ? '+8.32% vs last month' : undefined}
-          changeType="positive"
-          sparklineData={totalInvestments > 0 ? [totalInvestments * 0.9, totalInvestments * 0.95, totalInvestments] : undefined}
+          change={
+            holdingsGainPct !== null
+              ? `${holdingsGainPct >= 0 ? '+' : ''}${holdingsGainPct.toFixed(2)}% vs invested`
+              : undefined
+          }
+          changeType={holdingsGainPct === null ? 'neutral' : holdingsGainPct >= 0 ? 'positive' : 'negative'}
           accentColor="emerald"
-          subtitle={assets.length > 0 ? `${registeredAssetCount} Assets Registered` : 'No investments'}
+          subtitle={registeredAssetCount > 0 ? `${registeredAssetCount} Assets Registered` : 'No investments'}
           tooltip="Market and portfolio asset valuation"
         />
 
@@ -461,18 +516,31 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
               <CurrencyValue value={cashflow.netCashFlow} />
             </span>
           }
-          change={cashflow.status === 'RECONCILED' ? '+18.74% vs last month' : undefined}
+          change={
+            cashflow.status === 'RECONCILED'
+              ? cashflowMomDelta !== null
+                ? `${cashflowMomDelta >= 0 ? '+' : ''}${cashflowMomDelta.toFixed(1)}% vs last month`
+                : `${cashflow.savingsRate}% savings rate`
+              : undefined
+          }
           changeType={cashflow.netCashFlow >= 0 ? 'positive' : 'negative'}
           status={cashflow.status}
+          sparklineData={cashflow.monthlyTrends.length >= 2 ? cashflow.monthlyTrends.map(t => t.net) : undefined}
           accentColor="cyan"
-          subtitle={cashflow.status === 'RECONCILED' ? `Income: ₹${cashflow.totalIncome.toLocaleString('en-IN')} | Exp: ₹${cashflow.totalExpenses.toLocaleString('en-IN')}` : 'Not configured'}
+          subtitle={
+            cashflow.status === 'RECONCILED'
+              ? privacyMasked
+                ? 'Income: ₹ •••••• | Exp: ₹ ••••••'
+                : `Income: ₹${cashflow.totalIncome.toLocaleString('en-IN')} | Exp: ₹${cashflow.totalExpenses.toLocaleString('en-IN')}`
+              : 'Not configured'
+          }
           tooltip="Net cash inflow surplus after all recorded expenses"
         />
 
         <KpiCard
           label="Credit Score"
           value={healthScore.status === 'NOT_CONFIGURED' ? 'Not Configured' : `${healthScore.score}`}
-          change={healthScore.status !== 'NOT_CONFIGURED' ? '+20 pts vs last month' : undefined}
+          change={undefined}
           changeType={healthScore.score >= 70 ? 'positive' : healthScore.score >= 40 ? 'neutral' : 'negative'}
           status={healthScore.status}
           accentColor="amber"
@@ -512,7 +580,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
         <div className="lg:col-span-5">
           <ChartCard
             title="Asset Allocation"
-            badgeText={assets.length > 0 ? `${assets.length} Holdings` : undefined}
+            badgeText={registeredAssetCount > 0 ? `${registeredAssetCount} Holdings` : undefined}
             action={
               /* WP-FB-DATA-07c / F-07a-1 — the liability trigger is BACK.
                  The v2.11.2 baseline rendered "Asset" and "Liability" quick-add
@@ -666,7 +734,7 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
               </button>
             </div>
 
-            {transactions.length === 0 ? (
+            {liveTransactions.length === 0 ? (
               <div className="py-6 text-center text-xs text-[#8B949E] space-y-2">
                 <p>No transactions recorded.</p>
                 <button
@@ -679,8 +747,10 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
               </div>
             ) : (
               <div className="space-y-2">
-                {transactions.slice(0, 4).map(t => {
+                {liveTransactions.slice(0, 4).map(t => {
                   const isInc = t.type === 'Income';
+                  const isTr = t.type === 'Transfer';
+                  const signed = TransactionSignService.signedAmount(t);
                   return (
                     <div key={t.id} className="flex items-center justify-between text-xs py-1 border-b border-[#21262D]/60 last:border-none">
                       <div className="truncate max-w-[130px]">
@@ -688,11 +758,11 @@ export const OverviewPage: React.FC<Props> = ({ navigateTo }) => {
                         <div className="text-[10px] text-[#8B949E]">{t.dateStr}</div>
                       </div>
                       <div className="flex items-center gap-1.5 ml-2 flex-shrink-0">
-                        <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${isInc ? 'bg-green-950/40 text-[#23C55E]' : 'bg-rose-950/40 text-rose-400'}`}>
+                        <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${isInc ? 'bg-green-950/40 text-[#23C55E]' : isTr ? 'bg-cyan-950/40 text-[#06B6D4]' : 'bg-rose-950/40 text-rose-400'}`}>
                           {t.category || t.type}
                         </span>
-                        <span className={`font-black text-xs ${isInc ? 'text-[#23C55E]' : 'text-rose-400'}`}>
-                          {isInc ? '+' : '-'}<CurrencyValue value={t.amount} />
+                        <span className={`font-black text-xs ${isInc ? 'text-[#23C55E]' : isTr ? 'text-[#06B6D4]' : 'text-rose-400'}`}>
+                          {signed > 0 ? '+' : signed < 0 ? '-' : ''}<CurrencyValue value={t.amount} />
                         </span>
                       </div>
                     </div>

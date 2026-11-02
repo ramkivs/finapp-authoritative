@@ -285,4 +285,172 @@ describe('WP-FB-IMPORT-BROKER-01 / D-06 — HoldingDeletionLogPersistence', () =
       expect((repository as any).holdingDeletionLogData).toHaveLength(1); // preserved
     });
   });
+
+  describe('commitBatchHoldingDeletion — D-06-F1-A batch persistence', () => {
+    it('removes ALL selected Holdings and writes ALL audit records with shared batch attribution', async () => {
+      const repo = repository as any;
+      const h1 = makeClosed({ id: 'hld-1', instrumentName: 'Inst One', currentValue: 1000 });
+      const h2 = makeClosed({ id: 'hld-2', instrumentName: 'Inst Two', currentValue: 2000 });
+      const h3 = makeClosed({ id: 'hld-3', instrumentName: 'Inst Three', currentValue: 3000 });
+      repo.holdingsData = [h1, h2, h3];
+      repo.holdingDeletionLogData = [];
+      repo.syncStore();
+      useCanonicalLedger.setState({ holdings: [h1, h2, h3] } as any);
+
+      const outcome = useCanonicalLedger.getState().commitBatchHoldingDeletion(['hld-1', 'hld-2', 'hld-3']);
+      expect(outcome.holdingIds).toEqual(['hld-1', 'hld-2', 'hld-3']);
+      expect(outcome.batchId.startsWith('hdlb-')).toBe(true);
+      expect(outcome.auditEntryIds).toHaveLength(3);
+      expect(outcome.deletedAt).toBeTruthy();
+
+      if (outcome.persisted) {
+        await outcome.persisted;
+      }
+
+      // ALL selected Holdings removed.
+      expect((repository as any).holdingsData).toEqual([]);
+      // ALL audit records written.
+      const log: HoldingDeletionLogEntry[] = (repository as any).holdingDeletionLogData;
+      expect(log).toHaveLength(3);
+      expect(log.map(e => e.holdingId)).toEqual(['hld-1', 'hld-2', 'hld-3']);
+      // Shared batch attribution on every entry; audit fields preserved.
+      for (const e of log) {
+        expect(e.batchId).toBe(outcome.batchId);
+        expect(e.batchScope).toBe('MULTI_SELECT');
+        expect(e.deletedAt).toBe(outcome.deletedAt);
+        expect(e.id.startsWith('hdl-')).toBe(true);
+        expect(e.id).not.toBe(e.holdingId);
+      }
+      expect(log[1].currentValueAtDeletion).toBe(2000);
+      expect(log[2].instrumentName).toBe('Inst Three');
+      // The store's holdings slice reflects the deletion.
+      expect(useCanonicalLedger.getState().holdings).toEqual([]);
+    });
+
+    it('leaves unrelated Holdings untouched and reduces live wealth only by the deleted total', async () => {
+      const repo = repository as any;
+      const h1 = makeClosed({ id: 'hld-1', currentValue: 1000 });
+      const h2 = makeClosed({ id: 'hld-2', currentValue: 2000 });
+      const keep = makeClosed({ id: 'hld-keep', currentValue: 4000 });
+      repo.holdingsData = [h1, h2, keep];
+      repo.holdingDeletionLogData = [];
+      repo.syncStore();
+      useCanonicalLedger.setState({ holdings: [h1, h2, keep] } as any);
+
+      expect(useCanonicalLedger.getState().getNetWorth()).toBe(7000);
+
+      const outcome = useCanonicalLedger.getState().commitBatchHoldingDeletion(['hld-1', 'hld-2']);
+      if (outcome.persisted) {
+        await outcome.persisted;
+      }
+
+      expect((repository as any).holdingsData.map((h: Holding) => h.id)).toEqual(['hld-keep']);
+      // Live wealth drops by exactly the deleted aggregate (D-06-F11 = natural
+      // exclusion: the Holdings simply no longer exist).
+      expect(useCanonicalLedger.getState().getNetWorth()).toBe(4000);
+    });
+
+    it('on persistence failure there is NO partial deletion: all Holdings restored, zero audit entries', async () => {
+      const repo = repository as any;
+      const h1 = makeClosed({ id: 'hld-1', currentValue: 100 });
+      const h2 = makeClosed({ id: 'hld-2', currentValue: 200 });
+      repo.holdingsData = [h1, h2];
+      repo.holdingDeletionLogData = [];
+      repo.syncStore();
+      useCanonicalLedger.setState({ holdings: [h1, h2] } as any);
+
+      IndexedDBStorageService.simulateFailureOnce = true;
+
+      const outcome = useCanonicalLedger.getState().commitBatchHoldingDeletion(['hld-1', 'hld-2']);
+      let rejected = false;
+      if (outcome.persisted) {
+        try {
+          await outcome.persisted;
+        } catch {
+          rejected = true;
+        }
+      } else {
+        rejected = true;
+      }
+      expect(rejected).toBe(true);
+
+      // Atomic rollback: BOTH Holdings restored AND zero partial audit batch.
+      expect((repository as any).holdingsData.map((h: Holding) => h.id)).toEqual(['hld-1', 'hld-2']);
+      expect((repository as any).holdingDeletionLogData).toEqual([]);
+      expect(useCanonicalLedger.getState().holdings.map((h: Holding) => h.id)).toEqual(['hld-1', 'hld-2']);
+    });
+
+    it('rejects a mixed eligible/ineligible batch in full via the store: no memory mutation occurs', () => {
+      const repo = repository as any;
+      const eligible = makeClosed({ id: 'hld-eligible' });
+      const active = makeClosed({ id: 'hld-active', status: 'active' });
+      repo.holdingsData = [eligible, active];
+      repo.holdingDeletionLogData = [];
+      repo.syncStore();
+      useCanonicalLedger.setState({ holdings: [eligible, active] } as any);
+
+      let threw = false;
+      try {
+        useCanonicalLedger.getState().commitBatchHoldingDeletion(['hld-eligible', 'hld-active']);
+      } catch (e: any) {
+        threw = true;
+        expect(e.code).toBe('HOLDING_NOT_CLOSED');
+      }
+      expect(threw).toBe(true);
+      // The eligible Holding was NOT deleted as a side effect.
+      expect((repository as any).holdingsData.map((h: Holding) => h.id)).toEqual(['hld-eligible', 'hld-active']);
+      expect((repository as any).holdingDeletionLogData).toEqual([]);
+      expect(useCanonicalLedger.getState().holdings).toHaveLength(2);
+    });
+
+    it('batch entries coexist with single-deletion entries; records without batch fields remain compatible', async () => {
+      const repo = repository as any;
+      const hSingle = makeClosed({ id: 'hld-single', currentValue: 111 });
+      const hB1 = makeClosed({ id: 'hld-b1', currentValue: 222 });
+      const hB2 = makeClosed({ id: 'hld-b2', currentValue: 333 });
+      repo.holdingsData = [hSingle, hB1, hB2];
+      // A pre-existing audit record serialized WITHOUT the optional batch
+      // fields (as produced by every D-06-1 single deletion and by any
+      // database written before D-06-F1-A).
+      const legacyEntry: HoldingDeletionLogEntry = {
+        id: 'hdl-legacy',
+        holdingId: 'hld-old',
+        broker: 'Zerodha',
+        instrumentName: 'Legacy Instrument',
+        currentValueAtDeletion: 999,
+        sourceFile: 'old.csv',
+        importedAt: '2026-01-01T00:00:00.000Z',
+        deletedAt: '2026-01-02T00:00:00.000Z',
+      };
+      repo.holdingDeletionLogData = [legacyEntry];
+      repo.syncStore();
+      useCanonicalLedger.setState({ holdings: [hSingle, hB1, hB2], holdingDeletionLog: [legacyEntry] } as any);
+
+      // Existing single deletion remains fully functional.
+      const single = useCanonicalLedger.getState().commitHoldingDeletion('hld-single');
+      if (single.persisted) await single.persisted;
+
+      // Batch deletion of the remaining two.
+      const batch = useCanonicalLedger.getState().commitBatchHoldingDeletion(['hld-b1', 'hld-b2']);
+      if (batch.persisted) await batch.persisted;
+
+      const log: HoldingDeletionLogEntry[] = (repository as any).holdingDeletionLogData;
+      expect(log).toHaveLength(4);
+      // Legacy record: readable, unchanged, no batch fields.
+      expect(log[0]).toEqual(legacyEntry);
+      expect(log[0].batchId).toBeUndefined();
+      expect(log[0].batchScope).toBeUndefined();
+      // Single-deletion record: no batch attribution (D-06-1 unchanged).
+      expect(log[1].holdingId).toBe('hld-single');
+      expect(log[1].batchId).toBeUndefined();
+      expect(log[1].batchScope).toBeUndefined();
+      // Batch records: shared attribution on every entry of the batch.
+      expect(log[2].holdingId).toBe('hld-b1');
+      expect(log[2].batchId).toBe(batch.batchId);
+      expect(log[2].batchScope).toBe('MULTI_SELECT');
+      expect(log[3].holdingId).toBe('hld-b2');
+      expect(log[3].batchId).toBe(batch.batchId);
+      expect(log[3].batchScope).toBe('MULTI_SELECT');
+    });
+  });
 });

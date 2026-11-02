@@ -29,15 +29,16 @@ export class MemoryHoldingDeletionLogRepository implements HoldingDeletionLogRep
   constructor(private readonly parent: { holdingDeletionLogData: HoldingDeletionLogEntry[]; syncStore: () => void }) {}
 
   async findAll(): Promise<HoldingDeletionLogEntry[]> {
-    return [...this.parent.holdingDeletionLogData];
+    return this.findAllSync();
   }
 
   findAllSync(): HoldingDeletionLogEntry[] {
-    return [...this.parent.holdingDeletionLogData];
+    return this.parent.holdingDeletionLogData.map(e => ({ ...e }));
   }
 
   findByIdSync(id: string): HoldingDeletionLogEntry | null {
-    return this.parent.holdingDeletionLogData.find(e => e.id === id) ?? null;
+    const found = this.parent.holdingDeletionLogData.find(e => e.id === id);
+    return found ? { ...found } : null;
   }
 
   /**

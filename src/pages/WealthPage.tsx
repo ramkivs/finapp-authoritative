@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
 import { FinancialMetricService } from '../services/FinancialMetricService';
+import { classifyHolding } from '../services/HoldingAnalyticsClassifier';
 import { CurrencyValue } from '../components/CurrencyValue';
 import { KpiCard } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
@@ -9,6 +10,7 @@ import { AssetsWorkspace } from '../components/wealth/AssetsWorkspace';
 import { LiabilitiesWorkspace } from '../components/wealth/LiabilitiesWorkspace';
 import { NetWorthWorkspace } from '../components/wealth/NetWorthWorkspace';
 import { AllocationWorkspace } from '../components/wealth/AllocationWorkspace';
+import { HoldingsPositionsWorkspace } from './HoldingsPositionsWorkspace';
 import { WealthHealthCard } from '../components/wealth/WealthHealthCard';
 import { WealthInsightsCard } from '../components/wealth/WealthInsightsCard';
 import { AssetConcentrationCard } from '../components/wealth/AssetConcentrationCard';
@@ -28,17 +30,18 @@ import {
 } from 'lucide-react';
 
 export const WealthPage: React.FC = () => {
-  const [subTab, setSubTab] = useState<'assets' | 'liabilities' | 'networth' | 'allocation'>('assets');
-  const { transactions, assets, liabilities, snapshots, holdings } = useCanonicalLedger();
+  const [subTab, setSubTab] = useState<'assets' | 'liabilities' | 'networth' | 'allocation' | 'holdings'>('assets');
+  const { transactions = [], assets = [], liabilities = [], snapshots = [], holdings = [], privacyMasked = false } = useCanonicalLedger();
 
   // Canonical queries & derived metrics (Strictly Read-Only)
-  const nwMetric = FinancialMetricService.getMetric('NET_WORTH', transactions, assets, liabilities, snapshots);
-  const assetsMetric = FinancialMetricService.getMetric('TOTAL_ASSETS', transactions, assets, liabilities, snapshots);
-  const liabsMetric = FinancialMetricService.getMetric('TOTAL_LIABILITIES', transactions, assets, liabilities, snapshots);
-  const cagrMetric = FinancialMetricService.getMetric('NET_WORTH_CAGR', transactions, assets, liabilities, snapshots);
-  const ttmMetric = FinancialMetricService.getMetric('TTM_REALIZED_DIVIDEND', transactions, assets, liabilities, snapshots);
-  const avgMetric = FinancialMetricService.getMetric('MONTHLY_AVERAGE_DIVIDEND', transactions, assets, liabilities, snapshots);
-  const mtdMetric = FinancialMetricService.getMetric('MTD_REALIZED_DIVIDEND', transactions, assets, liabilities, snapshots);
+  const asOfStr = getEffectiveAsOfDate();
+  const nwMetric = FinancialMetricService.getMetric('NET_WORTH', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const assetsMetric = FinancialMetricService.getMetric('TOTAL_ASSETS', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const liabsMetric = FinancialMetricService.getMetric('TOTAL_LIABILITIES', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const cagrMetric = FinancialMetricService.getMetric('NET_WORTH_CAGR', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const ttmMetric = FinancialMetricService.getMetric('TTM_REALIZED_DIVIDEND', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const avgMetric = FinancialMetricService.getMetric('MONTHLY_AVERAGE_DIVIDEND', transactions, assets, liabilities, snapshots, asOfStr, holdings);
+  const mtdMetric = FinancialMetricService.getMetric('MTD_REALIZED_DIVIDEND', transactions, assets, liabilities, snapshots, asOfStr, holdings);
   const histogramSeries = FinancialMetricService.getSeries('MONTHLY_DIVIDEND_HISTOGRAM', transactions);
 
   const buckets = histogramSeries?.points || [];
@@ -56,75 +59,80 @@ export const WealthPage: React.FC = () => {
   const asOfDate = new Date(getEffectiveAsOfDate());
   const currentMonthLabel = asOfDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
-  // Sparkline data
+  // Sparkline data (only rendered when >= 2 canonical snapshots exist)
   const sparklineNetWorth = snapshots.length >= 2
     ? snapshots.map(s => s.netWorth)
-    : [currentNetWorth, currentNetWorth];
+    : undefined;
+  const totalPositionsCount = assets.length + holdings.length;
 
   // Solvency ratio (Net Worth / Total Assets) or Asset Ratio
   const solvencyRatioPct = totAssets > 0 ? Math.round((currentNetWorth / totAssets) * 100) : 0;
   const assetRatioPct = (totAssets + totLiabs) > 0 ? Math.round((totAssets / (totAssets + totLiabs)) * 100) : 0;
 
-  // Categorized Assets Breakdown for Tier 3
+  // Categorized Assets Breakdown for Tier 3 (includes both canonical Assets and imported Holdings)
   const categorizedAssets = React.useMemo(() => {
-    if (assets.length === 0) return [];
+    if (assets.length === 0 && holdings.length === 0) return [];
     const map: Record<string, { name: string; amount: number; icon: any; color: string }> = {};
+
+    const resolveCategoryVisuals = (cat: string) => {
+      if (cat === 'Equity' || cat === 'Alternatives' || cat === 'Crypto' || cat === 'Investments & Brokerage') {
+        return { icon: TrendingUp, color: '#4F8CFF' };
+      }
+      if (cat === 'Cash & Savings' || cat === 'Cash & Bank') {
+        return { icon: Wallet, color: '#06B6D4' };
+      }
+      if (cat === 'Real Estate' || cat === 'Real Estate Property') {
+        return { icon: Home, color: '#8B5CF6' };
+      }
+      if (cat === 'Commodities' || cat === 'Gold & Commodities') {
+        return { icon: Coins, color: '#F59E0B' };
+      }
+      if (cat === 'Debt') {
+        return { icon: Landmark, color: '#23C55E' };
+      }
+      return { icon: Layers, color: '#6E7681' };
+    };
 
     for (const a of assets) {
       let cat = a.type || '';
-      let icon = Landmark;
-      let color = '#4F8CFF';
 
       if (!cat) {
         const lower = a.name.toLowerCase();
         if (lower.includes('brokerage') || lower.includes('zerodha') || lower.includes('groww') || lower.includes('upstox')) {
           cat = 'Investments & Brokerage';
-          icon = TrendingUp;
-          color = '#4F8CFF';
         } else if (lower.includes('bank') || lower.includes('savings') || lower.includes('checking')) {
           cat = 'Cash & Bank';
-          icon = Wallet;
-          color = '#06B6D4';
         } else if (lower.includes('real estate') || lower.includes('property') || lower.includes('land')) {
           cat = 'Real Estate Property';
-          icon = Home;
-          color = '#8B5CF6';
         } else if (lower.includes('gold') || lower.includes('silver') || lower.includes('commodity')) {
           cat = 'Gold & Commodities';
-          icon = Coins;
-          color = '#F59E0B';
         } else {
           cat = a.name || 'Other Assets';
-          icon = Layers;
-          color = '#6E7681';
-        }
-      } else {
-        if (cat === 'Equity' || cat === 'Alternatives' || cat === 'Crypto') {
-          icon = TrendingUp;
-          color = '#4F8CFF';
-        } else if (cat === 'Cash & Savings') {
-          icon = Wallet;
-          color = '#06B6D4';
-        } else if (cat === 'Real Estate') {
-          icon = Home;
-          color = '#8B5CF6';
-        } else if (cat === 'Commodities') {
-          icon = Coins;
-          color = '#F59E0B';
         }
       }
 
+      const { icon, color } = resolveCategoryVisuals(cat);
       if (!map[cat]) {
         map[cat] = { name: cat, amount: 0, icon, color };
       }
       map[cat].amount += a.amount;
     }
 
+    for (const h of holdings) {
+      const cv = Number(h.currentValue) || 0;
+      const cat = classifyHolding(h);
+      const { icon, color } = resolveCategoryVisuals(cat);
+      if (!map[cat]) {
+        map[cat] = { name: cat, amount: 0, icon, color };
+      }
+      map[cat].amount += cv;
+    }
+
     return Object.values(map).map(item => ({
       ...item,
       pct: totAssets > 0 ? Math.round((item.amount / totAssets) * 1000) / 10 : 0
     })).sort((a, b) => b.amount - a.amount);
-  }, [assets, totAssets]);
+  }, [assets, holdings, totAssets]);
 
   // Categorized Liabilities Breakdown for Tier 3
   const categorizedLiabilities = React.useMemo(() => {
@@ -242,17 +250,17 @@ export const WealthPage: React.FC = () => {
             </defs>
             <line x1={paddingX} y1={paddingY} x2={width - paddingX} y2={paddingY} stroke="#21262D" strokeDasharray="3 3" />
             <text x={paddingX - 6} y={paddingY + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-              ₹{(maxVal / 100000).toFixed(0)}L
+              {privacyMasked ? '•••' : `₹${(maxVal / 100000).toFixed(0)}L`}
             </text>
 
             <line x1={paddingX} y1={height / 2} x2={width - paddingX} y2={height / 2} stroke="#21262D" strokeDasharray="3 3" />
             <text x={paddingX - 6} y={height / 2 + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-              ₹{(((maxVal + minVal) / 2) / 100000).toFixed(0)}L
+              {privacyMasked ? '•••' : `₹${(((maxVal + minVal) / 2) / 100000).toFixed(0)}L`}
             </text>
 
             <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="#21262D" />
             <text x={paddingX - 6} y={height - paddingY + 3} textAnchor="end" fill="#6E7681" fontSize="9" fontWeight="600">
-              ₹{(minVal / 100000).toFixed(0)}L
+              {privacyMasked ? '•••' : `₹${(minVal / 100000).toFixed(0)}L`}
             </text>
 
             <path d={areaD} fill="url(#wealthNwGrad)" />
@@ -266,7 +274,7 @@ export const WealthPage: React.FC = () => {
               <g transform={`translate(${Math.min(width - 85, Math.max(80, lastPt.x))}, ${Math.max(22, lastPt.y - 12)})`}>
                 <rect x="-44" y="-18" width="88" height="20" rx="6" fill="#1F2937" stroke="#4F8CFF" strokeWidth="1" />
                 <text x="0" y="-4" textAnchor="middle" fill="#F0F6FC" fontSize="10" fontWeight="700">
-                  ₹{Number(nwMetric.value).toLocaleString('en-IN')}
+                  {privacyMasked ? '₹ ••••••' : `₹${Number(nwMetric.value).toLocaleString('en-IN')}`}
                 </text>
               </g>
             )}
@@ -370,8 +378,12 @@ export const WealthPage: React.FC = () => {
         <KpiCard
           label="Net Worth"
           value={<CurrencyValue value={currentNetWorth} />}
-          change={cagrMetric.status === 'RECONCILED' ? `+${cagrMetric.value}% vs last month` : undefined}
-          changeType="positive"
+          change={
+            cagrMetric.status === 'RECONCILED'
+              ? `${Number(cagrMetric.value) >= 0 ? '+' : ''}${cagrMetric.value}% annualized`
+              : undefined
+          }
+          changeType={Number(cagrMetric.value) >= 0 ? 'positive' : 'negative'}
           status={cagrMetric.status === 'NOT_CONFIGURED' ? undefined : cagrMetric.status}
           sparklineData={sparklineNetWorth}
           accentColor="emerald"
@@ -386,10 +398,16 @@ export const WealthPage: React.FC = () => {
         <KpiCard
           label="Total Assets"
           value={<CurrencyValue value={totAssets} />}
-          change={assets.length > 0 ? `${assets.length} Assets Registered` : undefined}
+          change={
+            holdings.length > 0
+              ? `${assets.length} Assets · ${holdings.length} Holdings`
+              : assets.length > 0
+              ? `${assets.length} Assets Registered`
+              : undefined
+          }
           changeType="positive"
           accentColor="emerald"
-          subtitle={`${assets.length} Active Asset Items`}
+          subtitle={`${totalPositionsCount} Active Asset Items`}
           tooltip="Sum total valuation across all registered asset holdings"
         />
 
@@ -405,9 +423,13 @@ export const WealthPage: React.FC = () => {
 
         <KpiCard
           label="Net Worth Growth"
-          value={cagrMetric.status === 'NOT_CONFIGURED' ? 'Not Configured' : `+${cagrMetric.value}%`}
-          change={cagrMetric.status === 'RECONCILED' ? '+12.45%' : undefined}
-          changeType="positive"
+          value={
+            cagrMetric.status === 'NOT_CONFIGURED'
+              ? 'Not Configured'
+              : `${Number(cagrMetric.value) >= 0 ? '+' : ''}${cagrMetric.value}%`
+          }
+          change={cagrMetric.status === 'RECONCILED' ? `${snapshots.length} Snapshot Anchors` : undefined}
+          changeType={Number(cagrMetric.value) >= 0 ? 'positive' : 'negative'}
           status={cagrMetric.status === 'NOT_CONFIGURED' ? undefined : cagrMetric.status}
           accentColor="cyan"
           subtitle={cagrMetric.status === 'NOT_CONFIGURED' ? 'Snapshot anchors required' : 'Annualized Snapshot CAGR'}
@@ -549,7 +571,8 @@ export const WealthPage: React.FC = () => {
                 { id: 'assets', label: `Assets (${assets.length})`, icon: Landmark },
                 { id: 'liabilities', label: `Liabilities (${liabilities.length})`, icon: CreditCard },
                 { id: 'networth', label: `Net Worth (${snapshots.length})`, icon: LineChart },
-                { id: 'allocation', label: 'Allocation', icon: PieChart }
+                { id: 'allocation', label: 'Allocation', icon: PieChart },
+                { id: 'holdings', label: `Holdings (${holdings.length})`, icon: Layers }
               ] as const
             ).map((tab) => {
               const Icon = tab.icon;
@@ -586,6 +609,7 @@ export const WealthPage: React.FC = () => {
             />
           )}
           {subTab === 'allocation' && <AllocationWorkspace assets={assets} holdings={holdings} />}
+          {subTab === 'holdings' && <HoldingsPositionsWorkspace holdings={holdings} />}
         </div>
       </div>
 
@@ -606,7 +630,7 @@ export const WealthPage: React.FC = () => {
         <WealthHealthCard assets={assets} liabilities={liabilities} snapshots={snapshots} holdings={holdings} />
 
         {/* Action Queue & Insights */}
-        <WealthInsightsCard assets={assets} liabilities={liabilities} snapshots={snapshots} />
+        <WealthInsightsCard assets={assets} liabilities={liabilities} snapshots={snapshots} holdings={holdings} />
 
         {/* Portfolio Concentration Analytics (if assets or holdings exist) */}
         {(assets.length > 0 || holdings.length > 0) && <AssetConcentrationCard assets={assets} holdings={holdings} />}
@@ -679,10 +703,10 @@ export const WealthPage: React.FC = () => {
               return (
                 <div key={b.month} className="flex-1 flex flex-col items-center h-full justify-end group relative">
                   <div className="absolute -top-10 opacity-0 group-hover:opacity-100 transition-opacity bg-[#1F2937] text-[10px] text-white px-2 py-0.5 rounded border border-[#30363D] pointer-events-none whitespace-nowrap z-20">
-                    ₹{b.amount.toLocaleString('en-IN')}
+                    {privacyMasked ? '₹ ••••••' : `₹${b.amount.toLocaleString('en-IN')}`}
                   </div>
                   <div
-                    title={`${b.month}: ₹${b.amount.toLocaleString()} (${b.payoutCount} payouts)`}
+                    title={privacyMasked ? `${b.month}: ₹ •••••• (${b.payoutCount} payouts)` : `${b.month}: ₹${b.amount.toLocaleString('en-IN')} (${b.payoutCount} payouts)`}
                     style={{ height: `${Math.max(heightPct, 6)}%` }}
                     className={`w-full rounded-t transition-all ${
                       b.amount === maxAmt

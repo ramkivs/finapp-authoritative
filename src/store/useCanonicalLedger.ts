@@ -6,6 +6,7 @@ import {
   Liability,
   Holding,
   HoldingDeletionLogEntry,
+  HoldingDeletionBatchScope,
   NetWorthSnapshot,
   Account,
   ControlledAccountType,
@@ -18,7 +19,9 @@ import {
   BatchRollbackResultShape,
   BatchRestoreResultShape,
   AmendmentRequestShape,
-  AmendmentResultShape
+  AmendmentResultShape,
+  LocalBackupExportShape,
+  LocalBackupRestoreShape
 } from '../domain/types';
 import { formatDisplayDate, DateRangeService, getEffectiveAsOfDate } from '../services/DateRangeService';
 import { TransactionIdentityService } from '../services/TransactionIdentityService';
@@ -27,8 +30,14 @@ import { TransactionFactory } from '../domain/TransactionFactory';
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { AccountAssetLinkService, LinkResult } from '../services/AccountAssetLinkService';
 import { TransactionSignService } from '../services/TransactionSignService';
-import { BrokerImportService } from '../services/BrokerImportService';
+import {
+  BrokerImportService,
+  BrokerImportCommitContext,
+  BrokerImportPreview,
+} from '../services/BrokerImportService';
 import { HoldingDeletionService } from '../services/HoldingDeletionService';
+import { HoldingLifecycleService, HoldingLifecycleError } from '../services/HoldingLifecycleService';
+import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
 import { AssetLifecycleService } from '../services/AssetLifecycleService';
 import { repository } from '../repositories';
 
@@ -110,6 +119,23 @@ interface LedgerState {
 
   initialize: () => Promise<void>;
   /**
+   * D-06-F1-A recovery correction — the explicit, user-invoked storage
+   * recovery offered after a Confirm was REFUSED by the failed-load guard.
+   *
+   * Semantics, deliberately thin:
+   *  - it runs the ONE legitimate recovery operation (`repository.initialize()`
+   *    — the same load startup performs, which re-reads every store and
+   *    re-syncs memory). No new load path, no shortcut;
+   *  - success → `IndexedDBStorageService.loadFailed` clears inside
+   *    `loadAll()` and `initStatus` becomes 'ready' only after the load
+   *    actually resolved — success is never fabricated;
+   *  - failure → `initStatus`/`initError` carry the real error, the write
+   *    refusal REMAINS armed, and nothing in the ledger is touched;
+   *  - it never re-attempts the failed mutation itself — retrying "Confirm
+   *    import" stays an explicit user action (D-06 review → confirm).
+   */
+  recoverStorage: () => Promise<{ recovered: boolean; error: string | null }>;
+  /**
    * WP-FB-DATA-10 — observable initialization outcome.
    *
    * The startup load is asynchronous and can fail. Without this the UI cannot
@@ -127,6 +153,8 @@ interface LedgerState {
   initError: string | null;
   loadDemoData: () => Promise<void>;
   clearLocalData: () => Promise<void>;
+  exportLocalBackup: (options?: { createdAt?: string }) => Promise<LocalBackupExportShape>;
+  restoreLocalBackup: (input: string | unknown) => Promise<LocalBackupRestoreShape>;
 
   addIncome: (title: string, amount: number, account: string, category: string, notes?: string) => Promise<void>;
   addExpense: (title: string, amount: number, account: string, category: string, notes?: string) => Promise<void>;
@@ -183,7 +211,10 @@ interface LedgerState {
    * The returned `ImportCommitOutcome`-shaped result is synchronous (counts)
    * with a `persisted` promise for the caller to await.
    */
-  commitImportedHoldings: (parsed: Holding[]) => ImportCommitOutcome;
+  commitImportedHoldings: (
+    parsed: Holding[] | BrokerImportCommitContext | BrokerImportPreview,
+    context?: Omit<BrokerImportCommitContext, 'holdings'>,
+  ) => ImportCommitOutcome;
 
   /**
    * FINBOOM-CR (CR-STANDARD-IMPORT) — Requirement #1 Standard Import commit.
@@ -251,6 +282,72 @@ interface LedgerState {
    * D-06 is irreversible. There is no `undoHoldingDeletion` action.
    */
   commitHoldingDeletion: (id: string) => HoldingDeletionOutcome;
+
+  /**
+   * D-06-F1-A — user-selected multi-select BATCH deletion of `closed_absent`
+   * Holdings.
+   *
+   * Composes the removal of ALL selected Holdings and the creation of ALL
+   * corresponding audit records inside ONE `MemoryRepository.write` boundary
+   * via `HoldingDeletionService.planDeleteMany` +
+   * `buildAtomicMutationForBatch`. The whole batch succeeds or the whole
+   * batch rolls back — partial batch deletion is impossible.
+   *
+   * Pre-conditions enforced by `HoldingDeletionService.planDeleteMany`
+   * (the ENTIRE batch is rejected on ANY failure, before any mutation):
+   *   - `ids` is a non-empty array of non-empty strings (else `INVALID_ID`).
+   *   - No id appears twice (else `DUPLICATE_ID`).
+   *   - Every Holding exists (else `HOLDING_NOT_FOUND`).
+   *   - Every Holding's `status` is `closed_absent` (else `HOLDING_NOT_CLOSED`).
+   *
+   * On any pre-validation failure the call throws `HoldingDeletionError`
+   * synchronously; no memory or IndexedDB mutation has occurred.
+   *
+   * On persistence failure the existing `MemoryRepository.write` revertDelta
+   * mechanism restores both `holdingsData` and `holdingDeletionLogData` from
+   * the captured snapshot; `persisted` REJECTS with the failure.
+   *
+   * Every audit entry of the batch carries the shared `batchId` and the
+   * `batchScope` tag (D-06-F1-A batch attribution; default 'MULTI_SELECT').
+   * Optional fields on `HoldingDeletionLogEntry` keep single-deletion records
+   * and pre-existing serialized records fully compatible: DB_VERSION stays 7,
+   * no migration, no new object store.
+   *
+   * D-06-F1-B/C widen ONLY the audit attribution via the additive `scope`
+   * parameter ('BROKER_WIDE' / 'ACCOUNT_WIDE') used by the persistent
+   * closed-positions cleanup surface; D-06-F1-D adds 'GLOBAL'
+   * (whole-ledger, F6 typed-confirmation gated at the UI layer —
+   * FINBOOM-D-06-F6-F1D-IMPLEMENTATION-AUTHORITY-REPORT.md). The mutation
+   * path, validation, and whole-batch atomicity remain the single ratified
+   * engine for every scope. No Asset effect (F10-C), no transaction
+   * mutation, no snapshot recomputation, no undo.
+   */
+  commitBatchHoldingDeletion: (
+    ids: readonly string[],
+    /** D-06-F1-B/C — additive audit-scope tag; default preserves F1-A. */
+    scope?: HoldingDeletionBatchScope,
+  ) => HoldingBatchDeletionOutcome;
+
+  /**
+   * D-06-F2-A — user-initiated close pathway. Transitions the given ACTIVE
+   * Holdings to `closed_absent` through the UNMODIFIED promoted
+   * `HoldingLifecycleService.planClose` planner, in ONE atomic
+   * `repository.write`. Whole-batch validation before any mutation (empty
+   * ids reject as INVALID_ID; unknown/duplicate/already-closed/drifted ids
+   * reject the ENTIRE batch via planClose's NOT_FOUND / ALREADY_CLOSED — no
+   * partial close). Creates NO deletion-audit record (D-06-F2 product
+   * decision C: no close audit, no reason field, no new persisted state);
+   * the deletion engine remains the sole audited destructive path and still
+   * accepts ONLY `closed_absent` rows — closed by import or by this action.
+   * No reopen action exists here by design: a later broker import that
+   * reports the identity reactivates it through the ratified import path;
+   * there is deliberately no tombstone/suppression state.
+   */
+  commitUserCloses: (ids: readonly string[]) => {
+    closedIds: string[];
+    closedAt: string;
+    persisted: Promise<void>;
+  };
 
   // Account & Budget Actions (WP-18)
   /**
@@ -428,6 +525,28 @@ export interface HoldingDeletionOutcome {
   persisted?: Promise<void>;
 }
 
+/**
+ * D-06-F1-A — user-selected multi-select BATCH deletion outcome.
+ *
+ * Same admission/persistence split as `HoldingDeletionOutcome`: the
+ * synchronous fields are computed by `HoldingDeletionService.planDeleteMany`
+ * BEFORE anything is written; `persisted` answers whether the single atomic
+ * write reached storage. Pre-validation failures throw synchronously and
+ * produce no outcome at all — there is no partial batch result.
+ */
+export interface HoldingBatchDeletionOutcome {
+  /** The deleted Holding ids, in selection order. */
+  holdingIds: string[];
+  /** Shared attribution id of the batch's audit entries. Prefix `hdlb-`. */
+  batchId: string;
+  /** The generated audit entry ids (one per deleted Holding). */
+  auditEntryIds: string[];
+  /** ISO 8601 timestamp of the deletion event. */
+  deletedAt: string;
+  /** Resolves when the whole batch is stored; rejects with the failure. */
+  persisted?: Promise<void>;
+}
+
 export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   transactions: [],
   assets: [],
@@ -442,7 +561,15 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   profile: null,
   initStatus: 'loading',
   initError: null,
-  privacyMasked: typeof window !== 'undefined' ? localStorage.getItem('finapp.privacy.masked') === 'true' : false,
+  privacyMasked: (() => {
+    try {
+      return typeof window !== 'undefined' && window.localStorage
+        ? window.localStorage.getItem('finapp.privacy.masked') === 'true'
+        : false;
+    } catch {
+      return false;
+    }
+  })(),
   filterType: 'All',
   dateRange: 'This Month',
   searchQuery: '',
@@ -460,7 +587,13 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
   setCustomRange: (customStart, customEnd) => set({ customStart, customEnd, dateRange: 'Custom' }),
   togglePrivacy: () => {
     const next = !get().privacyMasked;
-    localStorage.setItem('finapp.privacy.masked', String(next));
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('finapp.privacy.masked', String(next));
+      }
+    } catch {
+      /* ignore localStorage quota/privacy-mode errors */
+    }
     set({ privacyMasked: next });
   },
 
@@ -498,12 +631,34 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     }
   },
 
+  recoverStorage: async () => {
+    // D-06-F1-A recovery correction. Runs the SAME legitimate load as
+    // `initialize` and reports the outcome without rethrowing, so the UI can
+    // render 'recovered' vs 'still refused' from the returned value alone.
+    // The write-refusal latch is cleared inside loadAll() strictly on a
+    // successful read — this function neither clears nor bypasses it.
+    try {
+      await get().initialize();
+      return { recovered: !IndexedDBStorageService.loadFailed, error: null };
+    } catch (e) {
+      return { recovered: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  },
+
   loadDemoData: async () => {
     await repository.loadDemoData();
   },
 
   clearLocalData: async () => {
     await repository.clearLocalData();
+  },
+
+  exportLocalBackup: async (options) => {
+    return repository.exportBackup(options);
+  },
+
+  restoreLocalBackup: async (input) => {
+    return repository.restoreFromBackup(input);
   },
 
   addIncome: (title, amount, account, category, notes) => {
@@ -601,27 +756,24 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     const rejectedTransferReasons: string[] = [];
     const rejectedDuplicateIdReasons: string[] = [];
 
-    // WP-FB-DATA-06a: identity resolved through the single authority
-    // (TransactionIdentityService), which is now also what the import pipeline
-    // uses. Two dedup sites, one definition of "same row".
-    const existingByFingerprint = new Map<string, Transaction>();
-    for (const tx of transactions) {
-      const fp = TransactionIdentityService.fingerprintOf(tx);
-      if (!existingByFingerprint.has(fp)) existingByFingerprint.set(fp, tx);
-    }
+    // WP-FB-DATA-06a + DEF-14 / DEF-15: identity resolved through the single
+    // authority (TransactionIdentityService), excluding rolled-back / superseded
+    // rows and honouring distinct bank reference numbers / closing balances.
+    const existingPool = TransactionIdentityService.buildLiveDuplicatePool(transactions);
+    const batchPool = new Map<string, Transaction[]>();
 
     const candidateRows: Transaction[] = [];
 
     if (validRows && validRows.length > 0) {
       for (const row of validRows) {
-        // Fingerprint is computed from the UNCHANGED legacy fields
-        // (account|date|amount|narration). Introducing accountId does not and
-        // must not alter any fingerprint (WP-FB-DATA-04 §14), and neither does
-        // introducing origin/recordedAt (WP-FB-DATA-06a).
-        const fp = TransactionIdentityService.fingerprintOf(row);
-        const collision = existingByFingerprint.get(fp);
+        const collision =
+          TransactionIdentityService.consumeDuplicateFromPool(row, existingPool) ||
+          TransactionIdentityService.consumeDuplicateFromPool(row, batchPool);
         if (collision) {
           duplicates++;
+          if (candidateRows.some(c => c.id === collision.id)) {
+            TransactionIdentityService.addToDuplicatePool(collision, batchPool);
+          }
           // L-02 disclosure: the row is still dropped, but a drop that discards a
           // direction/type correction is now counted and reported, not silent.
           if (TransactionIdentityService.isDivergentDuplicate(row, collision)) {
@@ -629,7 +781,7 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
           }
           continue;
         }
-        existingByFingerprint.set(fp, row);
+        TransactionIdentityService.addToDuplicatePool(row, batchPool);
 
         // WP-FB-DATA-04: resolve the adapter's bank label to a registered
         // account. No deterministic match => explicitly unmapped (null), never
@@ -754,16 +906,40 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
    *     handles in-memory and IndexedDB rollback; the rejection is surfaced
    *     to the caller for UI display).
    */
-  commitImportedHoldings: (parsed) => {
+  commitImportedHoldings: (parsed, context) => {
     const existing = get().holdings;
-    const parsedOutput = {
-      broker: parsed.length > 0 ? parsed[0].broker : 'Unknown',
-      account: parsed.length > 0 ? parsed[0].account : undefined,
-      holdings: parsed,
-      sourceFile: parsed.length > 0 ? parsed[0].sourceFile : '',
-      importedAt: parsed.length > 0 ? parsed[0].importedAt : new Date().toISOString(),
-      issues: [],
-    };
+    const parsedOutput = Array.isArray(parsed)
+      ? {
+          broker: context?.broker ?? (parsed.length > 0 ? parsed[0].broker : 'Unknown'),
+          account: context ? context.account : (parsed.length > 0 ? parsed[0].account : undefined),
+          productScope:
+            context?.productScope ?? (parsed.length > 0 ? parsed[0].productScope : undefined),
+          holdings: parsed,
+          sourceFile: context?.sourceFile ?? (parsed.length > 0 ? parsed[0].sourceFile : ''),
+          importedAt:
+            context?.importedAt ??
+            (parsed.length > 0 ? parsed[0].importedAt : new Date().toISOString()),
+          issues: [],
+        }
+      : 'entries' in parsed
+        ? {
+            broker: parsed.broker,
+            account: parsed.account,
+            productScope: parsed.productScope,
+            holdings: parsed.entries.map((e) => e.candidate),
+            sourceFile: parsed.sourceFile,
+            importedAt: parsed.importedAt,
+            issues: [],
+          }
+        : {
+            broker: parsed.broker,
+            account: parsed.account,
+            productScope: parsed.productScope,
+            holdings: parsed.holdings,
+            sourceFile: parsed.sourceFile,
+            importedAt: parsed.importedAt,
+            issues: [],
+          };
     const preview = BrokerImportService.reconcile(parsedOutput, existing);
 
     // The decision is made NOW, against the current state. The reconcile
@@ -846,7 +1022,11 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
           // MemoryAssetRepository.add implementation at
           // src/services/IndexedDBStorageService.ts:359-366.
           (repository as any).assetsData =
-            AssetLifecycleService.planCreate(asset, (repository as any).assetsData).next;
+            AssetLifecycleService.planCreate(
+              asset,
+              (repository as any).assetsData,
+              (repository as any).holdingsData
+            ).next;
         }
       });
       // The caller awaits `persisted`; a rejection here is the single
@@ -917,6 +1097,81 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
     );
     persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
     return { holdingId: id, auditEntryId, deletedAt: asOf, persisted };
+  },
+
+  /**
+   * D-06-F1-A — user-selected multi-select BATCH deletion of `closed_absent`
+   * Holdings. See the interface doc for the full contract.
+   *
+   * Flow (identical shape to `commitHoldingDeletion`, lifted to the batch):
+   *
+   *   complete validation (planDeleteMany, pure, synchronous throw on ANY
+   *   failure) → complete mutation plan → ONE MemoryRepository.write →
+   *   single atomic persistence boundary.
+   *
+   * D-06-F1-A is irreversible. There is no `undoBatchHoldingDeletion`
+   * action and no automatic deletion path: only an explicit user selection
+   * can reach this action.
+   */
+  commitBatchHoldingDeletion: (ids, scope) => {
+    const { holdings, holdingDeletionLog } = get();
+    const asOf = new Date().toISOString();
+    // planDeleteMany is pure and synchronous; it throws HoldingDeletionError
+    // (INVALID_ID / DUPLICATE_ID / HOLDING_NOT_FOUND / HOLDING_NOT_CLOSED)
+    // when ANY selected item is invalid — rejecting the ENTIRE batch before
+    // any mutation. On success, `plan` is the complete pre-computed next
+    // state for every selected Holding plus every audit entry.
+    const plan = HoldingDeletionService.planDeleteMany(ids, asOf, holdings, holdingDeletionLog, scope);
+    const batchId = plan.batchId;
+    const auditEntryIds = plan.auditEntries.map(e => e.id);
+    const holdingIds = plan.targets.map(t => t.id);
+    // Same wiring as commitHoldingDeletion: attach the live repository to
+    // the plan, then pass the atomic closure to MemoryRepository.write,
+    // which provides captureLedger, revertDelta, and the IndexedDB
+    // readwrite transaction for the single persistence boundary.
+    (plan as any).__memoryRepo = repository as any;
+    const persisted = (repository as any).write(
+      HoldingDeletionService.buildAtomicMutationForBatch(plan),
+    );
+    persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
+    return { holdingIds, batchId, auditEntryIds, deletedAt: asOf, persisted };
+  },
+
+  commitUserCloses: (ids) => {
+    const { holdings } = get();
+    if (ids.length === 0) {
+      throw new HoldingLifecycleError(
+        'INVALID_ID',
+        'commitUserCloses requires at least one Holding id; there is no whole-ledger or no-op path.',
+      );
+    }
+    const asOf = new Date().toISOString();
+    // Fold through the UNMODIFIED promoted planner; it throws synchronously
+    // on the first invalid id (MISSING_ID / NOT_FOUND / ALREADY_CLOSED) —
+    // before any mutation — so the ENTIRE batch is rejected atomically. A
+    // duplicate id throws on the second pass (already closed in `working`);
+    // a row that drifted out of `active` between review and confirm throws
+    // too — no stale row can be silently closed, and no partial close
+    // exists. This is the same validation-then-single-write architecture as
+    // commitBatchHoldingDeletion, for a NON-destructive status transition.
+    let working = [...holdings];
+    for (const id of ids) {
+      working = HoldingLifecycleService.planClose(id, working, asOf).next;
+    }
+    const memoryRepo = repository as unknown as {
+      holdingsData: Holding[];
+      syncStore: () => void;
+    };
+    // Single atomic write via the promoted repository boundary; persistence
+    // failure reverts through the ratified captureLedger/revertDelta
+    // machinery, and the `persisted` promise (attached to the store state by
+    // syncStore's caller contract) surfaces it honestly to the UI.
+    const persisted = (repository as any).write(() => {
+      memoryRepo.holdingsData = working;
+      memoryRepo.syncStore();
+    });
+    persisted.catch(() => { /* the caller's `persisted` is what surfaces this */ });
+    return { closedIds: [...ids], closedAt: asOf, persisted };
   },
 
   restoreImportBatch: (importBatchId) => {

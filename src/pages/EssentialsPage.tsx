@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { queries } from '../application';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
+import { HoldingWealthBridge } from '../services/HoldingWealthBridge';
 import { KpiCard } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { ProgressBar } from '../components/ui/ProgressBar';
@@ -47,14 +48,15 @@ export const EssentialsPage: React.FC<Props> = ({ initialSubTab, navSeq }) => {
 
 
   const {
-    assets,
-    liabilities,
-    accounts,
-    transactions,
-    budgets,
-    policies,
-    goals,
-    profile
+    assets = [],
+    liabilities = [],
+    holdings = [],
+    accounts = [],
+    transactions = [],
+    budgets = [],
+    policies = [],
+    goals = [],
+    profile = null
   } = useCanonicalLedger();
 
   const emergencyCoverage = queries.getMetric('EMERGENCY_FUND_COVERAGE');
@@ -78,9 +80,9 @@ export const EssentialsPage: React.FC<Props> = ({ initialSubTab, navSeq }) => {
       ? 'Not configured'
       : `${healthScore.score}`;
 
-  // Deterministic Debt to Assets Ratio
+  // Deterministic Debt to Assets Ratio (including imported Holdings per D-04 / DEF-08)
   const totalDebt = liabilities.reduce((s, l) => s + l.amount, 0);
-  const totalAssets = assets.reduce((s, a) => s + a.amount, 0);
+  const totalAssets = HoldingWealthBridge.aggregateAssetsAndHoldings(assets, holdings);
   const isDebtConfigured = totalAssets > 0 || totalDebt > 0;
   const debtRatioPct = totalAssets > 0 ? Math.round((totalDebt / totalAssets) * 100) : (totalDebt > 0 ? 100 : 0);
 
@@ -200,23 +202,36 @@ export const EssentialsPage: React.FC<Props> = ({ initialSubTab, navSeq }) => {
       );
     }
 
-    const metricsList = [
+    const metricsList: Array<{
+      id: string;
+      title: string;
+      subtitle: string;
+      badge: string;
+      badgeColor: string;
+      value: React.ReactNode;
+      icon: any;
+      iconColor: string;
+    }> = [
       {
         id: 'em-1',
         title: 'Emergency Fund',
-        subtitle: '6 months expenses',
-        badge: 'Good',
-        badgeColor: 'bg-green-950/40 text-[#23C55E] border border-green-800/30',
-        value: `₹${emergencyAnalysis.liquidReserves.toLocaleString('en-IN')}`,
+        subtitle: emergencyAnalysis.status === 'RECONCILED' ? `${emergencyAnalysis.runwayMonths.toFixed(1)} months covered` : 'Not configured',
+        badge: emergencyAnalysis.runwayMonths >= 6 ? 'Good' : emergencyAnalysis.runwayMonths >= 3 ? 'Moderate' : 'Low',
+        badgeColor: emergencyAnalysis.runwayMonths >= 6
+          ? 'bg-green-950/40 text-[#23C55E] border border-green-800/30'
+          : 'bg-amber-950/40 text-[#F59E0B] border border-amber-800/30',
+        value: emergencyAnalysis.status === 'RECONCILED' ? <CurrencyValue value={emergencyAnalysis.liquidReserves} /> : 'Not configured',
         icon: Shield,
         iconColor: '#23C55E'
       },
       {
         id: 'em-2',
         title: 'Debt to Asset Ratio',
-        subtitle: '20% of assets',
-        badge: 'Excellent',
-        badgeColor: 'bg-green-950/40 text-[#23C55E] border border-green-800/30',
+        subtitle: `${debtRatioPct}% of assets`,
+        badge: debtRatioPct <= 20 ? 'Excellent' : debtRatioPct <= 50 ? 'Moderate' : 'High',
+        badgeColor: debtRatioPct <= 20
+          ? 'bg-green-950/40 text-[#23C55E] border border-green-800/30'
+          : 'bg-amber-950/40 text-[#F59E0B] border border-amber-800/30',
         value: `${debtRatioPct}%`,
         icon: Percent,
         iconColor: '#06B6D4'
@@ -244,10 +259,10 @@ export const EssentialsPage: React.FC<Props> = ({ initialSubTab, navSeq }) => {
       {
         id: 'em-5',
         title: 'Insurance Coverage',
-        subtitle: 'Adequate',
-        badge: 'Adequate',
+        subtitle: insuranceTotal.status === 'RECONCILED' ? 'Adequate' : 'No active policies',
+        badge: insuranceTotal.status === 'RECONCILED' ? 'Adequate' : 'Not configured',
         badgeColor: 'bg-amber-950/40 text-[#F59E0B] border border-amber-800/30',
-        value: insuranceTotal.status === 'RECONCILED' ? `₹${Number(insuranceTotal.value).toLocaleString('en-IN')}` : '₹1.5 Cr',
+        value: insuranceTotal.status === 'RECONCILED' ? <CurrencyValue value={Number(insuranceTotal.value)} /> : 'Not configured',
         icon: Umbrella,
         iconColor: '#8B5CF6'
       }
@@ -318,7 +333,7 @@ export const EssentialsPage: React.FC<Props> = ({ initialSubTab, navSeq }) => {
         <KpiCard
           label="Credit Score"
           value={healthScore.status === 'NOT_CONFIGURED' ? 'Not configured' : `${healthScore.score}`}
-          change={healthScore.status !== 'NOT_CONFIGURED' ? '+20 pts vs last month' : undefined}
+          change={undefined}
           changeType={healthScore.score >= 70 ? 'positive' : healthScore.score >= 40 ? 'neutral' : 'negative'}
           status={healthScore.status === 'NOT_CONFIGURED' ? undefined : (healthScore.status === 'HEALTHY' ? 'Good' : healthScore.status === 'MODERATE' ? 'Moderate' : 'Needs Attention')}
           accentColor="emerald"
@@ -328,7 +343,7 @@ export const EssentialsPage: React.FC<Props> = ({ initialSubTab, navSeq }) => {
 
         <KpiCard
           label="Insurance Coverage"
-          value={insuranceTotal.status === 'NOT_CONFIGURED' ? 'Not configured' : `₹${Number(insuranceTotal.value).toLocaleString('en-IN')}`}
+          value={insuranceTotal.status === 'NOT_CONFIGURED' ? 'Not configured' : <CurrencyValue value={Number(insuranceTotal.value)} />}
           change={insuranceTotal.status === 'RECONCILED' ? 'Life + Health' : undefined}
           changeType="neutral"
           status={insuranceTotal.status === 'NOT_CONFIGURED' ? undefined : 'Adequate'}

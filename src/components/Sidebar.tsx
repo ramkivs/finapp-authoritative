@@ -52,8 +52,8 @@ export const Sidebar: React.FC<Props> = ({
   onCloseMobile
 }) => {
   const {
-    transactions, assets, liabilities, snapshots,
-    accounts, budgets, policies, goals, profile
+    transactions = [], assets = [], liabilities = [], holdings = [], holdingDeletionLog = [], snapshots = [],
+    accounts = [], budgets = [], policies = [], goals = [], profile = null
   } = useCanonicalLedger();
 
   const [notice, setNotice] = React.useState<
@@ -62,17 +62,20 @@ export const Sidebar: React.FC<Props> = ({
   const [busy, setBusy] = React.useState<null | 'demo' | 'clear'>(null);
 
   /**
-   * WP-FB-DATA-09 — every collection counts.
+   * WP-FB-DATA-09 / DEF-05 — every canonical collection counts.
    *
-   * Emptiness is judged across all nine, not just transactions: a user who has
-   * registered accounts and policies but recorded no transaction yet still has
-   * real data that demo content must never overwrite.
+   * Emptiness is judged across all eleven collections (including personal
+   * imported holdings and holding deletion audit entries), not just
+   * transactions: a user who has imported holdings or registered accounts and
+   * policies still has real data that demo content must never overwrite.
    */
   const populatedCollections = (): string[] => {
     const present: string[] = [];
     if (transactions.length) present.push('transactions');
     if (assets.length) present.push('assets');
     if (liabilities.length) present.push('liabilities');
+    if (holdings.length) present.push('holdings');
+    if (holdingDeletionLog.length) present.push('holding deletion log');
     if (snapshots.length) present.push('snapshots');
     if (accounts.length) present.push('accounts');
     if (budgets.length) present.push('budgets');
@@ -150,20 +153,22 @@ export const Sidebar: React.FC<Props> = ({
     if (busy) return;
     setNotice(null);
 
-    /* The confirmation names ALL NINE collections. The previous wording listed
-     * five and destroyed nine, which understated its own scope. */
+    /* The confirmation names ALL ELEVEN collections (including personal
+     * holdings and the holding deletion log). */
     if (!window.confirm(
       'Clear all local financial data?\n\n' +
       'This permanently deletes every one of the following:\n' +
       '  1. transactions\n' +
       '  2. assets\n' +
       '  3. liabilities\n' +
-      '  4. net-worth snapshots\n' +
-      '  5. accounts\n' +
-      '  6. budgets\n' +
-      '  7. insurance policies\n' +
-      '  8. goals\n' +
-      '  9. your financial profile\n\n' +
+      '  4. holdings\n' +
+      '  5. holding deletion log\n' +
+      '  6. net-worth snapshots\n' +
+      '  7. accounts\n' +
+      '  8. budgets\n' +
+      '  9. insurance policies\n' +
+      '  10. goals\n' +
+      '  11. your financial profile\n\n' +
       'This cannot be undone.'
     )) {
       return;
@@ -175,7 +180,7 @@ export const Sidebar: React.FC<Props> = ({
       setNotice({
         kind: 'success',
         headline: 'All local financial data cleared.',
-        message: 'All nine collections are empty and the empty state has been saved.'
+        message: 'All canonical collections are empty and the empty state has been saved.'
       });
     } catch (e) {
       setNotice({
@@ -197,8 +202,6 @@ export const Sidebar: React.FC<Props> = ({
       setActiveTab('money');
     } else if (id === 'insights') {
       setActiveTab('wealth');
-    } else if (id === 'settings') {
-      alert('Settings: FinBoom v3.0 Institutional Theme active. Local persistence verified.');
     } else {
       setActiveTab(id);
     }

@@ -252,6 +252,10 @@ export interface Transaction {
   sourceProvider?: string;
   sourceFile?: string;
   sourceRowNumber?: number;
+  /** Optional bank statement reference / cheque / UTR identifier for duplicate disambiguation. */
+  referenceNumber?: string;
+  /** Optional post-transaction account balance reported by the source bank statement. */
+  closingBalance?: number;
   fingerprint?: string;
 }
 
@@ -559,6 +563,8 @@ export interface BatchRollbackResultShape {
 
 export type HoldingStatus = 'active' | 'closed_absent';
 
+export type HoldingProductScope = 'EQUITY' | 'MUTUAL_FUND';
+
 export interface Holding {
   /** Authoritative persisted identity. Prefix `hld-`. Survives renames. */
   id: string;
@@ -647,6 +653,13 @@ export interface Holding {
    * for WP-07.
    */
   securityClassification?: string;
+
+  /**
+   * Statement product scope ('EQUITY' | 'MUTUAL_FUND') emitted by the broker
+   * adapter and preserved across updates so reconciliation closures never
+   * cross Equity and Mutual Fund exports for the same broker/account.
+   */
+  productScope?: HoldingProductScope;
 
   // === LIFECYCLE ===
 
@@ -781,6 +794,36 @@ export interface HoldingRepository {
  * `id` (the audit entry's own storage key).
  * ========================================================================= */
 
+/**
+ * D-06-F1-A / F1-B / F1-C — audit scope of a batch deletion event.
+ *
+ *   'MULTI_SELECT' — ratified F1-A scope: row-by-row user selection inside
+ *                    the transient post-confirm import closure surface.
+ *   'BROKER_WIDE'  — D-06-F1-B: explicit opt-in selection over the LIVE
+ *                    canonical closed_absent set of one broker, from the
+ *                    persistent closed-positions cleanup surface.
+ *   'ACCOUNT_WIDE' — D-06-F1-C: same, scoped to the (broker, account) pair.
+ *   'GLOBAL'       — D-06-F1-D (ACCEPTED at the combined F6/F1-D
+ *                    implementation-authority gate): whole-ledger explicit
+ *                    opt-in selection over the LIVE canonical
+ *                    closed_absent set — no broker/account predicate;
+ *                    undefined-account Holdings are included. GLOBAL
+ *                    deletion additionally REQUIRES the ratified F6 typed
+ *                    confirmation (Option D: type the LIVE effective batch
+ *                    count) at the modal's final stage.
+ * Additive-only, as with the F1-B/C widening: MULTI_SELECT/BROKER_WIDE/
+ * ACCOUNT_WIDE persisted records and call semantics are unchanged (no
+ * retro-fit — the typed gate applies to GLOBAL only); the field remains
+ * optional so no IndexedDB migration and no DB_VERSION change is required.
+ * (Authority: FINBOOM-D-06-F6-F1D-IMPLEMENTATION-AUTHORITY-REPORT.md;
+ * supersedes the earlier "no GLOBAL member by design" deferral note.)
+ */
+export type HoldingDeletionBatchScope =
+  | 'MULTI_SELECT'
+  | 'BROKER_WIDE'
+  | 'ACCOUNT_WIDE'
+  | 'GLOBAL';
+
 export interface HoldingDeletionLogEntry {
   /** Audit entry id, distinct from `holdingId`. Prefix `hdl-`. Storage key. */
   id: string;
@@ -804,6 +847,25 @@ export interface HoldingDeletionLogEntry {
   importedAt: string;
   /** ISO 8601 timestamp of the deletion event. */
   deletedAt: string;
+  /**
+   * D-06-F1-A — batch attribution. Present ONLY on audit entries created by
+   * a user-selected multi-select batch deletion (D-06-F1-A); every entry
+   * produced by one batch shares the same `batchId` (prefix `hdlb-`).
+   *
+   * ABSENT on entries created by the single-Holding deletion path (D-06-1),
+   * which remains unchanged. The field is optional: pre-existing serialized
+   * records without it remain fully readable, so no IndexedDB migration and
+   * no DB_VERSION change are required (the `holdingDeletionLog` store is
+   * schema-less JSON serialization).
+   */
+  batchId?: string;
+  /**
+   * D-06-F1-A — scope of the deletion event; widened ADDITIVELY by D-06-F1-B/C
+   * to the `HoldingDeletionBatchScope` union ('MULTI_SELECT' | 'BROKER_WIDE' |
+   * 'ACCOUNT_WIDE'). ABSENT on single-deletion entries. Optional for the same
+   * backward-compatibility reason as `batchId`.
+   */
+  batchScope?: HoldingDeletionBatchScope;
 }
 
 export interface HoldingDeletionLogRepository {
@@ -866,6 +928,72 @@ export interface ProfileRepository {
   save(profile: FinancialProfile): Promise<void>;
 }
 
+export interface LocalBackupRecordCountsShape {
+  transactions: number;
+  assets: number;
+  liabilities: number;
+  holdings: number;
+  holdingDeletionLog: number;
+  snapshots: number;
+  accounts: number;
+  budgets: number;
+  policies: number;
+  goals: number;
+  hasProfile: boolean;
+}
+
+export interface LocalBackupManifestShape {
+  format: 'finboom.local-backup';
+  schemaVersion: 1;
+  dbVersion: number;
+  appVersion: string;
+  createdAt: string;
+  recordCounts: LocalBackupRecordCountsShape;
+}
+
+export interface LocalBackupExportShape {
+  envelope: {
+    manifest: LocalBackupManifestShape;
+    integrity: {
+      algorithm: string;
+      canonicalization: 'RFC-8785-JCS';
+      digest: string;
+    };
+    data: {
+      transactions: Transaction[];
+      assets: Asset[];
+      liabilities: Liability[];
+      holdings: Holding[];
+      holdingDeletionLog: HoldingDeletionLogEntry[];
+      snapshots: NetWorthSnapshot[];
+      accounts: Account[];
+      budgets: MonthlyBudget[];
+      policies: InsurancePolicy[];
+      goals: FinancialGoal[];
+      profile: FinancialProfile | null;
+    };
+  };
+  json: string;
+  fileName: string;
+  receipt: {
+    format: 'finboom.local-backup';
+    schemaVersion: 1;
+    dbVersion: number;
+    createdAt: string;
+    fileName: string;
+    algorithm: string;
+    digest: string;
+    recordCounts: LocalBackupRecordCountsShape;
+  };
+}
+
+export interface LocalBackupRestoreShape {
+  manifest: LocalBackupManifestShape;
+  digest: string;
+  restoredAt: string;
+  recordCounts: LocalBackupRecordCountsShape;
+}
+
 export interface FinancialRepositoryPort {
   transactions: TransactionRepository;
   assets: AssetRepository;
@@ -882,6 +1010,8 @@ export interface FinancialRepositoryPort {
   clearLocalData(): Promise<void> | void;
   loadDemoData(): Promise<void> | void;
   initialize(): Promise<void> | void;
+  exportBackup(options?: { createdAt?: string }): Promise<LocalBackupExportShape>;
+  restoreFromBackup(input: string | unknown): Promise<LocalBackupRestoreShape>;
 }
 
 /* =========================================================================
@@ -1007,6 +1137,8 @@ export const TRANSACTION_TO_BUDGET_CATEGORY_MAP: Record<string, BudgetCategoryFa
   'ATM': 'Cash Withdrawal',
   'CHILDCARE': 'Childcare',
   'INVESTMENT': 'Investment',
+  'PPF': 'Investment',
+  'PPF_CONTRIBUTION': 'Investment',
   'OTHER': 'Other Expense',
   'OTHER_EXPENSE': 'Other Expense'
 };

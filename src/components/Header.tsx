@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useCanonicalLedger } from '../store/useCanonicalLedger';
+import { AccountBalanceService } from '../services/AccountBalanceService';
 import { Moon, Sun, Eye, EyeOff, Bell, Menu, ChevronDown, Calendar, Wallet } from 'lucide-react';
 
 interface Props {
@@ -9,11 +10,13 @@ interface Props {
 }
 
 export const Header: React.FC<Props> = ({ toggleDark, isDark, onOpenMobile }) => {
-  const { privacyMasked, togglePrivacy, dateRange, setDateRange, accounts } = useCanonicalLedger();
+  const { privacyMasked = false, togglePrivacy, dateRange, setDateRange, accounts = [], transactions = [] } = useCanonicalLedger();
   const [showDateMenu, setShowDateMenu] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
 
   const ranges = ['This Month', 'Last Month', '3M', '6M', '12M', 'YTD'];
+  const reconciliation = AccountBalanceService.reconciliation(accounts, transactions);
+  const notificationCount = reconciliation.unmappedCount > 0 ? 1 : 0;
 
   return (
     <header className="h-16 bg-[#161B22] border-b border-[#21262D] flex items-center justify-between px-4 md:px-8 sticky top-0 z-30 transition-colors duration-150">
@@ -96,7 +99,7 @@ export const Header: React.FC<Props> = ({ toggleDark, isDark, onOpenMobile }) =>
         </div>
       </div>
 
-      {/* Right Area: Utility Toggles & Profile Pill */}
+      {/* Right Area: Utility Toggles & Local Vault Badge */}
       <div className="flex items-center gap-2.5">
         {/* Dark/Light Mode */}
         <button
@@ -111,6 +114,7 @@ export const Header: React.FC<Props> = ({ toggleDark, isDark, onOpenMobile }) =>
         {/* Privacy Balance Masking */}
         <button
           id="btn-privacy-toggle"
+          aria-pressed={privacyMasked}
           onClick={togglePrivacy}
           className="w-9 h-9 rounded-xl hover:bg-[#21262D] border border-transparent hover:border-[#21262D] flex items-center justify-center text-[#8B949E] hover:text-white transition cursor-pointer"
           title="Mask / Unmask Financial Figures (Persistent)"
@@ -121,27 +125,35 @@ export const Header: React.FC<Props> = ({ toggleDark, isDark, onOpenMobile }) =>
         {/* Notification Bell */}
         <button
           id="btn-notifications"
-          onClick={() => alert('Notification: Trailing dividend income reconciled into canonical ledger.')}
+          onClick={() =>
+            alert(
+              reconciliation.unmappedCount > 0
+                ? `${reconciliation.unmappedCount} transaction(s) are not yet mapped to a registered account.`
+                : 'No pending ledger notifications.'
+            )
+          }
           className="w-9 h-9 rounded-xl hover:bg-[#21262D] border border-transparent hover:border-[#21262D] flex items-center justify-center text-[#8B949E] hover:text-white transition relative cursor-pointer"
           title="Notifications"
         >
           <Bell size={17} />
-          <span className="absolute top-1.5 right-1.5 w-3.5 h-3.5 rounded-full bg-[#EF4444] text-white text-[9px] font-bold flex items-center justify-center">
-            1
-          </span>
+          {notificationCount > 0 && (
+            <span className="absolute top-1.5 right-1.5 w-3.5 h-3.5 rounded-full bg-[#EF4444] text-white text-[9px] font-bold flex items-center justify-center">
+              {notificationCount}
+            </span>
+          )}
         </button>
 
-        {/* User Profile Badge */}
+        {/* Local Vault Badge (No Personal PII) */}
         <div
           id="btn-user-profile"
-          onClick={() => alert('Profile: Ramakrishnan VS (Pro Member) • FinBoom v3.0 Production Active')}
+          onClick={() => alert('Local Vault • Single-owner personal finance workspace (client-only IndexedDB)')}
           className="flex items-center gap-2 pl-1.5 pr-3 py-1 rounded-full bg-[#0D1117] border border-[#21262D] cursor-pointer hover:border-[#30363D] transition"
         >
-          <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-[#4F8CFF] to-[#06B6D4] text-white font-bold text-[11px] flex items-center justify-center shadow-sm">
-            R
+          <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-[#4F8CFF] to-[#06B6D4] text-white font-bold text-[10px] flex items-center justify-center shadow-sm">
+            LV
           </div>
           <span className="text-xs font-bold text-[#F0F6FC] hidden md:inline">
-            Ramakrishnan VS
+            Local Vault
           </span>
         </div>
       </div>

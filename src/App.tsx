@@ -7,6 +7,7 @@ import { MoneyPage } from './pages/MoneyPage';
 import { EssentialsPage } from './pages/EssentialsPage';
 import { ImportPage } from './pages/ImportPage';
 import { CalculatorsPage } from './pages/CalculatorsPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { IncomeModal, ExpenseModal, TransferModal } from './components/Modals';
 import { CustomDateModal } from './components/CustomDateModal';
 import { ShieldCheck } from 'lucide-react';
@@ -101,12 +102,15 @@ export function App() {
     setNavSeq(prev => prev + 1);
   }, []);
   const [isDark, setIsDark] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('finapp.theme');
-      if (stored === 'light') return false;
-      return true; // Institutional dark is the authoritative default
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const stored = window.localStorage.getItem('finapp.theme');
+        if (stored === 'light') return false;
+      }
+    } catch {
+      /* ignore localStorage access failures */
     }
-    return true;
+    return true; // Institutional dark is the authoritative default
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState<boolean>(false);
@@ -118,10 +122,15 @@ export function App() {
   useEffect(() => {
     if (isDark) {
       document.documentElement.classList.add('dark');
-      localStorage.setItem('finapp.theme', 'dark');
     } else {
       document.documentElement.classList.remove('dark');
-      localStorage.setItem('finapp.theme', 'light');
+    }
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('finapp.theme', isDark ? 'dark' : 'light');
+      }
+    } catch {
+      /* ignore localStorage quota/privacy-mode failures */
     }
   }, [isDark]);
 
@@ -166,6 +175,7 @@ export function App() {
           )}
           {activeTab === 'import' && <ImportPage />}
           {activeTab === 'calculators' && <CalculatorsPage />}
+          {activeTab === 'settings' && <SettingsPage />}
         </main>
 
         {/* Global Institutional Footer */}

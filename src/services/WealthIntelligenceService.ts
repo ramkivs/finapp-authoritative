@@ -428,6 +428,11 @@ export class WealthIntelligenceService {
       const g = a.geography ? a.geography : 'Not Specified';
       geoMap[g] = (geoMap[g] || 0) + a.amount;
     }
+    for (const h of holdings) {
+      const cv = Number(h.currentValue) || 0;
+      const g = (h as any).geography ? String((h as any).geography) : 'Not Specified';
+      geoMap[g] = (geoMap[g] || 0) + cv;
+    }
     const byGeography = Object.entries(geoMap)
       .map(([geography, amount]) => ({
         geography,
@@ -441,6 +446,11 @@ export class WealthIntelligenceService {
     for (const a of assets) {
       const c = a.currency ? a.currency : 'Not Specified';
       currMap[c] = (currMap[c] || 0) + a.amount;
+    }
+    for (const h of holdings) {
+      const cv = Number(h.currentValue) || 0;
+      const c = (h as any).currency ? String((h as any).currency) : 'Not Specified';
+      currMap[c] = (currMap[c] || 0) + cv;
     }
     const byCurrency = Object.entries(currMap)
       .map(([currency, amount]) => ({
@@ -720,11 +730,12 @@ export class WealthIntelligenceService {
   public static generateInsights(
     assets: Asset[],
     liabilities: Liability[],
-    snapshots: NetWorthSnapshot[] = []
+    snapshots: NetWorthSnapshot[] = [],
+    holdings: Holding[] = []
   ): WealthInsight[] {
     const insights: WealthInsight[] = [];
 
-    if (assets.length === 0 && liabilities.length === 0) {
+    if (assets.length === 0 && liabilities.length === 0 && holdings.length === 0) {
       insights.push({
         id: 'wi-empty',
         severity: 'INFO',
@@ -736,11 +747,11 @@ export class WealthIntelligenceService {
       return insights;
     }
 
-    const health = this.getHealthSummary(assets, liabilities, snapshots);
-    const concentration = this.getAssetConcentration(assets);
-    const liabDiag = this.getLiabilityDiagnostics(assets, liabilities);
+    const health = this.getHealthSummary(assets, liabilities, snapshots, [], [], holdings);
+    const concentration = this.getAssetConcentration(assets, holdings);
+    const liabDiag = this.getLiabilityDiagnostics(assets, liabilities, holdings);
     const trend = this.getTrendIntelligence(snapshots);
-    const dataQuality = this.getDataQuality(assets, liabilities, snapshots);
+    const dataQuality = this.getDataQuality(assets, liabilities, snapshots, holdings);
 
     // 1. Debt Burden Diagnostic
     if (liabDiag.burdenLevel === 'ELEVATED') {

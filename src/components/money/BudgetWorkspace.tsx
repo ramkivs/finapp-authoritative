@@ -6,6 +6,8 @@ import {
   mapTransactionCategoryToBudget
 } from '../../domain/types';
 import { FinancialCommands } from '../../application/commands';
+import { LedgerExclusionService } from '../../services/LedgerExclusionService';
+import { useCanonicalLedger } from '../../store/useCanonicalLedger';
 import { CurrencyValue } from '../CurrencyValue';
 import { EditBudgetModal } from './EditBudgetModal';
 import { Calendar, Zap, Copy, Edit3, CheckCircle2, AlertCircle } from 'lucide-react';
@@ -41,11 +43,13 @@ export const BudgetWorkspace: React.FC<Props> = ({ transactions, budgets }) => {
   const allocations = activeBudget?.allocations || {};
   const totalBudget = activeBudget?.totalBudget || 0;
 
+  const { privacyMasked = false } = useCanonicalLedger();
+
   // Calculate actual spending in selected month aggregated by standard budget categories
   const actualExpensesByCategory: Record<string, number> = {};
   let totalActualSpent = 0;
 
-  for (const t of transactions) {
+  for (const t of LedgerExclusionService.forDerivation(transactions)) {
     if (t.type !== 'Expense') continue;
     if (t.date.startsWith(selectedMonth)) {
       const bCat = mapTransactionCategoryToBudget(t.category);
@@ -63,7 +67,8 @@ export const BudgetWorkspace: React.FC<Props> = ({ transactions, budgets }) => {
     setBudgetBusy('suggest');
     try {
       await FinancialCommands.saveMonthlyBudget(selectedMonth, suggested.allocations);
-      showToast(`Auto-suggest populated ₹${suggested.totalBudget.toLocaleString()} based on trailing 3-month expense averages.`);
+      const amtStr = privacyMasked ? '₹ ••••••' : `₹${suggested.totalBudget.toLocaleString('en-IN')}`;
+      showToast(`Auto-suggest populated ${amtStr} based on trailing 3-month expense averages.`);
     } catch (e: any) {
       setBudgetError(e?.message || 'The budget could not be saved.');
     } finally {
@@ -78,7 +83,8 @@ export const BudgetWorkspace: React.FC<Props> = ({ transactions, budgets }) => {
     try {
       const copied = await FinancialCommands.copyBudgetFromPreviousMonth(selectedMonth);
       if (copied) {
-        showToast(`Copied budget allocations from previous month (Total: ₹${copied.totalBudget.toLocaleString()}).`);
+        const amtStr = privacyMasked ? '₹ ••••••' : `₹${copied.totalBudget.toLocaleString('en-IN')}`;
+        showToast(`Copied budget allocations from previous month (Total: ${amtStr}).`);
       } else {
         showToast('No budget found in the immediately previous month to copy.');
       }

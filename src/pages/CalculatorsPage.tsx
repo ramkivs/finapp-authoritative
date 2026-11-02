@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { queries } from '../application';
+import { CurrencyValue } from '../components/CurrencyValue';
 import { KpiCard } from '../components/ui/KpiCard';
 import { SipCalculator } from '../components/calculators/SipCalculator';
 import { LumpsumCalculator } from '../components/calculators/LumpsumCalculator';
@@ -455,7 +456,11 @@ export const CalculatorsPage: React.FC = () => {
 
           <KpiCard
             label="Net Worth CAGR"
-            value={cagrMetric.status === 'NOT_CONFIGURED' ? 'Not configured' : `+${cagrMetric.value}%`}
+            value={
+              cagrMetric.status === 'NOT_CONFIGURED'
+                ? 'Not configured'
+                : `${Number(cagrMetric.value) >= 0 ? '+' : ''}${cagrMetric.value}%`
+            }
             change={cagrMetric.status === 'RECONCILED' ? 'Compound Annual Growth' : undefined}
             changeType={Number(cagrMetric.value) >= 0 ? 'positive' : 'negative'}
             status={cagrMetric.status}
@@ -465,7 +470,7 @@ export const CalculatorsPage: React.FC = () => {
 
           <KpiCard
             label="Emergency Fund Goal"
-            value={goalMetric.status === 'NOT_CONFIGURED' ? 'Not configured' : goalMetric.value}
+            value={goalMetric.status === 'NOT_CONFIGURED' ? 'Not configured' : <CurrencyValue value={Number(goalMetric.value)} />}
             change={goalMetric.status === 'RECONCILED' ? '6 Months Essential EMIs' : undefined}
             changeType="neutral"
             status={goalMetric.status}

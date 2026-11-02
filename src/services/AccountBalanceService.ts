@@ -177,8 +177,9 @@ export class AccountBalanceService {
     transactions: Transaction[],
     asOf: string = getEffectiveAsOfDate()
   ): ReconciliationSummary {
+    const live = LedgerExclusionService.forDerivation(transactions);
     const validIds = new Set(accounts.map(a => a.id));
-    const unmapped = transactions.filter(
+    const unmapped = live.filter(
       t => t.date <= asOf && (!t.accountId || !validIds.has(t.accountId))
     );
 
@@ -186,7 +187,7 @@ export class AccountBalanceService {
       unmappedCount: unmapped.length,
       unmappedNet: unmapped.reduce((s, t) => s + TransactionSignService.signedAmount(t), 0),
       unmappedGross: unmapped.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0),
-      undeterminedCount: transactions.filter(
+      undeterminedCount: live.filter(
         t => t.date <= asOf && TransactionSignService.isDirectionUndetermined(t)
       ).length,
       asOf

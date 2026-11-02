@@ -6,6 +6,11 @@ import { repository } from '../src/repositories';
 import { FinancialCommands as commands } from '../src/application/commands';
 import { FinancialQueries as queries } from '../src/application/queries';
 import { useCanonicalLedger } from '../src/store/useCanonicalLedger';
+import { DateRangeService } from '../src/services/DateRangeService';
+
+// Pin effective as-of date to the canonical demo/regression anchor ('2026-08-09')
+// so rolling 12M queries do not drift with wall-clock date.
+DateRangeService.setAsOfDateOverride('2026-08-09');
 
 let passCount = 0;
 let failCount = 0;

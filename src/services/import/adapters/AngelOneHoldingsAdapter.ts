@@ -72,6 +72,7 @@ import {
   BrokerAdapter,
   BrokerDetectionResult,
   BrokerParseOutput,
+  BrokerProductScope,
 } from '../BrokerAdapter';
 import {
   ImportRowIssue,
@@ -307,10 +308,14 @@ export class AngelOneHoldingsAdapter implements BrokerAdapter {
     const columnMap = this.buildColumnMap(headerFields);
     const dataRows = this.collectDataRows(rows, headerIdx);
     if (dataRows.length === 0) {
-      return this.emptyOutput(fileName, [
-        this.issue(rows[headerIdx].rowNumber, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
-          'Angel One file contains only the header row, no data rows.'),
-      ]);
+      return this.emptyOutput(
+        fileName,
+        [
+          this.issue(rows[headerIdx].rowNumber, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+            'Angel One file contains only the header row, no data rows.'),
+        ],
+        { productScope: 'EQUITY' },
+      );
     }
     return this.walkDataRows(dataRows, columnMap, fileName);
   }
@@ -448,10 +453,14 @@ export class AngelOneHoldingsAdapter implements BrokerAdapter {
       dataRows.push({ rowNumber: r + 1, fields });
     }
     if (dataRows.length === 0) {
-      return this.emptyOutput(fileName, [
-        this.issue(decoded.headerIdx + 1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
-          'Angel One file contains only the header row, no data rows.'),
-      ]);
+      return this.emptyOutput(
+        fileName,
+        [
+          this.issue(decoded.headerIdx + 1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+            'Angel One file contains only the header row, no data rows.'),
+        ],
+        { productScope: 'EQUITY' },
+      );
     }
     return this.walkDataRows(dataRows, columnMap, fileName);
   }
@@ -609,7 +618,7 @@ export class AngelOneHoldingsAdapter implements BrokerAdapter {
       if (blockedQtyRaw !== '') {
         const blockedQty = parseAngelOneNumber(blockedQtyRaw);
         if (blockedQty === null) {
-          issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_NUMERIC_INVALID',
             `Blocked_qty is not a parseable number: ${JSON.stringify(blockedQtyRaw)}; the value will be IGNORED per CR-06.`,
             'Blocked_qty', blockedQtyRaw));
           // Continue — Blocked_qty parsing failure is non-blocking
@@ -689,7 +698,7 @@ export class AngelOneHoldingsAdapter implements BrokerAdapter {
       if (realisedGainLossRaw !== '') {
         const rg = parseAngelOneNumber(realisedGainLossRaw);
         if (rg === null) {
-          issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_NUMERIC_INVALID',
             `Realised Gain/Loss is not a parseable number: ${JSON.stringify(realisedGainLossRaw)}; the value will be IGNORED per CR-04.`,
             'Realised Gain/Loss', realisedGainLossRaw));
           // Non-blocking: the value is not used.
@@ -699,7 +708,7 @@ export class AngelOneHoldingsAdapter implements BrokerAdapter {
       if (holdingWeightageRaw !== '') {
         const hw = parseAngelOneNumber(holdingWeightageRaw);
         if (hw === null) {
-          issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_NUMERIC_INVALID',
             `Holding Weightage is not a parseable number: ${JSON.stringify(holdingWeightageRaw)}; the value will be IGNORED per CR-04.`,
             'Holding Weightage', holdingWeightageRaw));
           // Non-blocking.
@@ -770,6 +779,7 @@ export class AngelOneHoldingsAdapter implements BrokerAdapter {
         xirrPercent: undefined,
         securityClassification: undefined,
         unrealisedPnLPercent: undefined,
+        productScope: 'EQUITY',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt,
@@ -780,6 +790,7 @@ export class AngelOneHoldingsAdapter implements BrokerAdapter {
     return {
       broker: 'Angel One',
       account: undefined,
+      productScope: 'EQUITY',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -801,10 +812,15 @@ export class AngelOneHoldingsAdapter implements BrokerAdapter {
     };
   }
 
-  private emptyOutput(fileName: string, issues: ImportRowIssue[]): BrokerParseOutput {
+  private emptyOutput(
+    fileName: string,
+    issues: ImportRowIssue[],
+    opts?: { account?: string; productScope?: BrokerProductScope },
+  ): BrokerParseOutput {
     return {
       broker: 'Angel One',
-      account: undefined,
+      account: opts?.account,
+      ...(opts?.productScope !== undefined ? { productScope: opts.productScope } : {}),
       holdings: [],
       sourceFile: fileName,
       importedAt: new Date().toISOString(),

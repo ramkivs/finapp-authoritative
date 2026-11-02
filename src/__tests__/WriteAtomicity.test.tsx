@@ -60,19 +60,19 @@ const settle = (p: any) =>
 
 function reset() {
   repo.transactionsData = []; repo.assetsData = []; repo.liabilitiesData = [];
-  repo.holdingsData = [];
+  repo.holdingsData = []; repo.holdingDeletionLogData = [];
   repo.snapshotsData = []; repo.accountsData = []; repo.budgetsData = [];
   repo.policiesData = []; repo.goalsData = []; repo.profileData = null;
   repo.syncStore();
   useCanonicalLedger.setState({
-    transactions: [], assets: [], liabilities: [], holdings: [], snapshots: [], accounts: [],
+    transactions: [], assets: [], liabilities: [], holdings: [], holdingDeletionLog: [], snapshots: [], accounts: [],
     budgets: [], policies: [], goals: [], profile: null
   } as any);
 }
 async function persistAll() {
   await IndexedDBStorageService.saveAll({
     transactions: repo.transactionsData, assets: repo.assetsData, liabilities: repo.liabilitiesData,
-    holdings: repo.holdingsData,
+    holdings: repo.holdingsData, holdingDeletionLog: repo.holdingDeletionLogData,
     snapshots: repo.snapshotsData, accounts: repo.accountsData, budgets: repo.budgetsData,
     policies: repo.policiesData, goals: repo.goalsData, profile: repo.profileData
   } as any);
@@ -180,7 +180,7 @@ class FakeDB {
   public closed = false;
   objectStoreNames = { contains: (n: string) => this.stores.has(n) };
   constructor() {
-    for (const n of ['transactions', 'assets', 'liabilities', 'snapshots',
+    for (const n of ['transactions', 'assets', 'liabilities', 'holdings', 'holdingDeletionLog', 'snapshots',
       'accounts', 'budgets', 'policies', 'goals', 'profile']) {
       this.stores.set(n, new FakeStore(n, 'id'));
     }
@@ -258,6 +258,8 @@ describe('WP-FB-DATA-09 — write atomicity and the data-replacement tools', () 
       const bad: Array<[string, any]> = [
         ['transactions', { date: '2026-08-01', amount: 1 }],
         ['liabilities', { name: 'L', amount: 1 }],
+        ['holdings', { broker: 'Zerodha', instrumentName: 'INFY', currentValue: 1000 }],
+        ['holdingDeletionLog', { holdingId: 'hld-1', broker: 'Zerodha', instrumentName: 'INFY' }],
         ['snapshots', { dateStr: '2026-08-01' }],
         ['accounts', { name: 'A' }],
         ['budgets', { monthStr: '2026-08' }],
@@ -266,7 +268,7 @@ describe('WP-FB-DATA-09 — write atomicity and the data-replacement tools', () 
       ];
       for (const [collection, record] of bad) {
         const base: any = {
-          transactions: [], assets: [], liabilities: [], snapshots: [],
+          transactions: [], assets: [], liabilities: [], holdings: [], holdingDeletionLog: [], snapshots: [],
           accounts: [], budgets: [], policies: [], goals: [], profile: null
         };
         base[collection] = [record];
@@ -577,6 +579,59 @@ describe('WP-FB-DATA-09 — write atomicity and the data-replacement tools', () 
 
       await waitFor(() => expect(container.querySelector('#devtools-notice')).toBeTruthy());
       expect(container.querySelector('#devtools-notice')!.textContent).toMatch(/financial profile/);
+    });
+
+    it('refuses on a ledger that has ONLY holdings (DEF-05)', async () => {
+      repo.holdingsData = [{
+        id: 'hld-solo-1',
+        broker: 'Zerodha',
+        instrumentName: 'INFY',
+        ticker: 'INFY',
+        quantity: 10,
+        averageCost: 1400,
+        investedValue: 14000,
+        currentPrice: 1500,
+        currentValue: 15000,
+        unrealisedPnL: 1000,
+        sourceFile: 'zerodha.csv',
+        importedAt: '2026-08-23T10:00:00.000Z',
+        status: 'active'
+      }];
+      repo.syncStore();
+      await persistAll();
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      const { container } = renderSidebar();
+      fireEvent.click(container.querySelector('#btn-load-demo-data')!);
+
+      await waitFor(() => expect(container.querySelector('#devtools-notice')).toBeTruthy());
+      expect(container.querySelector('#devtools-notice')!.textContent).toMatch(/holdings/);
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(repo.holdingsData).toHaveLength(1);
+    });
+
+    it('refuses on a ledger that has ONLY holdingDeletionLog entries (DEF-05)', async () => {
+      repo.holdingDeletionLogData = [{
+        id: 'hdl-solo-1',
+        holdingId: 'hld-deleted-1',
+        broker: 'Zerodha',
+        instrumentName: 'INFY',
+        currentValueAtDeletion: 15000,
+        sourceFile: 'zerodha.csv',
+        importedAt: '2026-08-23T10:00:00.000Z',
+        deletedAt: '2026-08-24T10:00:00.000Z'
+      }];
+      repo.syncStore();
+      await persistAll();
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      const { container } = renderSidebar();
+      fireEvent.click(container.querySelector('#btn-load-demo-data')!);
+
+      await waitFor(() => expect(container.querySelector('#devtools-notice')).toBeTruthy());
+      expect(container.querySelector('#devtools-notice')!.textContent).toMatch(/holding deletion log/);
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(repo.holdingDeletionLogData).toHaveLength(1);
     });
 
     it('names every populated collection in the refusal', async () => {

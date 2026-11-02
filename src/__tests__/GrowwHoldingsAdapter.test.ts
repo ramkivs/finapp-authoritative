@@ -13,6 +13,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { GrowwHoldingsAdapter } from '../services/import/adapters/GrowwHoldingsAdapter';
 import { BrokerFormatDetector } from '../services/import/BrokerFormatDetector';
@@ -22,10 +23,18 @@ import { StatementInput, ParsedCsvRow } from '../services/import/ImportTypes';
 // Real-sample loaders
 // ---------------------------------------------------------------------------
 
-const SAMPLE_STOCKS_PATH =
-  '/home/user/uploads/Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx';
-const SAMPLE_MF_PATH =
-  '/home/user/uploads/Groww_Mutual_Funds_6995348108_24-08-2026.xlsx';
+const SAMPLE_STOCKS_PATH = resolve(
+  __dirname,
+  'fixtures/broker_samples/Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx',
+);
+const SAMPLE_MF_PATH = resolve(
+  __dirname,
+  'fixtures/broker_samples/Groww_Mutual_Funds_6995348108_24-08-2026.xlsx',
+);
+const SAMPLE_ZERODHA_PATH = resolve(
+  __dirname,
+  'fixtures/broker_samples/Zerodha_holdings_10082026_1739.csv',
+);
 
 function loadBytes(path: string): Uint8Array {
   const buf = readFileSync(path);
@@ -168,9 +177,9 @@ describe('E. MF preamble / header discovery (decoded-rows path)', () => {
     const adapter = new GrowwHoldingsAdapter();
     const rows: ParsedCsvRow[] = [
       { rowNumber: 1, data: {}, rawFields: ['Personal Details'] },
-      { rowNumber: 2, data: {}, rawFields: ['Name', 'Ramakrishnan Rajeswari'] },
-      { rowNumber: 3, data: {}, rawFields: ['Mobile Number', '7395930735'] },
-      { rowNumber: 4, data: {}, rawFields: ['PAN', 'DKOPR8056J'] },
+      { rowNumber: 2, data: {}, rawFields: ['Name', 'Synthetic Holder'] },
+      { rowNumber: 3, data: {}, rawFields: ['Mobile Number', '9000000000'] },
+      { rowNumber: 4, data: {}, rawFields: ['PAN', 'ABCDE1234F'] },
       { rowNumber: 5, data: {}, rawFields: ['HOLDING SUMMARY'] },
       { rowNumber: 6, data: {}, rawFields: ['Total Investments', 'Current Portfolio Value', 'Profit/Loss', 'Profit/Loss %', 'XIRR'] },
       { rowNumber: 7, data: {}, rawFields: ['29998.37', '30891.36', '892.98', '2.98%', '3.61%'] },
@@ -683,7 +692,7 @@ describe('Regression: WP-04 Zerodha still works after Groww registration', () =>
     const { ZerodhaHoldingsAdapter } = await import('../services/import/adapters/ZerodhaHoldingsAdapter');
     const adapter = new ZerodhaHoldingsAdapter();
     const fs = await import('node:fs');
-    const path = '/home/user/uploads/Zerodha_holdings_10082026_1739.csv';
+    const path = SAMPLE_ZERODHA_PATH;
     const csv = fs.readFileSync(path, 'utf8');
     const out = adapter.parseHoldings({ kind: 'text', content: csv, fileName: 'Zerodha_holdings_10082026_1739.csv' });
     expect(out.holdings).toHaveLength(82);
@@ -730,5 +739,58 @@ describe('WP-09 detection tightening — full-column validation in binary path',
       expect(Number.isFinite(h.quantity)).toBe(true);
       expect(Number.isFinite(h.currentValue)).toBe(true);
     }
+  });
+});
+
+describe('Batch 2 — Step 3 & Step 4: Groww optional XIRR AMBIGUOUS & zero-row scope preservation (DEF-06, DEF-09)', () => {
+  it('DEF-06: Groww MF files with "--" or "N/A" XIRR emit AMBIGUOUS (non-blocking) and remain confirmation-eligible', async () => {
+    const XLSX = await import('xlsx');
+    const { BrokerImportService } = await import('../services/BrokerImportService');
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.aoa_to_sheet([
+        ['Name', 'Synthetic User'],
+        ['Mobile Number', '7395930735'],
+        ['Scheme Name', 'AMC', 'Category', 'Sub-category', 'Folio No.', 'Source', 'Units', 'Invested Value', 'Current Value', 'Returns', 'XIRR', ''],
+        ['Scheme Dash', 'AMC A', 'Equity', 'Flexi Cap', '111', 'Groww', '10', '1000', '1100', '100', '--', ''],
+        ['Scheme NA', 'AMC B', 'Debt', 'Liquid', '222', 'Groww', '20', '2000', '2050', '50', 'N/A', ''],
+      ]),
+      'Holdings',
+    );
+    const bytes = new Uint8Array(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+    const parsed = BrokerImportService.detectAndParse(asBinaryInput(bytes, 'groww-mf-dash-na.xlsx'));
+    expect(parsed.holdings).toHaveLength(2);
+    expect(parsed.holdings.every((h) => h.xirrPercent === undefined)).toBe(true);
+    expect(parsed.issues).toHaveLength(2);
+    expect(parsed.issues.every((i) => i.severity === 'AMBIGUOUS' && i.field === 'XIRR')).toBe(true);
+
+    const preview = BrokerImportService.reconcile(parsed, []);
+    expect(preview.blockingErrors).toEqual([]);
+    expect(preview.confirmationEligible).toBe(true);
+  });
+
+  it('DEF-09: Groww header-only Stocks and MF files preserve account and productScope', () => {
+    const adapter = new GrowwHoldingsAdapter();
+    const stocksOut = adapter.parseHoldingsFromRows(
+      [
+        { rowNumber: 1, data: {}, rawFields: ['Unique Client Code', '6995348108'] },
+        { rowNumber: 2, data: {}, rawFields: ['Stock Name', 'ISIN', 'Quantity', 'Average buy price', 'Buy value', 'Closing price', 'Closing value', 'Unrealised P&L'] },
+      ],
+      'empty-stocks.xlsx',
+    );
+    expect(stocksOut.account).toBe('6995348108');
+    expect(stocksOut.productScope).toBe('EQUITY');
+
+    const mfOut = adapter.parseHoldingsFromRows(
+      [
+        { rowNumber: 1, data: {}, rawFields: ['Mobile Number', '7395930735'] },
+        { rowNumber: 2, data: {}, rawFields: ['Scheme Name', 'AMC', 'Category', 'Sub-category', 'Folio No.', 'Source', 'Units', 'Invested Value', 'Current Value', 'Returns', 'XIRR', ''] },
+      ],
+      'empty-mf.xlsx',
+    );
+    expect(mfOut.account).toBe('7395930735');
+    expect(mfOut.productScope).toBe('MUTUAL_FUND');
   });
 });

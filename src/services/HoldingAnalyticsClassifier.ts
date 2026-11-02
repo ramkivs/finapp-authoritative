@@ -72,36 +72,195 @@ const CLOSED_ASSET_TYPE_VALUES: ReadonlyArray<AssetType> = [
   'Other'
 ];
 
+const CLOSED_ASSET_TYPE_BY_LOWER: ReadonlyMap<string, AssetType> = new Map(
+  CLOSED_ASSET_TYPE_VALUES.map(v => [v.toLowerCase(), v])
+);
+
+const EQUITY_CATEGORY_LABELS = new Set([
+  'equity',
+  'equities',
+  'stock',
+  'stocks',
+  'stocks & equity',
+  'equity fund',
+  'equity funds',
+  'employer stocks',
+  'elss',
+  'index',
+  'index fund',
+  'index funds',
+  'large cap',
+  'mid cap',
+  'small cap',
+  'large & mid cap',
+  'largemidcap',
+  'flexi cap',
+  'multi cap',
+  'sectoral',
+  'thematic',
+  'focused',
+  'value',
+  'contra',
+  'dividend yield',
+]);
+
+const DEBT_CATEGORY_LABELS = new Set([
+  'debt',
+  'debt fund',
+  'debt funds',
+  'fixed income',
+  'bond',
+  'bonds',
+  'gilt',
+  'liquid',
+  'liquid fund',
+  'liquid funds',
+  'overnight',
+  'money market',
+  'ultra short',
+  'low duration',
+  'short duration',
+  'medium duration',
+  'long duration',
+  'corporate bond',
+  'banking & psu',
+  'banking and psu',
+  'credit risk',
+  'dynamic bond',
+  'floater',
+  'arbitrage',
+  'arbitrage fund',
+  'arbitrage funds',
+  'fd & rd',
+  'epf / ppf / nps',
+]);
+
+const COMMODITY_CATEGORY_LABELS = new Set([
+  'commodity',
+  'commodities',
+  'gold',
+  'silver',
+  'gold & silver',
+  'gold etf',
+  'silver etf',
+  'precious metals',
+]);
+
+const HYBRID_OR_OTHER_CATEGORY_LABELS = new Set([
+  'hybrid',
+  'balanced',
+  'balanced advantage',
+  'aggressive hybrid',
+  'conservative hybrid',
+  'multi asset',
+  'multi-asset',
+  'dynamic asset allocation',
+  'equity savings',
+  'solution oriented',
+  'fof',
+  'fund of funds',
+  'international',
+  'other',
+]);
+
+function classifyCategoryString(raw: string): AnalyticsCategory {
+  const norm = raw.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!norm) return 'Unclassified';
+
+  const exactClosed = CLOSED_ASSET_TYPE_BY_LOWER.get(norm);
+  if (exactClosed) return exactClosed;
+
+  if (EQUITY_CATEGORY_LABELS.has(norm) || /^equity(\s*[-:/]\s*|\s+)/.test(norm)) {
+    return 'Equity';
+  }
+  if (DEBT_CATEGORY_LABELS.has(norm) || /^debt(\s*[-:/]\s*|\s+)/.test(norm)) {
+    return 'Debt';
+  }
+  if (COMMODITY_CATEGORY_LABELS.has(norm) || /^(commodit|gold|silver)\b/.test(norm)) {
+    return 'Commodities';
+  }
+  if (HYBRID_OR_OTHER_CATEGORY_LABELS.has(norm) || /^(hybrid|solution)\b/.test(norm)) {
+    return 'Other';
+  }
+  if (norm === 'cash' || norm === 'savings') {
+    return 'Cash & Savings';
+  }
+  if (norm === 'reit' || norm === 'reits') {
+    return 'Real Estate';
+  }
+
+  return 'Unclassified';
+}
+
+function classifyMutualFundSchemeName(name: string): AnalyticsCategory {
+  const norm = name.trim();
+  if (!norm) return 'Unclassified';
+
+  if (/\b(gold|silver|commodity|commodities)\b/i.test(norm)) {
+    return 'Commodities';
+  }
+  if (
+    /\b(liquid|overnight|gilt|money\s+market|corporate\s+bond|short\s+duration|low\s+duration|ultra\s+short|medium\s+duration|long\s+duration|banking\s*&\s*psu|dynamic\s+bond|credit\s+risk|floater|debt|bond|arbitrage)\b/i.test(
+      norm
+    )
+  ) {
+    return 'Debt';
+  }
+  if (/\b(hybrid|balanced|multi\s*-?\s*asset|equity\s+savings)\b/i.test(norm)) {
+    return 'Other';
+  }
+  if (
+    /\b(equity|index|nifty|sensex|nasdaq|s&p|bse|nse|elss|tax\s+saver|large\s*cap|mid\s*cap|small\s*cap|largemidcap|flexi\s*cap|multi\s*cap|bluechip|contra|focused)\b/i.test(
+      norm
+    )
+  ) {
+    return 'Equity';
+  }
+  if (/\b(fof|fund\s+of\s+funds)\b/i.test(norm)) {
+    return 'Other';
+  }
+
+  return 'Unclassified';
+}
+
 /**
  * Classify a Holding into a deterministic analytics-layer category.
  *
- * @param holding The imported Holding to classify. The function does
- *   not mutate the input.
- * @returns A closed `AssetType` value when the broker-native
- *   `securityClassification` deterministically matches a closed value,
- *   otherwise 'Unclassified'.
+ * Raw `holding.securityClassification` is NEVER mutated.
+ *
+ * Rules:
+ *   1. Non-empty `securityClassification` maps case-insensitively across the
+ *      closed 8-value `AssetType` union and standard MF category labels.
+ *   2. When `securityClassification` is absent, deterministic product metadata
+ *      (`productScope === 'EQUITY'`), listed Indian equity ISIN (`INE*`), or
+ *      non-MF exchange `ticker` maps to `'Equity'`; MF holdings
+ *      (`productScope === 'MUTUAL_FUND'` or `INF*` ISIN) derive deterministic
+ *      MF scheme categories when unambiguous.
+ *   3. Otherwise returns `'Unclassified'`.
  */
 export function classifyHolding(holding: Holding): AnalyticsCategory {
-  // Defensive: even though `holding` is typed, runtime callers can
-  // pass nullish values. Treat nullish as unclassified.
   if (holding === null || holding === undefined) {
     return 'Unclassified';
   }
 
   const sc = holding.securityClassification;
-
-  // D-05 §5: if the source does not provide a classification, the
-  // state is unclassified. No broker-inference is performed.
-  if (typeof sc !== 'string' || sc.length === 0) {
-    return 'Unclassified';
+  if (typeof sc === 'string' && sc.trim().length > 0) {
+    return classifyCategoryString(sc);
   }
 
-  // D-05 §4 + §5: a broker-native label that exactly matches a closed
-  // AssetType value is a deterministic mapping. Anything else (free-
-  // form like 'Hybrid', or any other unconstrained string) is preserved
-  // as unclassified rather than guessed into a closed bucket.
-  if ((CLOSED_ASSET_TYPE_VALUES as ReadonlyArray<string>).includes(sc)) {
-    return sc as AssetType;
+  const isinNorm = typeof holding.isin === 'string' ? holding.isin.trim().toUpperCase() : '';
+  const scope = holding.productScope;
+
+  if (scope === 'EQUITY' || isinNorm.startsWith('INE')) {
+    return 'Equity';
+  }
+
+  if (scope === 'MUTUAL_FUND' || isinNorm.startsWith('INF')) {
+    return classifyMutualFundSchemeName(holding.instrumentName || '');
+  }
+
+  if (typeof holding.ticker === 'string' && holding.ticker.trim().length > 0) {
+    return 'Equity';
   }
 
   return 'Unclassified';

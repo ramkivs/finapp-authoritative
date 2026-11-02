@@ -31,21 +31,30 @@ export class ImportFormatDetector {
    * Binary-path detection: evaluates decoded ParsedCsvRow headers against registered adapters.
    * Used after SpreadsheetStatementParser.parseBytes() decodes a native XLS/XLSX binary.
    * Detection operates directly on the decoded column headers via canHandleRows()
-   * (no synthetic text reconstruction).
+   * (no synthetic text reconstruction). Falls back to GenericCsvAdapter if the binary
+   * workbook uses canonical Date + Amount headers.
    */
   static detectFromRows(
     headers: string[],
     rows: ParsedCsvRow[],
-    fileName: string,
-    selectedProvider?: string
+    _fileName: string,
+    _selectedProvider?: string,
+    preambleText?: string
   ): { adapter: BankStatementAdapter | null; detection: DetectionResult } {
     for (const adapter of this.adapters) {
-      // Skip GenericCsvAdapter for binary — binary XLS/XLSX must be a bank statement
       if (adapter.id === 'generic_csv') continue;
 
-      const detection = adapter.canHandleRows(headers, rows);
+      const detection = adapter.canHandleRows(headers, rows, preambleText);
       if (detection.matched && detection.confidence !== 'NONE') {
         return { adapter, detection };
+      }
+    }
+
+    const genericAdapter = this.getAdapterById('generic_csv');
+    if (genericAdapter) {
+      const fallback = genericAdapter.canHandleRows(headers, rows, preambleText);
+      if (fallback.matched && fallback.confidence !== 'NONE') {
+        return { adapter: genericAdapter, detection: fallback };
       }
     }
 

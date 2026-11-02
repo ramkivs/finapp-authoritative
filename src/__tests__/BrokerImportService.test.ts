@@ -21,6 +21,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { BrokerImportService, BrokerImportPreview } from '../services/BrokerImportService';
 import { Holding, HoldingStatus } from '../domain/types';
@@ -34,12 +35,12 @@ import { repository } from '../repositories';
 // Real sample file loaders
 // ---------------------------------------------------------------------------
 
-const SAMPLE_ZERODHA = '/home/user/uploads/Zerodha_holdings_10082026_1739.csv';
-const SAMPLE_GROWW_STOCKS = '/home/user/uploads/Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx';
-const SAMPLE_GROWW_MF = '/home/user/uploads/Groww_Mutual_Funds_6995348108_24-08-2026.xlsx';
-const SAMPLE_DHAN_EQUITY = '/home/user/uploads/dhan holdings _capstewengine.csv';
-const SAMPLE_DHAN_MF_CSV = '/home/user/uploads/Dhan_MF_Report_23-08-2026.csv';
-const SAMPLE_DHAN_MF_XLSX = '/home/user/uploads/Dhan_MF_Report_23-08-2026.xlsx';
+const SAMPLE_ZERODHA = resolve(__dirname, 'fixtures/broker_samples/Zerodha_holdings_10082026_1739.csv');
+const SAMPLE_GROWW_STOCKS = resolve(__dirname, 'fixtures/broker_samples/Groww_Stocks_Holdings_Statement_6995348108_23-08-2026.xlsx');
+const SAMPLE_GROWW_MF = resolve(__dirname, 'fixtures/broker_samples/Groww_Mutual_Funds_6995348108_24-08-2026.xlsx');
+const SAMPLE_DHAN_EQUITY = resolve(__dirname, 'fixtures/cr_broker_bank_import/dhan-equity-capstewengine.csv');
+const SAMPLE_DHAN_MF_CSV = resolve(__dirname, 'fixtures/broker_samples/Dhan_MF_Report_23-08-2026.csv');
+const SAMPLE_DHAN_MF_XLSX = resolve(__dirname, 'fixtures/broker_samples/Dhan_MF_Report_23-08-2026.xlsx');
 
 function loadText(path: string): string {
   return readFileSync(path, 'utf8');
@@ -148,7 +149,7 @@ describe('A. Detection', () => {
       asTextInput(loadText(SAMPLE_DHAN_MF_CSV), 'Dhan_MF_Report_23-08-2026.csv'),
     );
     expect(parsed.broker).toBe('Dhan');
-    expect(parsed.account).toBe('IQCX28849K');
+    expect(parsed.account).toBe('SYNTHUCC01');
     expect(parsed.holdings).toHaveLength(6);
   });
 
@@ -157,7 +158,7 @@ describe('A. Detection', () => {
       asBinaryInput(loadBytes(SAMPLE_DHAN_MF_XLSX), 'Dhan_MF_Report_23-08-2026.xlsx'),
     );
     expect(parsed.broker).toBe('Dhan');
-    expect(parsed.account).toBe('IQCX28849K');
+    expect(parsed.account).toBe('SYNTHUCC01');
     expect(parsed.holdings).toHaveLength(6);
   });
 });
@@ -342,7 +343,7 @@ describe('D. Identity', () => {
   });
 
   it('D.22 account separation — same broker/instrument but different accounts are distinct', () => {
-    const a: Holding = baseHolding({ broker: 'Dhan', account: 'IQCX28849K', instrumentName: 'A' });
+    const a: Holding = baseHolding({ broker: 'Dhan', account: 'SYNTHUCC01', instrumentName: 'A' });
     const b: Holding = baseHolding({ broker: 'Dhan', account: 'OTHER', instrumentName: 'A' });
     expect(HoldingIdentityService.sameIdentity(a, b)).toBe(false);
   });
@@ -743,8 +744,175 @@ function baseHolding(overrides: Partial<Holding> = {}): Holding {
     unrealisedPnLPercent: overrides.unrealisedPnLPercent,
     xirrPercent: overrides.xirrPercent,
     securityClassification: overrides.securityClassification,
+    ...(overrides.productScope !== undefined ? { productScope: overrides.productScope } : {}),
     status: overrides.status ?? 'active' as HoldingStatus,
     sourceFile: overrides.sourceFile ?? 'test.csv',
     importedAt: overrides.importedAt ?? '2026-08-23T10:00:00.000Z',
   };
 }
+
+// ---------------------------------------------------------------------------
+// J. D-12 (Option B) — deterministic blockingErrors projection
+//
+// Characterization + acceptance tests for the blockingErrors[] projection of
+// the existing INVALID classification. Fixture files are intentionally
+// synthetic inline CSVs (no /home/user/uploads dependency) so these tests are
+// hermetic. E.26 remains the clean-sample pin (clean parse ⇒ []); J.1 is the
+// hermetic equivalent. The existing D-06-F1-A suites are unaffected.
+// ---------------------------------------------------------------------------
+
+describe('J. D-12 blockingErrors projection', () => {
+  const D12_HEADER = '"Instrument","Qty.","Avg. cost","LTP","Invested","Cur. val","P&L","Net chg.","Day chg.",""';
+
+  function d12Csv(...dataRows: string[]): string {
+    return [D12_HEADER, ...dataRows].join('\n');
+  }
+  function d12Preview(csv: string, fileName = 'd12.csv'): BrokerImportPreview {
+    const parsed = BrokerImportService.detectAndParse(asTextInput(csv, fileName));
+    return BrokerImportService.reconcile(parsed, []);
+  }
+  const QTY_BAD = '"BADQTY",abc,100,110,1000,1100,100,10,1,""';
+  const IDENTITY_MISSING = '"",10,100,110,1000,1100,100,10,1,""';
+  // Row numbering note: the Zerodha TEXT path numbers the first data row 3
+  // (walkRows `sourceRowOffset = 1` is applied on top of the header slice —
+  // an existing, adapter-frozen quirk; D-12 must not touch it). The
+  // projection faithfully carries whatever rowNumber the issue carries.
+  const QTY_BAD_PROJECTION =
+    'R3 [BROKER_NUMERIC_INVALID] Qty.: Qty. is not a parseable number: "abc"';
+  const IDENTITY_MISSING_PROJECTION =
+    'R4 [BROKER_IDENTITY_MISSING] Instrument is empty for this row';
+
+  it('J.1 clean parse (no issues at all) → blockingErrors = [] and eligible', () => {
+    // T1: no INVALID issues ⇒ empty projection. (Hermetic twin of E.26.)
+    const preview = d12Preview(d12Csv('"TESTINSTR",10,100,110,1000,1100,100,10,1,""'));
+    expect(preview.issues).toHaveLength(0);
+    expect(preview.blockingErrors).toEqual([]);
+    expect(preview.confirmationEligible).toBe(true);
+  });
+
+  it('J.2 one INVALID issue → exactly the D12-a projection string', () => {
+    // T2: format `R{rowNumber} [{code}] {field}: {message}` (field present)
+    // — asserted byte-exact (AC-07).
+    const preview = d12Preview(d12Csv(QTY_BAD));
+    expect(preview.blockingErrors).toEqual([QTY_BAD_PROJECTION]);
+  });
+
+  it('J.3 multiple INVALID issues → all projected, deterministic source order', () => {
+    // T3 + AC-04: emission order preserved, one entry per issue, no cap.
+    const preview = d12Preview(d12Csv(QTY_BAD, IDENTITY_MISSING));
+    expect(preview.blockingErrors).toEqual([
+      QTY_BAD_PROJECTION,
+      IDENTITY_MISSING_PROJECTION,
+    ]);
+    expect(preview.confirmationEligible).toBe(false);
+  });
+
+  it('J.4 fieldless INVALID row-number format and issue-order determinism across repeats', () => {
+    // AC-07 `field`-absent variant (`R{n} [{code}] {message}`) + determinism:
+    // the same input must yield the identical projection every run.
+    const preview = d12Preview(d12Csv(IDENTITY_MISSING));
+    expect(preview.blockingErrors).toEqual([
+      'R3 [BROKER_IDENTITY_MISSING] Instrument is empty for this row',
+    ]);
+    const again = d12Preview(d12Csv(IDENTITY_MISSING));
+    expect(again.blockingErrors).toEqual(preview.blockingErrors);
+  });
+
+  it('J.5 AMBIGUOUS-only issues never enter blockingErrors', () => {
+    // T4 + T5: the severity taxonomy has no separate 'WARNING' member;
+    // AMBIGUOUS is the warning class. A duplicate row (AMBIGUOUS
+    // BROKER_DUPLICATE_INSIDE_BATCH) must not project.
+    const preview = d12Preview(d12Csv(
+      '"DUP",10,100,110,1000,1100,100,10,1,""',
+      '"DUP",12,100,110,1000,1100,100,10,1,""',
+    ));
+    expect(
+      preview.issues.some(
+        (i) => i.severity === 'AMBIGUOUS' && i.code === 'BROKER_DUPLICATE_INSIDE_BATCH',
+      ),
+    ).toBe(true);
+    expect(preview.blockingErrors).toEqual([]);
+  });
+
+  it('J.6 mixed AMBIGUOUS + INVALID → only INVALID is projected', () => {
+    // T6 + AC-03/AC-05.
+    const preview = d12Preview(d12Csv(
+      '"MIXED",10,100,110,1000,1100,100,10,1,""',
+      '"MIXED",12,100,110,1000,1100,100,10,1,""',
+      QTY_BAD,
+    ));
+    expect(preview.issues.some((i) => i.severity === 'AMBIGUOUS')).toBe(true);
+    expect(preview.blockingErrors).toEqual([
+      'R5 [BROKER_NUMERIC_INVALID] Qty.: Qty. is not a parseable number: "abc"',
+    ]);
+    expect(preview.confirmationEligible).toBe(false);
+  });
+
+  it('J.7 eligibility semantics unchanged: all-UNCHANGED → not eligible, no blockers', () => {
+    // T7 (AC-09): the pre-existing `INVALID-count === 0 && mutations > 0`
+    // rule is untouched; a no-op import is ineligible with an EMPTY
+    // projection (blockingErrors must not become a second gate).
+    const parsed = BrokerImportService.detectAndParse(
+      asTextInput(d12Csv('"TESTINSTR",10,100,110,1000,1100,100,10,1,""'), 'd12-unchanged.csv'),
+    );
+    repository.holdings.saveMany(parsed.holdings);
+    const preview = BrokerImportService.reconcile(parsed, repository.holdings.findAllSync());
+    expect(preview.blockingErrors).toEqual([]);
+    expect(preview.confirmationEligible).toBe(false);
+  });
+
+  it('J.8 D12-b preservation pin: header-only (AMBIGUOUS) + non-empty ledger stays eligible and unblocked', () => {
+    // T14 / AC-13: the suspicious-input behavior is governed by a SEPARATE
+    // decision and is unchanged by D-12 — pinned here as preservation, not
+    // as a fix. BROKER_HEADER_ONLY is AMBIGUOUS in every adapter, so the
+    // INVALID-only projection structurally cannot include it.
+    repository.holdings.saveMany([baseHolding({ broker: 'Zerodha', instrumentName: 'LegacyCorp' })]);
+    const parsed = {
+      broker: 'Zerodha',
+      account: undefined as string | undefined,
+      holdings: [],
+      sourceFile: 'header-only.csv',
+      importedAt: new Date().toISOString(),
+      issues: [
+        {
+          rowNumber: 1,
+          severity: 'AMBIGUOUS' as const,
+          code: 'BROKER_HEADER_ONLY' as const,
+          message: 'Zerodha file contains only the header row, no data',
+        },
+      ],
+    };
+    const preview = BrokerImportService.reconcile(parsed, repository.holdings.findAllSync());
+    expect(preview.blockingErrors).toEqual([]);
+    expect(preview.confirmationEligible).toBe(true);
+    expect(preview.closures).toHaveLength(1);
+  });
+
+  it('K.1 Batch 2 pin: reconcile filters closures strictly to status === active and matching (broker, account, productScope)', () => {
+    const existing: Holding[] = [
+      baseHolding({ id: 'h-eq-active', broker: 'Groww', account: 'UCC-1', instrumentName: 'Stock A', productScope: 'EQUITY', status: 'active' }),
+      baseHolding({ id: 'h-eq-closed', broker: 'Groww', account: 'UCC-1', instrumentName: 'Stock Closed', productScope: 'EQUITY', status: 'closed_absent' }),
+      baseHolding({ id: 'h-mf-active', broker: 'Groww', account: 'UCC-1', instrumentName: 'Fund A', productScope: 'MUTUAL_FUND', status: 'active' }),
+      baseHolding({ id: 'h-other-ucc', broker: 'Groww', account: 'UCC-2', instrumentName: 'Stock B', productScope: 'EQUITY', status: 'active' }),
+    ];
+    const parsed = {
+      broker: 'Groww',
+      account: 'UCC-1',
+      productScope: 'EQUITY' as const,
+      holdings: [],
+      sourceFile: 'Groww_Stocks_Empty.xlsx',
+      importedAt: '2026-08-25T10:00:00.000Z',
+      issues: [
+        {
+          rowNumber: 2,
+          severity: 'AMBIGUOUS' as const,
+          code: 'BROKER_HEADER_ONLY' as const,
+          message: 'Groww file contains only the header row, no data rows.',
+        },
+      ],
+    };
+    const preview = BrokerImportService.reconcile(parsed, existing);
+    expect(preview.closures).toHaveLength(1);
+    expect(preview.closures[0].existing.id).toBe('h-eq-active');
+  });
+});

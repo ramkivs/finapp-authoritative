@@ -1,4 +1,5 @@
 import { Sha256Service } from './Sha256Service';
+import { LedgerExclusionService } from './LedgerExclusionService';
 import { Transaction, TransactionOrigin } from '../domain/types';
 
 /**
@@ -94,6 +95,8 @@ export const FINGERPRINT_EXCLUDED_FIELDS = [
   'sourceProvider',
   'sourceFile',
   'sourceRowNumber',
+  'referenceNumber',
+  'closingBalance',
   'fingerprint'
 ] as const;
 
@@ -267,6 +270,129 @@ export class TransactionIdentityService {
   /** `'INCOME'`/`'Income'` are the same type; case is a legacy artefact. */
   private static normalizedType(tx: Transaction): string {
     return String(tx.type || '').toUpperCase();
+  }
+
+  /* ─────────────── DEF-14 / DEF-15: bank duplicate disambiguation ─────────── */
+
+  /**
+   * Normalizes a bank statement reference / cheque / UTR identifier.
+   * Empty strings, dashes, NIL/NA placeholders, and all-zero placeholders are
+   * treated as absent (`null`) so they never falsely distinguish or collide rows.
+   */
+  static normalizeReferenceNumber(raw?: string | null): string | null {
+    if (raw === undefined || raw === null) return null;
+    const trimmed = String(raw).trim();
+    if (!trimmed) return null;
+    if (/^(?:-+|na|n\/a|nil|null|none)$/i.test(trimmed)) return null;
+    if (/^0+$/.test(trimmed)) return null;
+    if (/^\d+$/.test(trimmed)) {
+      return trimmed.replace(/^0+/, '');
+    }
+    return trimmed.toUpperCase();
+  }
+
+  /**
+   * Determines whether `candidate` and `existing` can represent the same
+   * underlying bank ledger entry once their fingerprints match.
+   *
+   * - Fingerprints (`account|date|amount|narration`) MUST match.
+   * - If BOTH carry a meaningful `referenceNumber` and they differ, they are
+   *   proven distinct transactions (e.g., two same-day UPI payments with
+   *   distinct UTRs). If either lacks a `referenceNumber` (e.g., cross-format
+   *   Generic CSV vs native bank statement, or manual entry vs bank import),
+   *   they remain compatible so cross-format deduplication stays intact.
+   * - If neither carries a conflicting `referenceNumber`, and BOTH carry a
+   *   valid finite `closingBalance` that differs by >= 0.01, they represent two
+   *   distinct sequential entries on the statement rather than a re-import of
+   *   the same entry.
+   */
+  static isDuplicateMatch(candidate: Transaction, existing: Transaction): boolean {
+    if (this.fingerprintOf(candidate) !== this.fingerprintOf(existing)) {
+      return false;
+    }
+
+    const candRef = this.normalizeReferenceNumber(candidate.referenceNumber);
+    const existRef = this.normalizeReferenceNumber(existing.referenceNumber);
+    if (candRef && existRef) {
+      return candRef === existRef;
+    }
+
+    const candBal = candidate.closingBalance;
+    const existBal = existing.closingBalance;
+    if (
+      typeof candBal === 'number' &&
+      Number.isFinite(candBal) &&
+      typeof existBal === 'number' &&
+      Number.isFinite(existBal)
+    ) {
+      return Math.abs(candBal - existBal) < 0.005;
+    }
+
+    return true;
+  }
+
+  /**
+   * Builds a fingerprint-keyed pool of LIVE (non-excluded) transactions.
+   * Excluded rows (`IMPORT_ROLLBACK`, `SUPERSEDED`) are omitted so rolled-back
+   * or superseded records never block a valid re-import (`DEF-14`, `DEF-15`).
+   */
+  static buildLiveDuplicatePool(existingTransactions: Transaction[]): Map<string, Transaction[]> {
+    const pool = new Map<string, Transaction[]>();
+    for (const tx of existingTransactions) {
+      if (LedgerExclusionService.isExcluded(tx)) continue;
+      const fp = this.fingerprintOf(tx);
+      const bucket = pool.get(fp);
+      if (bucket) {
+        bucket.push(tx);
+      } else {
+        pool.set(fp, [tx]);
+      }
+    }
+    return pool;
+  }
+
+  /**
+   * Appends a newly accepted transaction into a duplicate pool bucket.
+   */
+  static addToDuplicatePool(tx: Transaction, pool: Map<string, Transaction[]>): void {
+    const fp = this.fingerprintOf(tx);
+    const bucket = pool.get(fp);
+    if (bucket) {
+      bucket.push(tx);
+    } else {
+      pool.set(fp, [tx]);
+    }
+  }
+
+  /**
+   * Finds and consumes at most ONE matching transaction from `pool` (1-to-1
+   * multiset matching). Prefer exact reference/balance matches first so mixed
+   * buckets pair deterministically before falling back to compatible entries.
+   */
+  static consumeDuplicateFromPool(
+    candidate: Transaction,
+    pool: Map<string, Transaction[]>
+  ): Transaction | null {
+    const fp = this.fingerprintOf(candidate);
+    const bucket = pool.get(fp);
+    if (!bucket || bucket.length === 0) return null;
+
+    const candRef = this.normalizeReferenceNumber(candidate.referenceNumber);
+    if (candRef) {
+      const exactRefIdx = bucket.findIndex(
+        ex => this.normalizeReferenceNumber(ex.referenceNumber) === candRef
+      );
+      if (exactRefIdx !== -1) {
+        const [matched] = bucket.splice(exactRefIdx, 1);
+        return matched;
+      }
+    }
+
+    const matchIdx = bucket.findIndex(ex => this.isDuplicateMatch(candidate, ex));
+    if (matchIdx === -1) return null;
+
+    const [matched] = bucket.splice(matchIdx, 1);
+    return matched;
   }
 
   /* ─────────────────── P-1: transaction id uniqueness ─────────────────── */

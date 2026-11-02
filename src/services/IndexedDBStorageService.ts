@@ -188,6 +188,20 @@ export class IndexedDBStorageService {
   /** True when the most recent load attempt failed. */
   static get loadFailed(): boolean { return this.lastLoadFailed; }
 
+  /**
+   * D-06-F1-A recovery correction — is the ledger currently in the
+   * failed-load / write-refusal state the user can be offered recovery for?
+   *
+   * The write guard at `performSave` fires ONLY while `lastLoadFailed` is
+   * set, so this is the authoritative check behind a "Refusing to persist:
+   * the last IndexedDB load failed…" Confirm failure. It is intentionally
+   * not message-text sniffing: the latch is the state, the message is its
+   * echo.
+   */
+  static isLedgerLoadRefusal(): boolean {
+    return this.lastLoadFailed;
+  }
+
   static enqueueSave<T>(task: () => Promise<T>): Promise<T> {
     const resultPromise = this.mutex.then(() => task());
     this.mutex = resultPromise.then(() => {}).catch(() => {});
@@ -440,12 +454,12 @@ export class IndexedDBStorageService {
         // Not a failure: this environment has no IndexedDB by design.
         this.lastLoadFailed = false;
         return {
-          transactions: [...this.nodeFallbackStore.transactions],
-          assets: [...this.nodeFallbackStore.assets],
-          liabilities: [...this.nodeFallbackStore.liabilities],
-          holdings: [...this.nodeFallbackStore.holdings],
-          holdingDeletionLog: [...this.nodeFallbackStore.holdingDeletionLog],
-          snapshots: [...this.nodeFallbackStore.snapshots],
+          transactions: [...(this.nodeFallbackStore.transactions ?? [])],
+          assets: [...(this.nodeFallbackStore.assets ?? [])],
+          liabilities: [...(this.nodeFallbackStore.liabilities ?? [])],
+          holdings: [...(this.nodeFallbackStore.holdings ?? [])],
+          holdingDeletionLog: [...(this.nodeFallbackStore.holdingDeletionLog ?? [])],
+          snapshots: [...(this.nodeFallbackStore.snapshots ?? [])],
           accounts: [...this.nodeFallbackStore.accounts],
           budgets: [...this.nodeFallbackStore.budgets],
           policies: [...this.nodeFallbackStore.policies],
@@ -587,6 +601,8 @@ export class IndexedDBStorageService {
         );
       }
 
+      const holdings = state.holdings || [];
+      const holdingDeletionLog = state.holdingDeletionLog || [];
       const accounts = state.accounts || [];
       const budgets = state.budgets || [];
       const policies = state.policies || [];
@@ -617,6 +633,8 @@ export class IndexedDBStorageService {
         ['transactions', state.transactions],
         ['assets', state.assets],
         ['liabilities', state.liabilities],
+        ['holdings', holdings],
+        ['holdingDeletionLog', holdingDeletionLog],
         ['snapshots', state.snapshots],
         ['accounts', accounts],
         ['budgets', budgets],
@@ -630,8 +648,8 @@ export class IndexedDBStorageService {
           transactions: [...state.transactions],
           assets: [...state.assets],
           liabilities: [...state.liabilities],
-          holdings: [...(state.holdings ?? [])],
-          holdingDeletionLog: [...(state.holdingDeletionLog ?? [])],
+          holdings: [...holdings],
+          holdingDeletionLog: [...holdingDeletionLog],
           snapshots: [...state.snapshots],
           accounts: [...accounts],
           budgets: [...budgets],
