@@ -21,8 +21,10 @@
  *   reconciliation is the import-service's responsibility (WP-08).
  */
 
-import { Holding, HoldingStatus } from '../../domain/types';
+import { Holding, HoldingProductScope, HoldingStatus } from '../../domain/types';
 import { ImportRowIssue, ParsedCsvRow, StatementInput } from './ImportTypes';
+
+export type BrokerProductScope = HoldingProductScope;
 
 /**
  * Broker-specific error codes. Extends the bank-adapter taxonomy
@@ -75,6 +77,7 @@ export interface BrokerDetectionResult {
 export interface BrokerParseOutput {
   broker: string;
   account?: string;
+  productScope?: BrokerProductScope;
   holdings: Holding[];
   sourceFile: string;
   importedAt: string;

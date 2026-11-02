@@ -41,7 +41,7 @@ import { MemoryHoldingRepository } from '../repositories/MemoryHoldingRepository
 import { repository } from '../repositories';
 import { BrokerFormatDetector } from './import/BrokerFormatDetector';
 import { ImportRowIssue, ParsedCsvRow, StatementInput } from './import/ImportTypes';
-import { BrokerParseOutput } from './import/BrokerAdapter';
+import { BrokerParseOutput, BrokerProductScope } from './import/BrokerAdapter';
 
 // ---------------------------------------------------------------------------
 // PUBLIC TYPES
@@ -72,6 +72,8 @@ export interface BrokerImportPreview {
   broker: string;
   /** Account identifier (e.g. "6995348108") or undefined for Dhan Equity. */
   account: string | undefined;
+  /** Statement product scope ('EQUITY' | 'MUTUAL_FUND') scoping closures. */
+  productScope: BrokerProductScope;
   /** Source filename supplied to the parser. */
   sourceFile: string;
   /** Canonical `importedAt` timestamp (parser execution time, or Dhan Equity's `max(Trade Date)`). */
@@ -94,6 +96,20 @@ export interface BrokerImportPreview {
   };
   /** True iff there are no blocking errors AND at least one mutation exists. */
   confirmationEligible: boolean;
+}
+
+/**
+ * Full preview/parse context passed into `commitImportedHoldings` so that
+ * broker, account, productScope, sourceFile, and importedAt are preserved
+ * even on valid header-only zero-row exports (`holdings: []`).
+ */
+export interface BrokerImportCommitContext {
+  broker: string;
+  account?: string;
+  productScope?: BrokerProductScope;
+  sourceFile: string;
+  importedAt: string;
+  holdings: Holding[];
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +173,13 @@ export class BrokerImportService {
     parsed: BrokerParseOutput,
     existing: readonly Holding[],
   ): BrokerImportPreview {
+    const targetBroker = (parsed.broker ?? '').trim();
+    const targetAccount =
+      parsed.account !== undefined && parsed.account.trim() !== ''
+        ? parsed.account
+        : undefined;
+    const targetProductScope = this.resolveParseProductScope(parsed);
+
     // Build an index of existing holdings by identity for O(N) lookup.
     const existingByIdentity = new Map<string, Holding>();
     for (const h of existing) {
@@ -168,7 +191,11 @@ export class BrokerImportService {
     // Reconcile each candidate.
     const entries: BrokerImportPreviewEntry[] = [];
     const parsedIdentities = new Set<string>();
-    for (const candidate of parsed.holdings) {
+    for (const rawCandidate of parsed.holdings) {
+      const candidate =
+        rawCandidate.productScope === undefined && parsed.productScope !== undefined
+          ? { ...rawCandidate, productScope: parsed.productScope }
+          : rawCandidate;
       const key = this.identityKey(candidate);
       parsedIdentities.add(key);
       const existingHit = existingByIdentity.get(key) ?? null;
@@ -181,14 +208,25 @@ export class BrokerImportService {
       entries.push({ candidate, classification, existing: existingHit, differs });
     }
 
-    // Compute CLOSED_ABSENT: existing holdings for this broker, NOT in the
-    // parsed set. This includes reactivatable closed_absent holdings.
+    // Compute CLOSED_ABSENT strictly for active holdings within the exact
+    // (broker, account, productScope) scope that are absent from the parsed set.
+    // Previously closed_absent holdings must never be closed again (DEF-01),
+    // and closures must never cross accounts or EQUITY/MUTUAL_FUND (DEF-02).
     const closures: BrokerImportPreviewClosure[] = [];
-    for (const h of existing) {
-      if (h.broker !== parsed.broker) continue;
-      const key = this.identityKey(h);
-      if (parsedIdentities.has(key)) continue;
-      closures.push({ existing: h, classification: 'CLOSED_ABSENT' });
+    if (targetBroker !== '' && targetBroker !== 'Unknown') {
+      for (const h of existing) {
+        if (h.status !== 'active') continue;
+        if (h.broker !== parsed.broker) continue;
+        const holdingAccount =
+          h.account !== undefined && h.account.trim() !== ''
+            ? h.account
+            : undefined;
+        if (holdingAccount !== targetAccount) continue;
+        if (this.resolveHoldingProductScope(h) !== targetProductScope) continue;
+        const key = this.identityKey(h);
+        if (parsedIdentities.has(key)) continue;
+        closures.push({ existing: h, classification: 'CLOSED_ABSENT' });
+      }
     }
 
     // Tally counts.
@@ -229,7 +267,8 @@ export class BrokerImportService {
 
     return {
       broker: parsed.broker,
-      account: parsed.account,
+      account: targetAccount,
+      productScope: targetProductScope,
       sourceFile: parsed.sourceFile,
       importedAt: parsed.importedAt,
       entries,
@@ -362,6 +401,54 @@ export class BrokerImportService {
   // -------------------------------------------------------------------------
 
   /**
+   * Resolve the product scope ('EQUITY' | 'MUTUAL_FUND') of a persisted or
+   * candidate Holding. Prefers explicit `h.productScope` when present, falling
+   * back deterministically to broker/instrument signals for legacy persisted
+   * holdings and synthetic test records created without `productScope`.
+   */
+  static resolveHoldingProductScope(h: Holding): BrokerProductScope {
+    if (h.productScope === 'EQUITY' || h.productScope === 'MUTUAL_FUND') {
+      return h.productScope;
+    }
+    if (h.xirrPercent !== undefined) return 'MUTUAL_FUND';
+    if ((h.isin && h.isin.trim() !== '') || (h.ticker && h.ticker.trim() !== '')) {
+      return 'EQUITY';
+    }
+    if ((h.broker === 'Dhan' || h.broker === 'Groww') && h.securityClassification !== undefined) {
+      return 'MUTUAL_FUND';
+    }
+    if (
+      h.broker === 'Zerodha' &&
+      /(mutual[_ -]?funds?|\bmf\b|\bcoin\b|\bfof\b|\bindex fund\b|\bdirect\b|\bgrowth\b)/i.test(
+        `${h.instrumentName ?? ''} ${h.sourceFile ?? ''}`,
+      )
+    ) {
+      return 'MUTUAL_FUND';
+    }
+    return 'EQUITY';
+  }
+
+  /**
+   * Resolve the product scope ('EQUITY' | 'MUTUAL_FUND') of a BrokerParseOutput,
+   * preserving explicit adapter scope (including on header-only zero-row exports)
+   * and inferring deterministically when omitted by synthetic callers.
+   */
+  static resolveParseProductScope(parsed: BrokerParseOutput): BrokerProductScope {
+    if (parsed.productScope === 'EQUITY' || parsed.productScope === 'MUTUAL_FUND') {
+      return parsed.productScope;
+    }
+    if (parsed.holdings.length > 0) {
+      const explicit = parsed.holdings.find((h) => h.productScope !== undefined)?.productScope;
+      if (explicit) return explicit;
+      const allMf = parsed.holdings.every((h) => this.resolveHoldingProductScope(h) === 'MUTUAL_FUND');
+      return allMf ? 'MUTUAL_FUND' : 'EQUITY';
+    }
+    return /(mutual[_ -]?funds?|\bmf\b|\bcoin\b)/i.test(parsed.sourceFile ?? '')
+      ? 'MUTUAL_FUND'
+      : 'EQUITY';
+  }
+
+  /**
    * Build a stable identity key for a Holding. The key is NOT the canonical
    * identity (that's what `HoldingIdentityService.identityOf` computes) but
    * a stringified form usable as a Map key. The string form mirrors the
@@ -371,7 +458,8 @@ export class BrokerImportService {
    */
   private static identityKey(h: Holding): string {
     const broker = h.broker;
-    const account = h.account === undefined ? '__UNDEFINED__' : h.account;
+    const account =
+      h.account === undefined || h.account.trim() === '' ? '__UNDEFINED__' : h.account;
     let instrument: string;
     if (h.isin && h.isin.trim() !== '') {
       instrument = `ISIN:${h.isin.trim()}`;

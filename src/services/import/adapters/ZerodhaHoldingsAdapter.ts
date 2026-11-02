@@ -56,6 +56,7 @@ import {
   BrokerAdapter,
   BrokerDetectionResult,
   BrokerParseOutput,
+  BrokerProductScope,
 } from '../BrokerAdapter';
 import {
   ImportIssueSeverity,
@@ -235,7 +236,7 @@ export class ZerodhaHoldingsAdapter implements BrokerAdapter {
     if (records.length === 1) {
       issues.push(this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
         'Zerodha file contains only the header row, no data'));
-      return this.emptyOutput(fileName, issues);
+      return this.emptyOutput(fileName, issues, this.inferProductScope([], fileName));
     }
 
     return this.walkRows(headerNormalised, records.slice(1), fileName, /* sourceRowOffset */ 1);
@@ -255,6 +256,11 @@ export class ZerodhaHoldingsAdapter implements BrokerAdapter {
     sourceRowOffset = 0,
   ): BrokerParseOutput {
     const issues: ImportRowIssue[] = [];
+    if (dataRows.length === 0) {
+      issues.push(this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+        'Zerodha file contains only the header row, no data'));
+      return this.emptyOutput(fileName, issues, this.inferProductScope([], fileName));
+    }
     const holdings: Holding[] = [];
     const seen = new Set<string>(); // for BROKER_DUPLICATE_INSIDE_BATCH
 
@@ -425,10 +431,14 @@ export class ZerodhaHoldingsAdapter implements BrokerAdapter {
       holdings.push(holding);
     });
 
+    const productScope = this.inferProductScope(holdings, fileName);
+    const scopedHoldings = holdings.map((h) => ({ ...h, productScope }));
+
     return {
       broker: 'Zerodha',
       account: undefined,
-      holdings,
+      productScope,
+      holdings: scopedHoldings,
       sourceFile: fileName,
       importedAt,
       issues,
@@ -637,10 +647,24 @@ export class ZerodhaHoldingsAdapter implements BrokerAdapter {
     };
   }
 
-  private emptyOutput(fileName: string, issues: ImportRowIssue[]): BrokerParseOutput {
+  private inferProductScope(holdings: readonly Holding[], fileName: string): BrokerProductScope {
+    if (holdings.length > 0) {
+      return holdings.some((h) => h.ticker !== undefined) ? 'EQUITY' : 'MUTUAL_FUND';
+    }
+    return /(mutual[_ -]?funds?|\bmf\b|\bcoin\b)/i.test(fileName ?? '')
+      ? 'MUTUAL_FUND'
+      : 'EQUITY';
+  }
+
+  private emptyOutput(
+    fileName: string,
+    issues: ImportRowIssue[],
+    productScope?: BrokerProductScope,
+  ): BrokerParseOutput {
     return {
       broker: 'Zerodha',
       account: undefined,
+      ...(productScope !== undefined ? { productScope } : {}),
       holdings: [],
       sourceFile: fileName,
       importedAt: new Date().toISOString(),

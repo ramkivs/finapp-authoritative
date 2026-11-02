@@ -559,6 +559,8 @@ export interface BatchRollbackResultShape {
 
 export type HoldingStatus = 'active' | 'closed_absent';
 
+export type HoldingProductScope = 'EQUITY' | 'MUTUAL_FUND';
+
 export interface Holding {
   /** Authoritative persisted identity. Prefix `hld-`. Survives renames. */
   id: string;
@@ -647,6 +649,13 @@ export interface Holding {
    * for WP-07.
    */
   securityClassification?: string;
+
+  /**
+   * Statement product scope ('EQUITY' | 'MUTUAL_FUND') emitted by the broker
+   * adapter and preserved across updates so reconciliation closures never
+   * cross Equity and Mutual Fund exports for the same broker/account.
+   */
+  productScope?: HoldingProductScope;
 
   // === LIFECYCLE ===
 

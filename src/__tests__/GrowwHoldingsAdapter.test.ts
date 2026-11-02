@@ -741,3 +741,56 @@ describe('WP-09 detection tightening — full-column validation in binary path',
     }
   });
 });
+
+describe('Batch 2 — Step 3 & Step 4: Groww optional XIRR AMBIGUOUS & zero-row scope preservation (DEF-06, DEF-09)', () => {
+  it('DEF-06: Groww MF files with "--" or "N/A" XIRR emit AMBIGUOUS (non-blocking) and remain confirmation-eligible', async () => {
+    const XLSX = await import('xlsx');
+    const { BrokerImportService } = await import('../services/BrokerImportService');
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.aoa_to_sheet([
+        ['Name', 'Synthetic User'],
+        ['Mobile Number', '7395930735'],
+        ['Scheme Name', 'AMC', 'Category', 'Sub-category', 'Folio No.', 'Source', 'Units', 'Invested Value', 'Current Value', 'Returns', 'XIRR', ''],
+        ['Scheme Dash', 'AMC A', 'Equity', 'Flexi Cap', '111', 'Groww', '10', '1000', '1100', '100', '--', ''],
+        ['Scheme NA', 'AMC B', 'Debt', 'Liquid', '222', 'Groww', '20', '2000', '2050', '50', 'N/A', ''],
+      ]),
+      'Holdings',
+    );
+    const bytes = new Uint8Array(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+    const parsed = BrokerImportService.detectAndParse(asBinaryInput(bytes, 'groww-mf-dash-na.xlsx'));
+    expect(parsed.holdings).toHaveLength(2);
+    expect(parsed.holdings.every((h) => h.xirrPercent === undefined)).toBe(true);
+    expect(parsed.issues).toHaveLength(2);
+    expect(parsed.issues.every((i) => i.severity === 'AMBIGUOUS' && i.field === 'XIRR')).toBe(true);
+
+    const preview = BrokerImportService.reconcile(parsed, []);
+    expect(preview.blockingErrors).toEqual([]);
+    expect(preview.confirmationEligible).toBe(true);
+  });
+
+  it('DEF-09: Groww header-only Stocks and MF files preserve account and productScope', () => {
+    const adapter = new GrowwHoldingsAdapter();
+    const stocksOut = adapter.parseHoldingsFromRows(
+      [
+        { rowNumber: 1, data: {}, rawFields: ['Unique Client Code', '6995348108'] },
+        { rowNumber: 2, data: {}, rawFields: ['Stock Name', 'ISIN', 'Quantity', 'Average buy price', 'Buy value', 'Closing price', 'Closing value', 'Unrealised P&L'] },
+      ],
+      'empty-stocks.xlsx',
+    );
+    expect(stocksOut.account).toBe('6995348108');
+    expect(stocksOut.productScope).toBe('EQUITY');
+
+    const mfOut = adapter.parseHoldingsFromRows(
+      [
+        { rowNumber: 1, data: {}, rawFields: ['Mobile Number', '7395930735'] },
+        { rowNumber: 2, data: {}, rawFields: ['Scheme Name', 'AMC', 'Category', 'Sub-category', 'Folio No.', 'Source', 'Units', 'Invested Value', 'Current Value', 'Returns', 'XIRR', ''] },
+      ],
+      'empty-mf.xlsx',
+    );
+    expect(mfOut.account).toBe('7395930735');
+    expect(mfOut.productScope).toBe('MUTUAL_FUND');
+  });
+});

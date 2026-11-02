@@ -374,4 +374,60 @@ describe('D-12 blocking-error preview surface', () => {
     expect(findButtonByText('Confirm import')!.disabled).toBe(true);
     expect(document.body.textContent).not.toContain('Import anyway');
   });
+
+  it('DEF-09.UI: confirming a valid header-only zero-row export passes full preview context and closes only matching active holdings', async () => {
+    const eqActive = makeHolding({
+      id: 'hld-z-eq-1',
+      broker: 'Zerodha',
+      ticker: 'RELIANCE',
+      instrumentName: 'RELIANCE',
+      productScope: 'EQUITY',
+    });
+    const mfActive = makeHolding({
+      id: 'hld-z-mf-1',
+      broker: 'Zerodha',
+      isin: undefined,
+      ticker: undefined,
+      instrumentName: 'Zerodha Nifty LargeMidcap 250 Index Fund',
+      productScope: 'MUTUAL_FUND',
+    });
+    const alreadyClosed = makeHolding({
+      id: 'hld-z-eq-closed',
+      broker: 'Zerodha',
+      ticker: 'TCS',
+      instrumentName: 'TCS',
+      productScope: 'EQUITY',
+      status: 'closed_absent',
+      importedAt: '2026-08-20T00:00:00.000Z',
+    });
+    repository.holdings.saveMany([eqActive, mfActive, alreadyClosed]);
+    S().syncWithRepository({
+      transactions: [],
+      assets: [],
+      liabilities: [],
+      holdings: repo.holdingsData,
+      snapshots: [],
+      accounts: [],
+      budgets: [],
+      policies: [],
+      goals: [],
+      profile: null,
+    });
+
+    render(<BrokerImportSection />);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const headerOnlyZerodhaEq = '"Instrument","Qty.","Avg. cost","LTP","Invested","Cur. val","P&L","Net chg.","Day chg.",""\n';
+    await uploadCsv(fileInput, 'Zerodha_holdings_empty.csv', headerOnlyZerodhaEq);
+
+    const confirmBtn = findButtonByText('Confirm import');
+    expect(confirmBtn).toBeDefined();
+    expect(confirmBtn!.disabled).toBe(false);
+    fireEvent.click(confirmBtn!);
+
+    await screen.findByText(/Imported 0 new, 0 updated, 1 closed-absent, 0 unchanged\./);
+    const live = S().holdings as Holding[];
+    expect(live.find((h) => h.id === 'hld-z-eq-1')!.status).toBe('closed_absent');
+    expect(live.find((h) => h.id === 'hld-z-mf-1')!.status).toBe('active');
+    expect(live.find((h) => h.id === 'hld-z-eq-closed')!.importedAt).toBe('2026-08-20T00:00:00.000Z');
+  });
 });

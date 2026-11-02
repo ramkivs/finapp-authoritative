@@ -149,7 +149,7 @@ describe('A. Detection', () => {
       asTextInput(loadText(SAMPLE_DHAN_MF_CSV), 'Dhan_MF_Report_23-08-2026.csv'),
     );
     expect(parsed.broker).toBe('Dhan');
-    expect(parsed.account).toBe('IQCX28849K');
+    expect(parsed.account).toBe('SYNTHUCC01');
     expect(parsed.holdings).toHaveLength(6);
   });
 
@@ -158,7 +158,7 @@ describe('A. Detection', () => {
       asBinaryInput(loadBytes(SAMPLE_DHAN_MF_XLSX), 'Dhan_MF_Report_23-08-2026.xlsx'),
     );
     expect(parsed.broker).toBe('Dhan');
-    expect(parsed.account).toBe('IQCX28849K');
+    expect(parsed.account).toBe('SYNTHUCC01');
     expect(parsed.holdings).toHaveLength(6);
   });
 });
@@ -343,7 +343,7 @@ describe('D. Identity', () => {
   });
 
   it('D.22 account separation — same broker/instrument but different accounts are distinct', () => {
-    const a: Holding = baseHolding({ broker: 'Dhan', account: 'IQCX28849K', instrumentName: 'A' });
+    const a: Holding = baseHolding({ broker: 'Dhan', account: 'SYNTHUCC01', instrumentName: 'A' });
     const b: Holding = baseHolding({ broker: 'Dhan', account: 'OTHER', instrumentName: 'A' });
     expect(HoldingIdentityService.sameIdentity(a, b)).toBe(false);
   });
@@ -744,6 +744,7 @@ function baseHolding(overrides: Partial<Holding> = {}): Holding {
     unrealisedPnLPercent: overrides.unrealisedPnLPercent,
     xirrPercent: overrides.xirrPercent,
     securityClassification: overrides.securityClassification,
+    ...(overrides.productScope !== undefined ? { productScope: overrides.productScope } : {}),
     status: overrides.status ?? 'active' as HoldingStatus,
     sourceFile: overrides.sourceFile ?? 'test.csv',
     importedAt: overrides.importedAt ?? '2026-08-23T10:00:00.000Z',
@@ -885,5 +886,33 @@ describe('J. D-12 blockingErrors projection', () => {
     expect(preview.blockingErrors).toEqual([]);
     expect(preview.confirmationEligible).toBe(true);
     expect(preview.closures).toHaveLength(1);
+  });
+
+  it('K.1 Batch 2 pin: reconcile filters closures strictly to status === active and matching (broker, account, productScope)', () => {
+    const existing: Holding[] = [
+      baseHolding({ id: 'h-eq-active', broker: 'Groww', account: 'UCC-1', instrumentName: 'Stock A', productScope: 'EQUITY', status: 'active' }),
+      baseHolding({ id: 'h-eq-closed', broker: 'Groww', account: 'UCC-1', instrumentName: 'Stock Closed', productScope: 'EQUITY', status: 'closed_absent' }),
+      baseHolding({ id: 'h-mf-active', broker: 'Groww', account: 'UCC-1', instrumentName: 'Fund A', productScope: 'MUTUAL_FUND', status: 'active' }),
+      baseHolding({ id: 'h-other-ucc', broker: 'Groww', account: 'UCC-2', instrumentName: 'Stock B', productScope: 'EQUITY', status: 'active' }),
+    ];
+    const parsed = {
+      broker: 'Groww',
+      account: 'UCC-1',
+      productScope: 'EQUITY' as const,
+      holdings: [],
+      sourceFile: 'Groww_Stocks_Empty.xlsx',
+      importedAt: '2026-08-25T10:00:00.000Z',
+      issues: [
+        {
+          rowNumber: 2,
+          severity: 'AMBIGUOUS' as const,
+          code: 'BROKER_HEADER_ONLY' as const,
+          message: 'Groww file contains only the header row, no data rows.',
+        },
+      ],
+    };
+    const preview = BrokerImportService.reconcile(parsed, existing);
+    expect(preview.closures).toHaveLength(1);
+    expect(preview.closures[0].existing.id).toBe('h-eq-active');
   });
 });

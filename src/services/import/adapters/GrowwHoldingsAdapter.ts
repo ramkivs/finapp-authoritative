@@ -68,6 +68,7 @@ import {
   BrokerAdapter,
   BrokerDetectionResult,
   BrokerParseOutput,
+  BrokerProductScope,
 } from '../BrokerAdapter';
 import {
   ImportIssueSeverity,
@@ -328,10 +329,17 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
       ]);
     }
 
+    const productScope: BrokerProductScope =
+      variant === 'stocks' ? 'EQUITY' : 'MUTUAL_FUND';
+
     if (dataRows.length === 0) {
-      return this.emptyOutput(fileName, [
-        this.issue(rows[headerIdx].rowNumber, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
-          'Groww file contains only the header row, no data rows.')],
+      return this.emptyOutput(
+        fileName,
+        [
+          this.issue(rows[headerIdx].rowNumber, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+            'Groww file contains only the header row, no data rows.'),
+        ],
+        { account, productScope },
       );
     }
 
@@ -496,10 +504,17 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
           `Cannot locate the account identifier in the preamble (looking for "${decoded.variant === 'stocks' ? STOCKS_ACCOUNT_LABEL : MF_ACCOUNT_LABEL}").`)],
       );
     }
+    const productScope: BrokerProductScope =
+      decoded.variant === 'stocks' ? 'EQUITY' : 'MUTUAL_FUND';
+
     if (dataRows.length === 0) {
-      return this.emptyOutput(fileName, [
-        this.issue(headerIdx + 1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
-          'Groww file contains only the header row, no data rows.')],
+      return this.emptyOutput(
+        fileName,
+        [
+          this.issue(headerIdx + 1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+            'Groww file contains only the header row, no data rows.'),
+        ],
+        { account, productScope },
       );
     }
 
@@ -714,6 +729,7 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
         ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
         xirrPercent: undefined,
         securityClassification: undefined,
+        productScope: 'EQUITY',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt,
@@ -722,9 +738,15 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
       holdings.push(holding);
     });
 
+    if (holdings.length === 0 && issues.length === 0) {
+      issues.push(this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+        'Groww file contains only the header row, no data rows.'));
+    }
+
     return {
       broker: 'Groww',
       account,
+      productScope: 'EQUITY',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -861,6 +883,7 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
         ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
         xirrPercent: undefined,
         securityClassification: undefined,
+        productScope: 'EQUITY',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt,
@@ -869,9 +892,15 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
       holdings.push(holding);
     });
 
+    if (holdings.length === 0 && issues.length === 0) {
+      issues.push(this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+        'Groww file contains only the header row, no data rows.'));
+    }
+
     return {
       broker: 'Groww',
       account,
+      productScope: 'EQUITY',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -977,7 +1006,7 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
       } else {
         const parsed = parseGrowwPercent(xirrRaw);
         if (parsed === null) {
-          issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_NUMERIC_INVALID',
             `XIRR is not a parseable percent string: ${JSON.stringify(xirrRaw)}`,
             'XIRR', xirrRaw));
           xirrPercent = undefined;
@@ -1045,6 +1074,7 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
         ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
         ...(xirrPercent !== undefined ? { xirrPercent } : {}),
         ...(securityClassification !== undefined ? { securityClassification } : {}),
+        productScope: 'MUTUAL_FUND',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt,
@@ -1053,9 +1083,15 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
       holdings.push(holding);
     });
 
+    if (holdings.length === 0 && issues.length === 0) {
+      issues.push(this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+        'Groww file contains only the header row, no data rows.'));
+    }
+
     return {
       broker: 'Groww',
       account,
+      productScope: 'MUTUAL_FUND',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -1135,7 +1171,7 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
       } else {
         const parsed = parseGrowwPercent(xirrRaw);
         if (parsed === null) {
-          issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_NUMERIC_INVALID',
             `XIRR is not a parseable percent string: ${JSON.stringify(xirrRaw)}`,
             'XIRR', xirrRaw));
           xirrPercent = undefined;
@@ -1199,6 +1235,7 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
         ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
         ...(xirrPercent !== undefined ? { xirrPercent } : {}),
         ...(securityClassification !== undefined ? { securityClassification } : {}),
+        productScope: 'MUTUAL_FUND',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt,
@@ -1207,9 +1244,15 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
       holdings.push(holding);
     });
 
+    if (holdings.length === 0 && issues.length === 0) {
+      issues.push(this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+        'Groww file contains only the header row, no data rows.'));
+    }
+
     return {
       broker: 'Groww',
       account,
+      productScope: 'MUTUAL_FUND',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -1231,10 +1274,15 @@ export class GrowwHoldingsAdapter implements BrokerAdapter {
     };
   }
 
-  private emptyOutput(fileName: string, issues: ImportRowIssue[]): BrokerParseOutput {
+  private emptyOutput(
+    fileName: string,
+    issues: ImportRowIssue[],
+    opts?: { account?: string; productScope?: BrokerProductScope },
+  ): BrokerParseOutput {
     return {
       broker: 'Groww',
-      account: undefined,
+      account: opts?.account,
+      ...(opts?.productScope !== undefined ? { productScope: opts.productScope } : {}),
       holdings: [],
       sourceFile: fileName,
       importedAt: new Date().toISOString(),

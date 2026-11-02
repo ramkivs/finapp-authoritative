@@ -395,7 +395,14 @@ export const BrokerImportSection: React.FC = () => {
     setStorageRecovery('unavailable');
     setStorageRecoveryError(null);
     try {
-      const outcome = commitImportedHoldings(preview.entries.map((e) => e.candidate));
+      const outcome = commitImportedHoldings({
+        broker: preview.broker,
+        account: preview.account,
+        productScope: preview.productScope,
+        sourceFile: preview.sourceFile,
+        importedAt: preview.importedAt,
+        holdings: preview.entries.map((e) => e.candidate),
+      });
       // outcome.persisted is the atomic write promise. Await it so we can
       // render the success/failure state correctly.
       if (outcome.persisted) {

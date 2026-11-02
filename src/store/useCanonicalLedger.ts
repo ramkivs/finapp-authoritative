@@ -28,7 +28,11 @@ import { TransactionFactory } from '../domain/TransactionFactory';
 import { AccountResolutionService } from '../services/AccountResolutionService';
 import { AccountAssetLinkService, LinkResult } from '../services/AccountAssetLinkService';
 import { TransactionSignService } from '../services/TransactionSignService';
-import { BrokerImportService } from '../services/BrokerImportService';
+import {
+  BrokerImportService,
+  BrokerImportCommitContext,
+  BrokerImportPreview,
+} from '../services/BrokerImportService';
 import { HoldingDeletionService } from '../services/HoldingDeletionService';
 import { HoldingLifecycleService, HoldingLifecycleError } from '../services/HoldingLifecycleService';
 import { IndexedDBStorageService } from '../services/IndexedDBStorageService';
@@ -203,7 +207,10 @@ interface LedgerState {
    * The returned `ImportCommitOutcome`-shaped result is synchronous (counts)
    * with a `persisted` promise for the caller to await.
    */
-  commitImportedHoldings: (parsed: Holding[]) => ImportCommitOutcome;
+  commitImportedHoldings: (
+    parsed: Holding[] | BrokerImportCommitContext | BrokerImportPreview,
+    context?: Omit<BrokerImportCommitContext, 'holdings'>,
+  ) => ImportCommitOutcome;
 
   /**
    * FINBOOM-CR (CR-STANDARD-IMPORT) — Requirement #1 Standard Import commit.
@@ -876,16 +883,40 @@ export const useCanonicalLedger = create<LedgerState>((set, get) => ({
    *     handles in-memory and IndexedDB rollback; the rejection is surfaced
    *     to the caller for UI display).
    */
-  commitImportedHoldings: (parsed) => {
+  commitImportedHoldings: (parsed, context) => {
     const existing = get().holdings;
-    const parsedOutput = {
-      broker: parsed.length > 0 ? parsed[0].broker : 'Unknown',
-      account: parsed.length > 0 ? parsed[0].account : undefined,
-      holdings: parsed,
-      sourceFile: parsed.length > 0 ? parsed[0].sourceFile : '',
-      importedAt: parsed.length > 0 ? parsed[0].importedAt : new Date().toISOString(),
-      issues: [],
-    };
+    const parsedOutput = Array.isArray(parsed)
+      ? {
+          broker: context?.broker ?? (parsed.length > 0 ? parsed[0].broker : 'Unknown'),
+          account: context ? context.account : (parsed.length > 0 ? parsed[0].account : undefined),
+          productScope:
+            context?.productScope ?? (parsed.length > 0 ? parsed[0].productScope : undefined),
+          holdings: parsed,
+          sourceFile: context?.sourceFile ?? (parsed.length > 0 ? parsed[0].sourceFile : ''),
+          importedAt:
+            context?.importedAt ??
+            (parsed.length > 0 ? parsed[0].importedAt : new Date().toISOString()),
+          issues: [],
+        }
+      : 'entries' in parsed
+        ? {
+            broker: parsed.broker,
+            account: parsed.account,
+            productScope: parsed.productScope,
+            holdings: parsed.entries.map((e) => e.candidate),
+            sourceFile: parsed.sourceFile,
+            importedAt: parsed.importedAt,
+            issues: [],
+          }
+        : {
+            broker: parsed.broker,
+            account: parsed.account,
+            productScope: parsed.productScope,
+            holdings: parsed.holdings,
+            sourceFile: parsed.sourceFile,
+            importedAt: parsed.importedAt,
+            issues: [],
+          };
     const preview = BrokerImportService.reconcile(parsedOutput, existing);
 
     // The decision is made NOW, against the current state. The reconcile

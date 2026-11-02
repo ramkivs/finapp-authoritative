@@ -336,16 +336,16 @@ describe('C. Dhan MF CSV (real sample)', () => {
     const adapter = new DhanHoldingsAdapter();
     const out = adapter.parseHoldings(asTextInput(loadText(SAMPLE_MF_CSV_PATH), 'Dhan_MF_Report_23-08-2026.csv'));
     expect(out.broker).toBe('Dhan');
-    expect(out.account).toBe('IQCX28849K');
+    expect(out.account).toBe('SYNTHUCC01');
     expect(out.holdings).toHaveLength(6);
     expect(out.issues).toEqual([]);
   });
 
-  it('C.2 Account IQCX28849K is preserved for every MF Holding', () => {
+  it('C.2 Account SYNTHUCC01 is preserved for every MF Holding', () => {
     const adapter = new DhanHoldingsAdapter();
     const out = adapter.parseHoldings(asTextInput(loadText(SAMPLE_MF_CSV_PATH), 'Dhan_MF_Report_23-08-2026.csv'));
     for (const h of out.holdings) {
-      expect(h.account).toBe('IQCX28849K');
+      expect(h.account).toBe('SYNTHUCC01');
     }
   });
 
@@ -443,7 +443,7 @@ describe('D. Dhan MF XLSX (real sample)', () => {
     const adapter = new DhanHoldingsAdapter();
     const out = adapter.parseHoldings(asBinaryInput(loadBytes(SAMPLE_MF_XLSX_PATH), 'Dhan_MF_Report_23-08-2026.xlsx'));
     expect(out.broker).toBe('Dhan');
-    expect(out.account).toBe('IQCX28849K');
+    expect(out.account).toBe('SYNTHUCC01');
     expect(out.holdings).toHaveLength(6);
     expect(out.issues).toEqual([]);
   });
@@ -595,10 +595,10 @@ describe('E. Invalid inputs', () => {
     const adapter = new DhanHoldingsAdapter();
     const csv = [
       'MF Holdings,For 23-08-2026',
-      'Name,Ramakrishnan',
-      'UCC,IQCX28849K',
-      'Mobile,7358768479',
-      'Email ID,RAMKIVS73@ZOHOMAIL.IN',
+      'Name,Synthetic User',
+      'UCC,SYNTHUCC01',
+      'Mobile,0000000000',
+      'Email ID,synthetic@example.com',
       '',
       'Scheme Name,MF Type,Units,NAV,Investment,Current Value,P&L,P&L%,XIRR %',
       '"Test Scheme",Other,10,100,1000,1100,100,10,abc',
@@ -606,7 +606,9 @@ describe('E. Invalid inputs', () => {
     const out = adapter.parseHoldings(asTextInput(csv, 'bad-xirr.csv'));
     expect(out.holdings).toHaveLength(1);
     expect(out.holdings[0].xirrPercent).toBeUndefined();
-    expect(out.issues.some((i) => i.code === 'BROKER_NUMERIC_INVALID')).toBe(true);
+    const xirrIssue = out.issues.find((i) => i.code === 'BROKER_NUMERIC_INVALID');
+    expect(xirrIssue).toBeDefined();
+    expect(xirrIssue!.severity).toBe('AMBIGUOUS');
   });
 });
 
@@ -619,10 +621,10 @@ describe('F. Duplicate handling', () => {
     const adapter = new DhanHoldingsAdapter();
     const csv = [
       'MF Holdings,For 23-08-2026',
-      'Name,Ramakrishnan',
-      'UCC,IQCX28849K',
-      'Mobile,7358768479',
-      'Email ID,RAMKIVS73@ZOHOMAIL.IN',
+      'Name,Synthetic User',
+      'UCC,SYNTHUCC01',
+      'Mobile,0000000000',
+      'Email ID,synthetic@example.com',
       '',
       'Scheme Name,MF Type,Units,NAV,Investment,Current Value,P&L,P&L%,XIRR %',
       '"DUPE",Other,10,100,1000,1100,100,10,5',
@@ -753,12 +755,12 @@ describe('H. Safety', () => {
     }
   });
 
-  it('H.5 Every emitted MF Holding has account: "IQCX28849K"', () => {
+  it('H.5 Every emitted MF Holding from preamble-bearing samples has parsed UCC account', () => {
     const adapter = new DhanHoldingsAdapter();
     const out1 = adapter.parseHoldings(asTextInput(loadText(SAMPLE_MF_CSV_PATH), 'Dhan_MF_Report_23-08-2026.csv'));
     const out2 = adapter.parseHoldings(asBinaryInput(loadBytes(SAMPLE_MF_XLSX_PATH), 'Dhan_MF_Report_23-08-2026.xlsx'));
     for (const h of [...out1.holdings, ...out2.holdings]) {
-      expect(h.account).toBe('IQCX28849K');
+      expect(h.account).toBe('SYNTHUCC01');
     }
   });
 
@@ -869,7 +871,7 @@ describe('Decoded-rows path (BrokerFormatDetector.detectFromRows integration)', 
     const out = adapter.parseHoldingsFromRows(rows, 'synthetic-mf.csv');
     expect(out.holdings).toHaveLength(1);
     const h = out.holdings[0];
-    expect(h.account).toBe('IQCX28849K');
+    expect(h.account).toBeUndefined();
     expect(h.instrumentName).toBe('Test Scheme');
     expect(h.quantity).toBe(10);
     expect(h.investedValue).toBe(1000);
@@ -900,14 +902,14 @@ describe('WP-09 detection tightening — Dhan full-column validation in binary p
     expect(det.reason).toMatch(/Mutual Fund XLSX/);
   });
 
-  it('WP-09.D.2 Real Dhan MF XLSX parse still produces 6 holdings, account=IQCX28849K', async () => {
+  it('WP-09.D.2 Real Dhan MF XLSX parse still produces 6 holdings, account=SYNTHUCC01', async () => {
     const adapter = new DhanHoldingsAdapter();
     const fs = await import('node:fs');
     const path = SAMPLE_MF_XLSX_PATH;
     const bytes = new Uint8Array(fs.readFileSync(path));
     const out = adapter.parseHoldings({ kind: 'binary', content: bytes, fileName: 'Dhan_MF_Report_23-08-2026.xlsx' });
     expect(out.broker).toBe('Dhan');
-    expect(out.account).toBe('IQCX28849K');
+    expect(out.account).toBe('SYNTHUCC01');
     expect(out.holdings).toHaveLength(6);
   });
 
@@ -921,7 +923,7 @@ describe('WP-09 detection tightening — Dhan full-column validation in binary p
     const csv = fs.readFileSync(path, 'utf8');
     const out = adapter.parseHoldings({ kind: 'text', content: csv, fileName: 'Dhan_MF_Report_23-08-2026.csv' });
     expect(out.broker).toBe('Dhan');
-    expect(out.account).toBe('IQCX28849K');
+    expect(out.account).toBe('SYNTHUCC01');
     expect(out.holdings).toHaveLength(6);
   });
 
@@ -1302,5 +1304,224 @@ describe('J. UTF-8 BOM normalization regression (Dhan Equity text-header detecti
     const det = adapter.canHandle(asBinaryInput(bytes, 'Dhan_MF_Report_23-08-2026.xlsx'));
     expect(det.matched).toBe(true);
     expect(det.reason).toContain('XLSX');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Batch 2 — Step 4: DEF-04 & DEF-06 Dhan adapter corrections
+// ---------------------------------------------------------------------------
+
+describe('Batch 2 — Step 4: Dhan UCC extraction, CSV->XLSX identity parity, Variant D dedup, and optional XIRR (DEF-04, DEF-06)', () => {
+  it('DEF-04.1: Dhan MF CSV & XLSX dynamically extract actual UCC when present and return undefined when absent', async () => {
+    const XLSX = await import('xlsx');
+    const adapter = new DhanHoldingsAdapter();
+
+    // CSV with custom UCC
+    const csvWithUcc = [
+      'MF Holdings,For 23-08-2026',
+      'Name,Synthetic User',
+      'UCC,CUSTOMUCC77',
+      'Scheme Name,MF Type,Units,NAV,Investment,Current Value,P&L,P&L%,XIRR %',
+      '"Axis Nifty Midcap 50 Index Fund Direct Growth",Other,203.35,22.27,3999.86,4528.81,528.95,13.22,29.85',
+    ].join('\r\n');
+    const outCsvUcc = adapter.parseHoldings(asTextInput(csvWithUcc, 'custom-ucc.csv'));
+    expect(outCsvUcc.account).toBe('CUSTOMUCC77');
+    expect(outCsvUcc.productScope).toBe('MUTUAL_FUND');
+    expect(outCsvUcc.holdings[0].account).toBe('CUSTOMUCC77');
+
+    // CSV without UCC -> account = undefined, no blocking error
+    const csvNoUcc = [
+      'MF Holdings,For 23-08-2026',
+      'Name,Synthetic User',
+      'Scheme Name,MF Type,Units,NAV,Investment,Current Value,P&L,P&L%,XIRR %',
+      '"Axis Nifty Midcap 50 Index Fund Direct Growth",Other,203.35,22.27,3999.86,4528.81,528.95,13.22,29.85',
+    ].join('\r\n');
+    const outCsvNoUcc = adapter.parseHoldings(asTextInput(csvNoUcc, 'no-ucc.csv'));
+    expect(outCsvNoUcc.account).toBeUndefined();
+    expect(outCsvNoUcc.issues.filter((i) => i.severity === 'INVALID')).toEqual([]);
+    expect(outCsvNoUcc.holdings).toHaveLength(1);
+    expect(outCsvNoUcc.holdings[0].account).toBeUndefined();
+
+    // XLSX with custom UCC in right-side metadata cols G-H
+    const wbWithUcc = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      wbWithUcc,
+      XLSX.utils.aoa_to_sheet([
+        ['MF Holdings | For 23-08-2026', '', '', '', '', '', 'Name', 'Synthetic User', ''],
+        ['', '', '', '', '', '', 'UCC', 'CUSTOMUCC77', ''],
+        ['Scheme Name', 'MF Type', 'Units', 'NAV', 'Investment', 'Current Value', 'P&L', 'P&L%', 'XIRR %'],
+        ['Axis Nifty Midcap 50 Index Fund Direct Growth', 'Other', '203.35', '22.27', '3999.86', '4528.81', '528.95', '13.22', '29.85'],
+      ]),
+      'MF Holdings',
+    );
+    const outXlsxUcc = adapter.parseHoldings(
+      asBinaryInput(new Uint8Array(XLSX.write(wbWithUcc, { type: 'buffer', bookType: 'xlsx' })), 'custom-ucc.xlsx'),
+    );
+    expect(outXlsxUcc.account).toBe('CUSTOMUCC77');
+    expect(outXlsxUcc.holdings[0].account).toBe('CUSTOMUCC77');
+
+    // XLSX without UCC -> account = undefined (never falls back to any hardcoded UCC)
+    const wbNoUcc = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      wbNoUcc,
+      XLSX.utils.aoa_to_sheet([
+        ['MF Holdings | For 23-08-2026', '', '', '', '', '', 'Name', 'Synthetic User', ''],
+        ['Scheme Name', 'MF Type', 'Units', 'NAV', 'Investment', 'Current Value', 'P&L', 'P&L%', 'XIRR %'],
+        ['Axis Nifty Midcap 50 Index Fund Direct Growth', 'Other', '203.35', '22.27', '3999.86', '4528.81', '528.95', '13.22', '29.85'],
+      ]),
+      'MF Holdings',
+    );
+    const outXlsxNoUcc = adapter.parseHoldings(
+      asBinaryInput(new Uint8Array(XLSX.write(wbNoUcc, { type: 'buffer', bookType: 'xlsx' })), 'no-ucc.xlsx'),
+    );
+    expect(outXlsxNoUcc.account).toBeUndefined();
+    expect(outXlsxNoUcc.issues.filter((i) => i.severity === 'INVALID')).toEqual([]);
+    expect(outXlsxNoUcc.holdings).toHaveLength(1);
+    expect(outXlsxNoUcc.holdings[0].account).toBeUndefined();
+  });
+
+  it('DEF-04.2: Dhan MF CSV followed by XLSX for the same funds produces UNCHANGED/UPDATED with zero duplicate holdings', async () => {
+    const XLSX = await import('xlsx');
+    const { BrokerImportService } = await import('../services/BrokerImportService');
+    const { useCanonicalLedger } = await import('../store/useCanonicalLedger');
+    const { repository } = await import('../repositories');
+
+    await repository.clearLocalData();
+    await repository.initialize();
+
+    try {
+      // Subcase A: real sample CSV followed by real sample XLSX (matching UCC SYNTHUCC01)
+      const csvParsed = BrokerImportService.detectAndParse(
+        asTextInput(loadText(SAMPLE_MF_CSV_PATH), 'Dhan_MF_Report_23-08-2026.csv'),
+      );
+      const pvCsv = BrokerImportService.reconcile(csvParsed, []);
+      expect(pvCsv.counts.new).toBe(6);
+      const o1 = useCanonicalLedger.getState().commitImportedHoldings(pvCsv);
+      if (o1.persisted) await o1.persisted;
+      expect(useCanonicalLedger.getState().holdings).toHaveLength(6);
+
+      const xlsxParsed = BrokerImportService.detectAndParse(
+        asBinaryInput(loadBytes(SAMPLE_MF_XLSX_PATH), 'Dhan_MF_Report_23-08-2026.xlsx'),
+      );
+      const pvXlsxUpdated = BrokerImportService.reconcile(xlsxParsed, useCanonicalLedger.getState().holdings);
+      expect(pvXlsxUpdated.counts.new).toBe(0);
+      expect(pvXlsxUpdated.counts.closed_absent).toBe(0);
+      expect(pvXlsxUpdated.counts.updated).toBe(6);
+      const o2 = useCanonicalLedger.getState().commitImportedHoldings(pvXlsxUpdated);
+      if (o2.persisted) await o2.persisted;
+      expect(useCanonicalLedger.getState().holdings).toHaveLength(6);
+
+      // When sourceFile & importedAt match, all 6 are UNCHANGED
+      const existingAfterXlsx = useCanonicalLedger.getState().holdings;
+      const xlsxSameMeta = {
+        ...xlsxParsed,
+        importedAt: existingAfterXlsx[0].importedAt,
+        holdings: xlsxParsed.holdings.map((h) => ({ ...h, importedAt: existingAfterXlsx[0].importedAt })),
+      };
+      const pvXlsxUnchanged = BrokerImportService.reconcile(xlsxSameMeta, existingAfterXlsx);
+      expect(pvXlsxUnchanged.counts.new).toBe(0);
+      expect(pvXlsxUnchanged.counts.updated).toBe(0);
+      expect(pvXlsxUnchanged.counts.unchanged).toBe(6);
+
+      // Subcase B: UCC absent in BOTH CSV and XLSX -> both account=undefined, 0 duplicates
+      await repository.clearLocalData();
+      await repository.initialize();
+      const csvNoUccText = loadText(SAMPLE_MF_CSV_PATH)
+        .split(/\r?\n/)
+        .filter((l) => !l.startsWith('UCC,'))
+        .join('\r\n');
+      const wb = XLSX.read(loadBytes(SAMPLE_MF_XLSX_PATH), { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      delete ws['G2'];
+      delete ws['H2'];
+      const xlsxNoUccBytes = new Uint8Array(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+
+      const pCsvNoUcc = BrokerImportService.detectAndParse(asTextInput(csvNoUccText, 'mf-no-ucc.csv'));
+      expect(pCsvNoUcc.account).toBeUndefined();
+      const o3 = useCanonicalLedger.getState().commitImportedHoldings(
+        BrokerImportService.reconcile(pCsvNoUcc, []),
+      );
+      if (o3.persisted) await o3.persisted;
+
+      const pXlsxNoUcc = BrokerImportService.detectAndParse(asBinaryInput(xlsxNoUccBytes, 'mf-no-ucc.xlsx'));
+      expect(pXlsxNoUcc.account).toBeUndefined();
+      const pvNoUcc2 = BrokerImportService.reconcile(pXlsxNoUcc, useCanonicalLedger.getState().holdings);
+      expect(pvNoUcc2.counts.new).toBe(0);
+      expect(pvNoUcc2.counts.updated).toBe(6);
+      const o4 = useCanonicalLedger.getState().commitImportedHoldings(pvNoUcc2);
+      if (o4.persisted) await o4.persisted;
+      expect(useCanonicalLedger.getState().holdings).toHaveLength(6);
+    } finally {
+      await repository.clearLocalData();
+    }
+  });
+
+  it('DEF-04.3: Dhan Variant D duplicate rows emit AMBIGUOUS BROKER_DUPLICATE_INSIDE_BATCH and commit without DUPLICATE_IDENTITY', async () => {
+    const { BrokerImportService } = await import('../services/BrokerImportService');
+    const { useCanonicalLedger } = await import('../store/useCanonicalLedger');
+    const { repository } = await import('../repositories');
+
+    await repository.clearLocalData();
+    await repository.initialize();
+
+    try {
+      const variantDCsv = [
+        '"Name","Quantity","Avg Price","Last Traded","Investment","Current Value","P&L","P&L %"',
+        '"Bajaj Finance","30","904.97","1087.8","27148.95","32634","5485.05","20.20%"',
+        '"bajaj  finance","15","920.00","1087.8","13800.00","16317","2517.00","18.24%"',
+        '"DLF","16","574.66","683.2","9194.5","10931.2","1736.7","18.89%"',
+      ].join('\r\n');
+
+      const parsed = BrokerImportService.detectAndParse(asTextInput(variantDCsv, 'dhan-variant-d-dupes.csv'));
+      expect(parsed.holdings).toHaveLength(2);
+      expect(parsed.holdings[0].instrumentName).toBe('Bajaj Finance');
+      expect(parsed.holdings[0].quantity).toBe(30);
+      const dupIssue = parsed.issues.find((i) => i.code === 'BROKER_DUPLICATE_INSIDE_BATCH');
+      expect(dupIssue).toBeDefined();
+      expect(dupIssue!.severity).toBe('AMBIGUOUS');
+
+      const preview = BrokerImportService.reconcile(parsed, []);
+      expect(preview.confirmationEligible).toBe(true);
+      const outcome = useCanonicalLedger.getState().commitImportedHoldings(preview);
+      if (outcome.persisted) await outcome.persisted;
+      expect(useCanonicalLedger.getState().holdings).toHaveLength(2);
+
+      // Rows path also deduplicates
+      const adapter = new DhanHoldingsAdapter();
+      const rowsOut = adapter.parseHoldingsFromRows(
+        [
+          { rowNumber: 1, data: {}, rawFields: ['Name', 'Quantity', 'Avg Price', 'Last Traded', 'Investment', 'Current Value', 'P&L', 'P&L %'] },
+          { rowNumber: 2, data: {}, rawFields: ['Bajaj Finance', '30', '904.97', '1087.8', '27148.95', '32634', '5485.05', '20.20%'] },
+          { rowNumber: 3, data: {}, rawFields: ['Bajaj Finance', '10', '900.00', '1087.8', '9000.00', '10878', '1878.00', '20.87%'] },
+        ],
+        'variant-d-rows-dupes.csv',
+      );
+      expect(rowsOut.holdings).toHaveLength(1);
+      expect(rowsOut.issues.some((i) => i.code === 'BROKER_DUPLICATE_INSIDE_BATCH' && i.severity === 'AMBIGUOUS')).toBe(true);
+    } finally {
+      await repository.clearLocalData();
+    }
+  });
+
+  it('DEF-06: Dhan MF files with "--" or "N/A" XIRR emit AMBIGUOUS and remain confirmation-eligible', async () => {
+    const { BrokerImportService } = await import('../services/BrokerImportService');
+    const csv = [
+      'MF Holdings,For 23-08-2026',
+      'Name,Synthetic User',
+      'UCC,SYNTHUCC01',
+      'Scheme Name,MF Type,Units,NAV,Investment,Current Value,P&L,P&L%,XIRR %',
+      '"Scheme Dash",Other,10,100,1000,1100,100,10,--',
+      '"Scheme NA",Debt,20,50,1000,1050,50,5,N/A',
+    ].join('\r\n');
+    const parsed = BrokerImportService.detectAndParse(asTextInput(csv, 'dhan-mf-xirr-dash.csv'));
+    expect(parsed.holdings).toHaveLength(2);
+    expect(parsed.holdings[0].xirrPercent).toBeUndefined();
+    expect(parsed.holdings[1].xirrPercent).toBeUndefined();
+    expect(parsed.issues).toHaveLength(2);
+    expect(parsed.issues.every((i) => i.severity === 'AMBIGUOUS')).toBe(true);
+
+    const preview = BrokerImportService.reconcile(parsed, []);
+    expect(preview.blockingErrors).toEqual([]);
+    expect(preview.confirmationEligible).toBe(true);
   });
 });

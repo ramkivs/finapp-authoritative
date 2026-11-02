@@ -28,7 +28,7 @@
  *     - 5-row preamble (R1 title, R2 Name, R3 UCC, R4 Mobile, R5 Email)
  *     - R6 blank; R7 header; R8-R13 data (6 schemes); R15 summary; R17 NOTE
  *     - 9 columns: Scheme Name,MF Type,Units,NAV,Investment,Current Value,P&L,P&L%,XIRR %
- *     - Account: UCC = IQCX28849K
+ *     - Account: UCC from preamble when present, otherwise undefined
  *     - XIRR is plain number (not percent-suffixed)
  *
  *   MF XLSX:
@@ -58,7 +58,8 @@
  *     derives averageCost = Invested/Units (consistent with the
  *     WP-06 Groww MF pattern for fractional Units).
  *   - Sets account = undefined for Equity (no account in file);
- *     account = "IQCX28849K" for MF (UCC from preamble).
+ *     account = parsed UCC from preamble/metadata when present for MF,
+ *     otherwise undefined.
  *   - Sets ticker = undefined and isin = undefined for both
  *     variants (Dhan never provides these).
  *   - Sets xirrPercent = undefined for Equity; parses the plain
@@ -91,12 +92,14 @@
  */
 
 import { Holding, HoldingStatus } from '../../../domain/types';
+import { AssetIdentityService } from '../../AssetIdentityService';
 import { HoldingIdentityService } from '../../HoldingIdentityService';
 import {
   ACTIVE_HOLDING_STATUS,
   BrokerAdapter,
   BrokerDetectionResult,
   BrokerParseOutput,
+  BrokerProductScope,
 } from '../BrokerAdapter';
 import {
   ImportIssueSeverity,
@@ -172,13 +175,6 @@ const STOCK_HOLDINGS_HEADERS: readonly string[] = [
   'P&L',
   'P&L %',
 ] as const;
-
-/**
- * Account identity for Dhan MF (preamble R3 in CSV, metadata R2
- * in XLSX). The Dhan Equity CSV does not provide an account
- * identifier; `account = undefined` for every Equity output.
- */
-const DHAN_MF_UCC = 'IQCX28849K';
 
 /**
  * Sheet name hint for Dhan MF XLSX. The adapter selects the sheet
@@ -435,13 +431,27 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
       return this.walkEquityRows(rows, fileName);
     }
     if (first === 'Scheme Name') {
-      // MF data rows (no preamble in the rows array; UCC is broker-
-      // internal metadata, so account = undefined when the rows
-      // path is used without preamble context). The MF preamble is
-      // consumed by the import pipeline if needed; for the
-      // decoded-rows path the canonical contract is to use the
-      // authorized UCC.
-      return this.walkMfRows(rows, DHAN_MF_UCC, fileName);
+      // MF data rows without preamble context: account is undefined.
+      return this.walkMfRows(rows, undefined, fileName);
+    }
+    const mfHeaderIdx = rows.findIndex(
+      (r) => this.stripQuotes(String(r.rawFields[0] ?? '')).trim() === 'Scheme Name',
+    );
+    if (mfHeaderIdx > 0) {
+      const preamble = rows.slice(0, mfHeaderIdx).map((r) => r.rawFields);
+      const account = this.extractMfAccountFromRecords(preamble);
+      const rest = rows.slice(mfHeaderIdx + 1);
+      if (rest.length === 0) {
+        return this.emptyOutput(
+          fileName,
+          [
+            this.issue(rows[mfHeaderIdx].rowNumber, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+              'Dhan MF file contains only the header row, no data rows.'),
+          ],
+          { account, productScope: 'MUTUAL_FUND' },
+        );
+      }
+      return this.walkMfRows(rest, account, fileName);
     }
     return this.emptyOutput(fileName, [
       this.issue(1, 'INVALID', 'BROKER_HEADER_MISSING',
@@ -509,9 +519,13 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
       );
     }
     if (records.length === 1) {
-      return this.emptyOutput(fileName, [
-        this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
-          'Dhan Equity file contains only the header row, no data rows.')],
+      return this.emptyOutput(
+        fileName,
+        [
+          this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+            'Dhan Equity file contains only the header row, no data rows.'),
+        ],
+        { productScope: 'EQUITY' },
       );
     }
     return this.walkEquityDataRecords(records.slice(1), fileName, /* sourceRowOffset */ 1);
@@ -523,8 +537,12 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
    */
   private walkEquityRows(rows: ParsedCsvRow[], fileName: string): BrokerParseOutput {
     if (rows.length === 0) {
-      return this.emptyOutput(fileName, [
-        this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY', 'Dhan Equity file contains only the header row, no data rows.')],
+      return this.emptyOutput(
+        fileName,
+        [
+          this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY', 'Dhan Equity file contains only the header row, no data rows.'),
+        ],
+        { productScope: 'EQUITY' },
       );
     }
     return this.walkEquityDataRows(rows, fileName);
@@ -559,30 +577,20 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
       );
     }
 
-    // Walk preamble for account identity. The canonical source is
-    // the row whose first cell is "UCC"; second cell is the value.
+    // Walk preamble for account identity. When UCC is present in the
+    // preamble, use the parsed UCC; otherwise use undefined.
     const preamble = records.slice(0, headerIdx);
     const account = this.extractMfAccountFromRecords(preamble);
-    if (account === null) {
-      // Fall back to the authorized default UCC. The MF preamble
-      // has UCC in the real sample; if it is missing, the
-      // canonical contract still specifies the broker's UCC.
-      return this.emptyOutput(fileName, [
-        this.issue(1, 'INVALID', 'BROKER_HEADER_MISSING',
-          `Cannot locate UCC in the MF preamble; expected "${DHAN_MF_UCC}".`)],
-      );
-    }
-    // If the preamble UCC differs from the authorized default, we
-    // still use the preamble's value (per-lifecycle the account
-    // is whatever the broker wrote). The D-02 identity rule uses
-    // whichever value is observed.
-    void account; // explicitly mark the variable as used.
 
     const dataRecords = records.slice(headerIdx + 1);
     if (dataRecords.length === 0) {
-      return this.emptyOutput(fileName, [
-        this.issue(headerIdx + 1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
-          'Dhan MF file contains only the header row, no data rows.')],
+      return this.emptyOutput(
+        fileName,
+        [
+          this.issue(headerIdx + 1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+            'Dhan MF file contains only the header row, no data rows.'),
+        ],
+        { account, productScope: 'MUTUAL_FUND' },
       );
     }
 
@@ -637,14 +645,20 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
           'MF header marker found but the column sequence does not match the Dhan MF schema.')],
       );
     }
+    const preamble = decoded.rows.slice(0, headerIdx);
+    const account = this.extractMfAccountFromRecords(preamble);
     const dataRows = decoded.rows.slice(headerIdx + 1);
     if (dataRows.length === 0) {
-      return this.emptyOutput(fileName, [
-        this.issue(headerIdx + 1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
-          'Dhan MF XLSX contains only the header row, no data rows.')],
+      return this.emptyOutput(
+        fileName,
+        [
+          this.issue(headerIdx + 1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+            'Dhan MF XLSX contains only the header row, no data rows.'),
+        ],
+        { account, productScope: 'MUTUAL_FUND' },
       );
     }
-    return this.walkMfDataRecords(dataRows, DHAN_MF_UCC, fileName, /* sourceRowOffset */ 0);
+    return this.walkMfDataRecords(dataRows, account, fileName, /* sourceRowOffset */ 0);
   }
 
   // =========================================================================
@@ -894,6 +908,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
         ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
         xirrPercent: undefined,
         securityClassification: undefined,
+        productScope: 'EQUITY',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt: importedAtForHolding,
@@ -904,6 +919,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
     return {
       broker: 'Dhan',
       account: undefined,
+      productScope: 'EQUITY',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -1123,6 +1139,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
         ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
         xirrPercent: undefined,
         securityClassification: undefined,
+        productScope: 'EQUITY',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt: importedAtForHolding,
@@ -1133,6 +1150,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
     return {
       broker: 'Dhan',
       account: undefined,
+      productScope: 'EQUITY',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -1187,9 +1205,13 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
       );
     }
     if (records.length === 1) {
-      return this.emptyOutput(fileName, [
-        this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
-          'Dhan Stock Holdings file contains only the header row, no data rows.')],
+      return this.emptyOutput(
+        fileName,
+        [
+          this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+            'Dhan Stock Holdings file contains only the header row, no data rows.'),
+        ],
+        { productScope: 'EQUITY' },
       );
     }
     return this.walkStockHoldingsDataRecords(records.slice(1), fileName, /* sourceRowOffset */ 1);
@@ -1206,6 +1228,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
   ): BrokerParseOutput {
     const issues: ImportRowIssue[] = [];
     const holdings: Holding[] = [];
+    const seen = new Set<string>();
     const importedAt = new Date().toISOString();
 
     // Column indices (post-header, 0-based, exact 8-column schema).
@@ -1381,6 +1404,15 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
           'Quantity', cleanFields[idxQuantity]));
       }
 
+      const identityKey = `Dhan||${AssetIdentityService.normalizeName(instrumentName)}`;
+      if (seen.has(identityKey)) {
+        issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_DUPLICATE_INSIDE_BATCH',
+          `Duplicate Name inside batch: ${JSON.stringify(instrumentName)} (first occurrence retained).`,
+          'Name', instrumentName));
+        return;
+      }
+      seen.add(identityKey);
+
       const holding: Holding = {
         id: HoldingIdentityService.generateId(),
         broker: 'Dhan',
@@ -1397,6 +1429,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
         ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
         xirrPercent: undefined,
         securityClassification: undefined,
+        productScope: 'EQUITY',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt,
@@ -1407,6 +1440,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
     return {
       broker: 'Dhan',
       account: undefined,
+      productScope: 'EQUITY',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -1438,6 +1472,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
   ): BrokerParseOutput {
     const issues: ImportRowIssue[] = [];
     const holdings: Holding[] = [];
+    const seen = new Set<string>();
     const importedAt = new Date().toISOString();
 
     const idxName = 0;
@@ -1573,6 +1608,15 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
           'Quantity', cleanFields[idxQuantity]));
       }
 
+      const identityKey = `Dhan||${AssetIdentityService.normalizeName(instrumentName)}`;
+      if (seen.has(identityKey)) {
+        issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_DUPLICATE_INSIDE_BATCH',
+          `Duplicate Name inside batch: ${JSON.stringify(instrumentName)} (first occurrence retained).`,
+          'Name', instrumentName));
+        return;
+      }
+      seen.add(identityKey);
+
       const holding: Holding = {
         id: HoldingIdentityService.generateId(),
         broker: 'Dhan',
@@ -1589,6 +1633,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
         ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
         xirrPercent: undefined,
         securityClassification: undefined,
+        productScope: 'EQUITY',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt,
@@ -1599,6 +1644,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
     return {
       broker: 'Dhan',
       account: undefined,
+      productScope: 'EQUITY',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -1618,7 +1664,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
    */
   private walkMfDataRecords(
     dataRecords: string[][],
-    account: string,
+    account: string | undefined,
     fileName: string,
     sourceRowOffset: number,
   ): BrokerParseOutput {
@@ -1676,7 +1722,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
 
       // Duplicate-inside-batch detection. MF uses the scheme
       // name as the identity (no ISIN, no ticker in Dhan MF).
-      const identityKey = `Dhan|${account}|${instrumentName}`;
+      const identityKey = `Dhan|${account ?? ''}|${AssetIdentityService.normalizeName(instrumentName)}`;
       if (seen.has(identityKey)) {
         issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_DUPLICATE_INSIDE_BATCH',
           `Duplicate Scheme Name inside batch: ${JSON.stringify(instrumentName)} (first occurrence retained).`,
@@ -1764,7 +1810,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
       } else {
         const parsed = parseDhanNumber(xirrRaw);
         if (parsed === null) {
-          issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_NUMERIC_INVALID',
             `XIRR % is not a parseable number: ${JSON.stringify(xirrRaw)}`, 'XIRR %', xirrRaw));
           xirrPercent = undefined;
         } else {
@@ -1818,6 +1864,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
         ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
         ...(xirrPercent !== undefined ? { xirrPercent } : {}),
         ...(securityClassification !== undefined ? { securityClassification } : {}),
+        productScope: 'MUTUAL_FUND',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt,
@@ -1825,9 +1872,15 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
       holdings.push(holding);
     });
 
+    if (holdings.length === 0 && issues.length === 0) {
+      issues.push(this.issue(sourceRowOffset + 1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+        'Dhan MF file contains only header/footer rows, no scheme holdings.'));
+    }
+
     return {
       broker: 'Dhan',
       account,
+      productScope: 'MUTUAL_FUND',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -1839,7 +1892,11 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
    * Walk Dhan MF data rows from ParsedCsvRow[] (used by the
    * BrokerFormatDetector.detectFromRows path).
    */
-  private walkMfRows(rows: ParsedCsvRow[], account: string, fileName: string): BrokerParseOutput {
+  private walkMfRows(
+    rows: ParsedCsvRow[],
+    account: string | undefined,
+    fileName: string,
+  ): BrokerParseOutput {
     const issues: ImportRowIssue[] = [];
     const holdings: Holding[] = [];
     const seen = new Set<string>();
@@ -1879,7 +1936,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
         return;
       }
 
-      const identityKey = `Dhan|${account}|${instrumentName}`;
+      const identityKey = `Dhan|${account ?? ''}|${AssetIdentityService.normalizeName(instrumentName)}`;
       if (seen.has(identityKey)) {
         issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_DUPLICATE_INSIDE_BATCH',
           `Duplicate Scheme Name inside batch: ${JSON.stringify(instrumentName)} (first occurrence retained).`,
@@ -1958,7 +2015,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
       } else {
         const parsed = parseDhanNumber(xirrRaw);
         if (parsed === null) {
-          issues.push(this.issue(fileRowNumber, 'INVALID', 'BROKER_NUMERIC_INVALID',
+          issues.push(this.issue(fileRowNumber, 'AMBIGUOUS', 'BROKER_NUMERIC_INVALID',
             `XIRR % is not a parseable number: ${JSON.stringify(xirrRaw)}`, 'XIRR %', xirrRaw));
           xirrPercent = undefined;
         } else {
@@ -2010,6 +2067,7 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
         ...(unrealisedPnLPercent !== undefined ? { unrealisedPnLPercent } : {}),
         ...(xirrPercent !== undefined ? { xirrPercent } : {}),
         ...(securityClassification !== undefined ? { securityClassification } : {}),
+        productScope: 'MUTUAL_FUND',
         status: ACTIVE_HOLDING_STATUS,
         sourceFile: fileName,
         importedAt,
@@ -2017,9 +2075,15 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
       holdings.push(holding);
     });
 
+    if (holdings.length === 0 && issues.length === 0) {
+      issues.push(this.issue(1, 'AMBIGUOUS', 'BROKER_HEADER_ONLY',
+        'Dhan MF file contains only header/footer rows, no scheme holdings.'));
+    }
+
     return {
       broker: 'Dhan',
       account,
+      productScope: 'MUTUAL_FUND',
       holdings,
       sourceFile: fileName,
       importedAt,
@@ -2032,21 +2096,25 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
   // =========================================================================
 
   /**
-   * Extract the UCC account identifier from a `string[][]`
-   * preamble (CSV path). Returns the first row whose first cell
-   * is "UCC"; second cell is the value. Returns null if no UCC
-   * row is found.
+   * Extract the UCC account identifier from preamble/metadata rows
+   * (both CSV cols A-B and XLSX right-side metadata cols G-H).
+   * Returns the trimmed UCC when present and non-empty; otherwise undefined.
    */
-  private extractMfAccountFromRecords(preamble: string[][]): string | null {
+  private extractMfAccountFromRecords(preamble: string[][]): string | undefined {
     for (const row of preamble) {
-      const first = String(row[0] ?? '').trim();
-      if (first === 'UCC') {
-        const value = String(row[1] ?? '').trim();
-        if (value === '') return null;
-        return value;
+      for (let c = 0; c < row.length; c++) {
+        const cell = this.stripQuotes(String(row[c] ?? '')).trim();
+        if (cell.toUpperCase() === 'UCC') {
+          const value = this.stripQuotes(String(row[c + 1] ?? '')).trim();
+          if (value !== '') return value;
+        }
+        const inlineMatch = /^UCC\s*[:=-]\s*(\S+)$/i.exec(cell);
+        if (inlineMatch && inlineMatch[1]) {
+          return inlineMatch[1].trim();
+        }
       }
     }
-    return null;
+    return undefined;
   }
 
   // =========================================================================
@@ -2345,10 +2413,15 @@ export class DhanHoldingsAdapter implements BrokerAdapter {
     };
   }
 
-  private emptyOutput(fileName: string, issues: ImportRowIssue[]): BrokerParseOutput {
+  private emptyOutput(
+    fileName: string,
+    issues: ImportRowIssue[],
+    opts?: { account?: string; productScope?: BrokerProductScope },
+  ): BrokerParseOutput {
     return {
       broker: 'Dhan',
-      account: undefined,
+      account: opts?.account,
+      ...(opts?.productScope !== undefined ? { productScope: opts.productScope } : {}),
       holdings: [],
       sourceFile: fileName,
       importedAt: new Date().toISOString(),

@@ -522,7 +522,9 @@ describe('H. Validation', () => {
     // The Holding IS still emitted (the realised value is ignored
     // and its parse error is non-blocking).
     expect(out.holdings).toHaveLength(1);
-    expect(out.issues.some((i) => i.code === 'BROKER_NUMERIC_INVALID' && i.field === 'Realised Gain/Loss')).toBe(true);
+    const rgIssue = out.issues.find((i) => i.code === 'BROKER_NUMERIC_INVALID' && i.field === 'Realised Gain/Loss');
+    expect(rgIssue).toBeDefined();
+    expect(rgIssue!.severity).toBe('AMBIGUOUS');
   });
 });
 
@@ -644,5 +646,42 @@ describe('K. Regression — other broker adapters unaffected', () => {
     const csv = readFileSync(SAMPLE_DHAN_EQUITY_PATH, 'utf8');
     const det = BrokerFormatDetector.detect(asTextInput(csv, 'dhan.csv'));
     expect(det.adapter?.id).toBe('dhan');
+  });
+});
+
+describe('Batch 2 — Step 4: Angel One ignored optional fields do not block valid imports (DEF-06, DEF-09)', () => {
+  it('DEF-06: malformed Realised Gain/Loss, Holding Weightage, and Blocked_qty emit AMBIGUOUS and stay confirmation-eligible', async () => {
+    const XLSX = await import('xlsx');
+    const { BrokerImportService } = await import('../services/BrokerImportService');
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.aoa_to_sheet([
+        ['Holding Details'],
+        [
+          'Scrip/Contract', 'Company Name', 'ISIN', 'MarketCap', 'Sector',
+          'Quantity', 'Blocked_qty', 'Avg Trading Price', 'Prev closing Price',
+          'Invested Value', 'Market Value as of last trading day',
+          'Overall Gain/Loss', 'Realised Gain/Loss', 'Holding Weightage',
+          'ARQ Prime Quantity',
+        ],
+        [
+          'INFY', 'Infosys Ltd', 'INE009A01021', 'LargeCap', 'IT',
+          '10', '--', '1400', '1500', '14000', '15000', '1000', 'N/A', '--', '0',
+        ],
+      ]),
+      'Portfolio',
+    );
+    const bytes = new Uint8Array(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+    const parsed = BrokerImportService.detectAndParse(asBinaryInput(bytes, 'angel-ignored-fields.xlsx'));
+    expect(parsed.holdings).toHaveLength(1);
+    expect(parsed.productScope).toBe('EQUITY');
+    expect(parsed.issues).toHaveLength(3);
+    expect(parsed.issues.every((i) => i.severity === 'AMBIGUOUS')).toBe(true);
+
+    const preview = BrokerImportService.reconcile(parsed, []);
+    expect(preview.blockingErrors).toEqual([]);
+    expect(preview.confirmationEligible).toBe(true);
   });
 });
