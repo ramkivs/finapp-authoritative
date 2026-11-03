@@ -1,5 +1,5 @@
 /**
- * FinBoom deterministic content digest.
+ * ArthaVault deterministic content digest.
  *
  * ⚠️ THIS IS NOT SHA-256, DESPITE THE CLASS NAME.
  *

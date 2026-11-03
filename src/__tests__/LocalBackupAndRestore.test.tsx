@@ -445,7 +445,7 @@ describe('Step 9 (DEF-21a backup component): Local JSON Backup and SHA-256 Verif
       expect(retained).not.toBeNull();
       expect(retained!.digest).toBe(expectedNodeSha256);
       expect(retained!.createdAt).toBe('2026-11-03T10:30:00.000Z');
-      expect(retained!.fileName).toBe('finboom-backup-2026-11-03T10-30-00-000Z.json');
+      expect(retained!.fileName).toBe('arthavault-backup-2026-11-03T10-30-00-000Z.json');
 
       // Re-formatting whitespace / key order in JSON transport remains valid under RFC 8785 JCS
       const compactJson = JSON.stringify({

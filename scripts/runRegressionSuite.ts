@@ -41,7 +41,7 @@ function assert(condition: boolean, desc: string, testId: string) {
 
 async function runRegressionSuite() {
   console.log('──────────────────────────────────────────────────────────────────────────');
-  console.log('FINBOOM v2.11.2 — AUTOMATED RUNTIME REGRESSION SUITE (TEST-01 to TEST-43)');
+  console.log('ARTHAVAULT — AUTOMATED RUNTIME REGRESSION SUITE (TEST-01 to TEST-43)');
   console.log('──────────────────────────────────────────────────────────────────────────\n');
 
   console.log('1. [Local Runtime Empty Default & Demo Dataset Initialization]');

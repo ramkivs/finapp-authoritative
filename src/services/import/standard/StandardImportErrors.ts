@@ -1,5 +1,5 @@
 /**
- * FINBOOM — REQUIREMENT #1 STANDARD IMPORT
+ * ARTHAVAULT — REQUIREMENT #1 STANDARD IMPORT
  *
  * Error taxonomy for Standard Import.
  *

@@ -1,9 +1,9 @@
 /**
- * FinBoom v3.0 Design System Tokens
+ * ArthaVault v3.0 Design System Tokens
  * Source of truth for color palettes, typography hierarchy, spacing scale, and container radii.
  */
 
-export const FINBOOM_TOKENS = {
+export const ARTHAVAULT_TOKENS = {
   colors: {
     // Dark Canvas & Surface Hierarchy
     background: '#0D1117',        // Deep dark canvas
@@ -13,7 +13,7 @@ export const FINBOOM_TOKENS = {
     borderSubtle: '#30363D',      // Active / hover border
 
     // Brand & Functional Accents
-    primary: '#4F8CFF',           // FinBoom Blue
+    primary: '#4F8CFF',           // ArthaVault Blue
     primaryLight: '#6CA5FF',      // Accent Light Blue
     success: '#23C55E',           // Positive / Reconciled Green
     warning: '#F59E0B',           // Warning / Attention Amber
@@ -53,3 +53,6 @@ export const FINBOOM_TOKENS = {
     smooth: 'transition-all duration-300 cubic-bezier(0.4, 0, 0.2, 1)'
   }
 } as const;
+
+/** Backward-compatible token alias preserved for existing consumers. */
+export const FINBOOM_TOKENS = ARTHAVAULT_TOKENS;

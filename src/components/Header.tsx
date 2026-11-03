@@ -33,6 +33,10 @@ export const Header: React.FC<Props> = ({ toggleDark, isDark, onOpenMobile }) =>
           </button>
         )}
 
+        <span className="md:hidden font-extrabold text-sm tracking-tight text-[#F0F6FC]">
+          ArthaVault
+        </span>
+
         {/* Account Context Pill */}
         <div className="relative hidden sm:inline-block">
           <button
@@ -143,17 +147,18 @@ export const Header: React.FC<Props> = ({ toggleDark, isDark, onOpenMobile }) =>
           )}
         </button>
 
-        {/* Local Vault Badge (No Personal PII) */}
+        {/* ArthaVault Local Vault Badge (No Personal PII) */}
         <div
           id="btn-user-profile"
-          onClick={() => alert('Local Vault • Single-owner personal finance workspace (client-only IndexedDB)')}
+          title="ArthaVault • Local Vault"
+          onClick={() => alert('ArthaVault • Local Vault — Single-owner personal finance workspace (client-only IndexedDB)')}
           className="flex items-center gap-2 pl-1.5 pr-3 py-1 rounded-full bg-[#0D1117] border border-[#21262D] cursor-pointer hover:border-[#30363D] transition"
         >
-          <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-[#4F8CFF] to-[#06B6D4] text-white font-bold text-[10px] flex items-center justify-center shadow-sm">
-            LV
+          <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-[#23C55E] to-[#4F8CFF] text-white font-bold text-[10px] flex items-center justify-center shadow-sm">
+            AV
           </div>
           <span className="text-xs font-bold text-[#F0F6FC] hidden md:inline">
-            Local Vault
+            ArthaVault • Local Vault
           </span>
         </div>
       </div>

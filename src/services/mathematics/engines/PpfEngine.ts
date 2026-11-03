@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: Public Provident Fund (PPF) Mathematical Engine
+ * ARTHAVAULT WP-22: Public Provident Fund (PPF) Mathematical Engine
  * Computes statutory 15-year PPF maturity schedule governed by an externalized policy contract.
  */
 

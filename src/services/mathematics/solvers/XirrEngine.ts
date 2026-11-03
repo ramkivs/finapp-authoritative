@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: Hardened Canonical XIRR Solver Engine
+ * ARTHAVAULT WP-22: Hardened Canonical XIRR Solver Engine
  * Implements multi-stage Newton-Raphson with adaptive bisection fallback, scale-invariant tolerance, and multiple root detection.
  */
 

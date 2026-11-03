@@ -677,7 +677,7 @@ export class LocalBackupService {
    */
   static formatBackupFileName(createdAtIso: string): string {
     const safeStamp = createdAtIso.replace(/[:.]/g, '-');
-    return `finboom-backup-${safeStamp}.json`;
+    return `arthavault-backup-${safeStamp}.json`;
   }
 
   /**

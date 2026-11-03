@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: Retirement & FIRE Target Mathematical Engine
+ * ARTHAVAULT WP-22: Retirement & FIRE Target Mathematical Engine
  * Models longevity runway, target retirement corpus, Coast FIRE milestones, and Safe Withdrawal Rates (SWR).
  */
 

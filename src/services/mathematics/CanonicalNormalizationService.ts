@@ -1,11 +1,11 @@
 /**
- * FINBOOM WP-22: Canonical Normalization Service
+ * ARTHAVAULT WP-22: Canonical Normalization Service
  * Pre-canonicalization domain sanitization and normalization pipeline
  */
 
 export class CanonicalNormalizationService {
   /**
-   * Normalize an unknown input value according to FinBoom domain rules.
+   * Normalize an unknown input value according to ArthaVault domain rules.
    */
   static normalize(value: unknown): unknown {
     if (value === null || value === undefined) {

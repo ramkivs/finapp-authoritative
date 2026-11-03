@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: Generic Recurring Deposit (RD) Mathematical Engine
+ * ARTHAVAULT WP-22: Generic Recurring Deposit (RD) Mathematical Engine
  * Pure annuity compounding engine with configurable deposit and compounding rests.
  */
 

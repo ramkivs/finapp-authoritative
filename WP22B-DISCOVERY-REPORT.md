@@ -1,4 +1,4 @@
-# FINBOOM WP-22B: CONTROLLED DISCOVERY REPORT
+# ArthaVault WP-22B: CONTROLLED DISCOVERY REPORT
 ## Canonical Mathematical Intelligence — Application Integration & UI Binding
 
 ---
@@ -24,7 +24,7 @@ Discovery Status               : PASS — READY FOR ARCHITECTURE REVIEW
 
 ## 2. Current Calculator Architecture & Routing
 
-FinBoom's current calculators architecture resides on `/calculators` (`src/pages/CalculatorsPage.tsx`) composed of 4 tiers:
+ArthaVault's current calculators architecture resides on `/calculators` (`src/pages/CalculatorsPage.tsx`) composed of 4 tiers:
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐

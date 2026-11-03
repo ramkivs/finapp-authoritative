@@ -172,11 +172,11 @@ FINAL RELEASE CERTIFICATION               APPROVED FOR LIVE PRODUCTION DEPLOYMEN
 fs.writeFileSync(mdPath, mdContent, 'utf-8');
 
 const certPath = path.resolve('/home/user', 'FINBOOM-RELEASE-CERTIFICATE-V2.11.2.md');
-const certContent = `# 🚀 FINBOOM PRODUCTION RELEASE CERTIFICATE (v2.11.2)
+const certContent = `# 🚀 ARTHAVAULT PRODUCTION RELEASE CERTIFICATE (v2.11.2)
 ─────────────────────────────────────────────────────────────────────────────────
 OFFICIAL CERTIFICATION SEAL OF THE 12-GATE ENGINEERING LIFECYCLE
 ─────────────────────────────────────────────────────────────────────────────────
-Application Name:     FinBoom (Personal Financial Control Center)
+Application Name:     ArthaVault (Personal Financial Control Center)
 Release Version:      v2.11.2
 Release Candidate ID: FINBOOM-RELEASE-CANDIDATE-V2.11.2
 Database Schema:      v2.6.0 (PostgreSQL / Prisma / Decimal(19,2) / UNIQUE fingerprint)

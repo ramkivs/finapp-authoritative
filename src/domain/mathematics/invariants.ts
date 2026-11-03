@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: Mathematical Invariant Assertions
+ * ARTHAVAULT WP-22: Mathematical Invariant Assertions
  * Pure property test implementations verifying scale invariance, conservation, and inverse relationships.
  */
 

@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: Goal Reverse SIP Solver Mathematical Engine
+ * ARTHAVAULT WP-22: Goal Reverse SIP Solver Mathematical Engine
  * Inverts the annuity compounding formula to solve for the exact monthly SIP required to achieve a target corpus milestone.
  */
 

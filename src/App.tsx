@@ -85,7 +85,7 @@ export function App() {
   /**
    * Canonical cross-page navigation.
    *
-   * FinBoom has no router: page selection is React state (`activeTab`) and each
+   * ArthaVault has no router: page selection is React state (`activeTab`) and each
    * page owns its own sub-tab state. `navigateTo` is the single authoritative
    * entry point for navigating between pages, optionally deep-linking to a
    * sub-tab within the destination page.
@@ -182,7 +182,7 @@ export function App() {
         <footer className="mt-auto border-t border-[#21262D] bg-[#161B22] px-6 py-4 text-xs text-[#8B949E]">
           <div className="max-w-[1440px] mx-auto flex flex-col md:flex-row items-center justify-between gap-3 text-center md:text-left">
             <div className="font-semibold text-[#F0F6FC] flex items-center gap-1.5 justify-center">
-              <span>FinBoom</span>
+              <span>ArthaVault</span>
               <span className="text-[#8B949E]">— Your Financial Command Center</span>
             </div>
             <div className="flex items-center gap-2 text-[11px] justify-center">

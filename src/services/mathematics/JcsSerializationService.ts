@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: RFC 8785 JSON Canonicalization Scheme (JCS) Service
+ * ARTHAVAULT WP-22: RFC 8785 JSON Canonicalization Scheme (JCS) Service
  * Pure TypeScript implementation guaranteeing cross-runtime byte-level deterministic serialization.
  */
 
