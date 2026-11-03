@@ -203,11 +203,11 @@ export const SettingsPage: React.FC = () => {
             <div className="flex items-center gap-2.5">
               <HardDrive className="w-5 h-5 text-emerald-400" />
               <h1 className="text-xl font-bold text-slate-100">
-                Local Data Backup &amp; Verified Restore
+                ArthaVault — Local Data Backup &amp; Verified Restore
               </h1>
             </div>
             <p className="text-sm text-slate-400 mt-1.5 max-w-3xl">
-              Single-owner, client-only vault portability for your personal laptop. Backups export
+              Single-owner, client-only ArthaVault portability for your personal laptop. Backups export
               all 11 canonical IndexedDB collections to a local JSON file and verify integrity with
               FIPS 180-4 SHA-256 via Web Crypto <code className="text-slate-300">crypto.subtle</code> before restoration.
             </p>

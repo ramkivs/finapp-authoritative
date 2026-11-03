@@ -27,17 +27,17 @@ function check(condition: boolean, stepId: string, desc: string) {
 
 async function verifyRealBrowserIndexedDB() {
   console.log('──────────────────────────────────────────────────────────────────────────');
-  console.log('FINBOOM v2.11.2 — W3C REAL BROWSER INDEXEDDB LIFECYCLE ACCEPTANCE SUITE');
+  console.log('ARTHAVAULT — W3C REAL BROWSER INDEXEDDB LIFECYCLE ACCEPTANCE SUITE');
   console.log('──────────────────────────────────────────────────────────────────────────\n');
 
-  console.log('1. [Open FinBoom -> Fresh state = empty]');
+  console.log('1. [Open ArthaVault -> Fresh state = empty]');
   await repository.clearLocalData();
   const step1Txs = queries.queryTransactions({ type: 'All', dateRange: '12M' });
   check(
     step1Txs.length === 0 && repository.assets.findAllSync().length === 0 &&
     repository.liabilities.findAllSync().length === 0 && repository.snapshots.findAllSync().length === 0,
     '1',
-    'Open FinBoom: Fresh state is 100% empty (0 transactions, 0 assets, 0 liabilities, 0 snapshots)'
+    'Open ArthaVault: Fresh state is 100% empty (0 transactions, 0 assets, 0 liabilities, 0 snapshots)'
   );
 
   console.log('\n2. [Load Demo Data -> 16 transactions / 3 assets / 1 liability / 3 snapshots]');

@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: Systematic Withdrawal Plan (SWP) Mathematical Engine
+ * ARTHAVAULT WP-22: Systematic Withdrawal Plan (SWP) Mathematical Engine
  * Models annuity depletion, periodic retirement cash flows, capital longevity, and residual corpus.
  */
 

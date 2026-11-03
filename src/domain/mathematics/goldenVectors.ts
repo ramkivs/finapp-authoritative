@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: Executable Canonical Golden Vectors
+ * ARTHAVAULT WP-22: Executable Canonical Golden Vectors
  * Reference validation test vectors for all certified and new mathematical intelligence engines.
  */
 

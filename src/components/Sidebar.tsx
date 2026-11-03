@@ -122,7 +122,7 @@ export const Sidebar: React.FC<Props> = ({
     if (!window.confirm(
       'Load the demo dataset?\n\n' +
       'This fills the empty ledger with sample transactions, assets, liabilities and ' +
-      'snapshots so you can explore FinBoom. It is sample data, not your own.'
+      'snapshots so you can explore ArthaVault. It is sample data, not your own.'
     )) {
       return;
     }
@@ -222,20 +222,27 @@ export const Sidebar: React.FC<Props> = ({
       <div className={`p-4 flex items-center justify-between border-b border-[#21262D] ${isCollapsed ? 'justify-center' : ''}`}>
         {!isCollapsed ? (
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#23C55E] to-[#4F8CFF] flex items-center justify-center font-black text-white text-sm shadow-md flex-shrink-0">
-              ☑
+            <div
+              aria-label="ArthaVault logo"
+              className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#23C55E] to-[#4F8CFF] flex items-center justify-center font-black text-white text-xs tracking-tight shadow-md flex-shrink-0"
+            >
+              AV
             </div>
             <div>
               <div className="font-extrabold text-sm tracking-tight text-white flex items-center gap-1.5">
-                <span>FINBOOM</span>
+                <span>ArthaVault</span>
                 <span className="text-[9px] px-1.5 py-0.2 bg-[#21262D] text-[#8B949E] rounded-md font-mono">v3.0</span>
               </div>
               <p className="text-[10px] text-[#8B949E] tracking-tight">Financial Command Center</p>
             </div>
           </div>
         ) : (
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#23C55E] to-[#4F8CFF] flex items-center justify-center font-black text-white text-sm shadow-md">
-            ☑
+          <div
+            title="ArthaVault"
+            aria-label="ArthaVault logo"
+            className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#23C55E] to-[#4F8CFF] flex items-center justify-center font-black text-white text-xs tracking-tight shadow-md"
+          >
+            AV
           </div>
         )}
 

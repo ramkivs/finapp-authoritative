@@ -1,5 +1,5 @@
 /**
- * FINBOOM — REQUIREMENT #1 STANDARD IMPORT
+ * ARTHAVAULT — REQUIREMENT #1 STANDARD IMPORT
  *
  * Standard Import panel.
  *
@@ -49,7 +49,7 @@ import {
 } from '../services/import/standard/StandardImportResult';
 import { StandardImportService } from '../services/import/standard/StandardImportService';
 
-const TEMPLATE_FILENAME = 'finboom_standard_import_template.csv';
+const TEMPLATE_FILENAME = 'arthavault_standard_import_template.csv';
 const TEMPLATE_MIME = 'text/csv;charset=utf-8;';
 const TEMPLATE_HEADER = 'Asset Name,Current Value,Asset Class,Tag,Currency,Geography';
 const TEMPLATE_EXAMPLE_1 = 'HDFC Savings Account,50000,Cash & Savings,Core,INR,India';

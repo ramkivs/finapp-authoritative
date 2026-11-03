@@ -141,7 +141,7 @@ interface LedgerState {
    * The startup load is asynchronous and can fail. Without this the UI cannot
    * tell "the ledger is empty" apart from "the ledger could not be read", and
    * the 10 discovery gate measured exactly that: a blocked IndexedDB produced a
-   * normal-looking empty FinBoom with no indication anything had gone wrong.
+   * normal-looking empty ArthaVault with no indication anything had gone wrong.
    *
    * This is a DISCLOSURE signal, not a data-safety mechanism. The authority on
    * whether stored data is safe to overwrite remains

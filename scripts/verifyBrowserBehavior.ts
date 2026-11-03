@@ -19,7 +19,7 @@ function check(condition: boolean, stepId: string, desc: string) {
 
 async function verifyBrowserBehavior() {
   console.log('──────────────────────────────────────────────────────────────────────────');
-  console.log('FINBOOM v2.11.2 — EMPIRICAL BROWSER VERIFICATION SUITE (A to J)');
+  console.log('ARTHAVAULT — EMPIRICAL BROWSER VERIFICATION SUITE (A to J)');
   console.log('──────────────────────────────────────────────────────────────────────────\n');
 
   console.log('A. Fresh state (zero local financial records)');

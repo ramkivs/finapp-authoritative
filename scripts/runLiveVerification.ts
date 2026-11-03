@@ -95,11 +95,11 @@ const reportMeta = {
 fs.writeFileSync(jsonPath, JSON.stringify(reportMeta, null, 2), 'utf-8');
 
 const mdPath = path.resolve('/home/user', 'FINBOOM-LIVE-VERIFICATION-V2.11.2.md');
-const mdContent = `# 🟢 FINBOOM LIVE PRODUCTION VERIFICATION REPORT (v2.11.2)
+const mdContent = `# 🟢 ARTHAVAULT LIVE PRODUCTION VERIFICATION REPORT (v2.11.2)
 ─────────────────────────────────────────────────────────────────────────────────
 EMPIRICAL POST-DEPLOYMENT VERIFICATION OF PUBLIC CUTOVER ON ARENA.AI
 ─────────────────────────────────────────────────────────────────────────────────
-Release:          FinBoom v2.11.2
+Release:          ArthaVault v2.11.2
 Schema:           v2.6.0 (PostgreSQL / Prisma / Decimal(19,2) / UNIQUE fingerprint)
 Operational Doc:  v2.12.0 (Post-Deployment Smoke Contract)
 Git SHA:          a8f4c91e0b3d5c2e1a4f8b9c0d1e2f3a4b5c6d7e
@@ -126,7 +126,7 @@ CRITICAL P0 SMOKE FAILURES:   0
 HIGH P1 SMOKE FINDINGS:       0
 ─────────────────────────────────────────────────────────────────────────────────
 OPERATIONAL LIFECYCLE DISPOSITION:
-🟢 LIVE PRODUCTION VERIFIED — FINBOOM v2.11.2 IS ACTIVE & BEHAVING CORRECTLY IN PRODUCTION
+🟢 LIVE PRODUCTION VERIFIED — ARTHAVAULT v2.11.2 IS ACTIVE & BEHAVING CORRECTLY IN PRODUCTION
 ─────────────────────────────────────────────────────────────────────────────────
 `;
 

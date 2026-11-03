@@ -3,7 +3,7 @@ import { Liability } from '../domain/types';
 /* =============================================================================
  * LIABILITY IDENTITY (WP-FB-DATA-07)
  *
- * Liabilities were the LAST financial entity in FinBoom with no identity of
+ * Liabilities were the LAST financial entity in ArthaVault with no identity of
  * their own. `name` served as both the display label and the key — in memory
  * (`findIndex(l => l.name === …)`) and in IndexedDB
  * (`createObjectStore('liabilities', { keyPath: 'name' })`). Every other store

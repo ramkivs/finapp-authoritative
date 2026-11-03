@@ -1,4 +1,4 @@
-# FINBOOM WP-22B: File Manifest & Structural Diff Audit
+# ArthaVault WP-22B: File Manifest & Structural Diff Audit
 
 **Workstream**: WP-22B (Canonical Mathematical Intelligence — Application Integration & UI Binding)  
 **Baseline**: `3ced3aa63fc3ea6eea0cbe0a9d5fbbcf43cf4ad4` (Release: `v2.11.9-wp22-mathematical-intelligence`)  

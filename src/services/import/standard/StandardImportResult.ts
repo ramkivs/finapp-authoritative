@@ -1,5 +1,5 @@
 /**
- * FINBOOM — REQUIREMENT #1 STANDARD IMPORT
+ * ARTHAVAULT — REQUIREMENT #1 STANDARD IMPORT
  *
  * Result types for the Standard Import flow.
  *

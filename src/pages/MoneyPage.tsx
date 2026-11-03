@@ -139,7 +139,7 @@ export const MoneyPage: React.FC<Props> = ({ openModal, openSidebarTab, initialS
     try {
       const link = document.createElement('a');
       link.setAttribute('href', url);
-      link.setAttribute('download', `finboom_transactions_${dateRange.toLowerCase().replace(/\s+/g, '_')}.csv`);
+      link.setAttribute('download', `arthavault_transactions_${dateRange.toLowerCase().replace(/\s+/g, '_')}.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);

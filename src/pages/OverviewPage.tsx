@@ -30,7 +30,7 @@ import {
 interface Props {
   /**
    * Canonical navigation callback supplied by App. Dashboard entry points must
-   * use this rather than anchor hrefs: FinBoom has no router, so `<a href="#x">`
+   * use this rather than anchor hrefs: ArthaVault has no router, so `<a href="#x">`
    * updates the URL fragment and nothing else.
    */
   navigateTo: (tabId: string, subTab?: string) => void;

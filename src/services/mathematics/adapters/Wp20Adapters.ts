@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: WP-20 Mathematical Engine Adapters
+ * ARTHAVAULT WP-22: WP-20 Mathematical Engine Adapters
  * Wraps certified WP-20 calculation engines into the canonical Phase B CalculationResult<T> envelope.
  */
 

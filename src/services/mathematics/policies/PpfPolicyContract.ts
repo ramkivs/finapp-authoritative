@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: Public Provident Fund (PPF) Policy Schema & Contracts
+ * ARTHAVAULT WP-22: Public Provident Fund (PPF) Policy Schema & Contracts
  * Externalizes statutory government rules from the pure mathematical compounding engine.
  */
 

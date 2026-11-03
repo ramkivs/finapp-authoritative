@@ -49,7 +49,7 @@ export function hasAsOfDateOverride(): boolean {
  *
  * Local (not UTC) components are used deliberately: all canonical transaction
  * dates are local calendar dates, and a UTC conversion would shift the
- * boundary by a day for users east of Greenwich (FinBoom's timezone is
+ * boundary by a day for users east of Greenwich (ArthaVault's timezone is
  * Asia/Kolkata).
  */
 export function getEffectiveAsOfDate(): string {

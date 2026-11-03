@@ -141,7 +141,7 @@ async function getLedgerStatsFromPage(page: Page) {
 
 async function runChromeAcceptanceSuite() {
   console.log('──────────────────────────────────────────────────────────────────────────');
-  console.log('FINBOOM v2.11.2 — CHROME/EDGE REAL INDEXEDDB BROWSER ACCEPTANCE SUITE');
+  console.log('ARTHAVAULT — CHROME/EDGE REAL INDEXEDDB BROWSER ACCEPTANCE SUITE');
   console.log('──────────────────────────────────────────────────────────────────────────\n');
 
   if (fs.existsSync(PROFILE_DIR)) {
@@ -178,13 +178,13 @@ serverProc = spawn(npxCommand, ['vite', 'preview', '--strictPort', '--port', Str
     await client.send('Storage.clearDataForOrigin', { origin: BASE_URL, storageTypes: 'all' });
     check(true, 'Step 1', 'Cleared existing Chrome site data and deleted finboom_db IndexedDB via Chrome CDP Storage.clearDataForOrigin');
 
-    // Step 2: Open FinBoom -> Verify EMPTY
+    // Step 2: Open ArthaVault -> Verify EMPTY
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
     let stats: any = await getLedgerStatsFromPage(page);
     check(
       stats.transactions === 0 && stats.assets === 0 && stats.liabilities === 0 && stats.snapshots === 0,
       'Step 2',
-      `Open FinBoom in Chrome: Verified EMPTY state (${stats.transactions} tx, ${stats.assets} assets, ${stats.liabilities} liab, ${stats.snapshots} snaps)`
+      `Open ArthaVault in Chrome: Verified EMPTY state (${stats.transactions} tx, ${stats.assets} assets, ${stats.liabilities} liab, ${stats.snapshots} snaps)`
     );
 
     // TEST-36: Fresh rendered UI contains no demo account/portfolio values
@@ -2702,7 +2702,7 @@ serverProc = spawn(npxCommand, ['vite', 'preview', '--strictPort', '--port', Str
     check(
       overviewKpiCheck,
       "WP21-V04",
-      "Overview dashboard renders 4 modern FinBoom KPI cards with sparkline visuals"
+      "Overview dashboard renders 4 modern ArthaVault KPI cards with sparkline visuals"
     );
 
     // WP21-V05: ChartCard containers with dark theme surface and header badges

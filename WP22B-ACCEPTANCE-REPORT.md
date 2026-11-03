@@ -1,4 +1,4 @@
-# FINBOOM WP-22B: Acceptance & Quality Verification Report
+# ArthaVault WP-22B: Acceptance & Quality Verification Report
 
 **Workstream**: WP-22B (Canonical Mathematical Intelligence — Application Integration & UI Binding)  
 **Baseline Release**: `v2.11.9-wp22-mathematical-intelligence` (`3ced3aa63fc3ea6eea0cbe0a9d5fbbcf43cf4ad4` / Production Tree: `77036911bccf07e52a96e3f8f7b4b4f738414379`)  

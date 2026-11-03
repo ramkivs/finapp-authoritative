@@ -1,5 +1,5 @@
 /**
- * FINBOOM WP-22: Canonical Mathematical Intelligence Engine
+ * ARTHAVAULT WP-22: Canonical Mathematical Intelligence Engine
  * Core Domain Types & Schema Contracts
  */
 

@@ -40,7 +40,7 @@ export class BankTransactionNormalizer {
   }
 
   /**
-   * Transforms an ingestion-layer BankStatementRecord into a canonical FinBoom Transaction.
+   * Transforms an ingestion-layer BankStatementRecord into a canonical ArthaVault Transaction.
    * Enforces debit/credit rules, date validation, strict amount validation, narration
    * security sanitization, PPF classification, and deterministic fingerprinting.
    */

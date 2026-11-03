@@ -1,4 +1,4 @@
-# FINBOOM WP-22B: Mathematical Application Integration — Implementation Report
+# ArthaVault WP-22B: Mathematical Application Integration — Implementation Report
 
 **Workstream**: WP-22B (Canonical Mathematical Intelligence — Application Integration & UI Binding)  
 **Baseline Release**: `v2.11.9-wp22-mathematical-intelligence` (`3ced3aa63fc3ea6eea0cbe0a9d5fbbcf43cf4ad4` / Production Tree: `77036911bccf07e52a96e3f8f7b4b4f738414379`)  
@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary & Objective
 
-WP-22B completes the application-level binding and user interface integration for FinBoom's certified canonical mathematical engines. It bridges the pure mathematical foundation established in WP-22 to the interactive application layer without compromising mathematical invariants, statutory compliance, or canonical ledger isolation.
+WP-22B completes the application-level binding and user interface integration for ArthaVault's certified canonical mathematical engines. It bridges the pure mathematical foundation established in WP-22 to the interactive application layer without compromising mathematical invariants, statutory compliance, or canonical ledger isolation.
 
 ### Key Accomplishments
 1. **Application Query Boundary**: Unified all mathematical operations behind `FinancialQueries` in `src/application/queries.ts`, returning typed `CalculationResult<T>` envelopes with RFC 8785 canonical JSON fingerprints and execution provenance.
